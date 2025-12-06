@@ -13,6 +13,7 @@ jobs:
       - uses: actions/checkout@v4
       - uses: dagger/dagger-for-github@v7
         with:
+          version: "0.19.8"
           verb: call
           args: ci --source=.
 
@@ -34,17 +35,20 @@ jobs:
         if: github.ref == 'refs/heads/main'
         uses: dagger/dagger-for-github@v7
         with:
+          version: "0.19.8"
           verb: call
           args: publish --source=. --tag=${{ github.sha }}
       - name: Publish with version tag
         if: startsWith(github.ref, 'refs/tags/v')
         uses: dagger/dagger-for-github@v7
         with:
+          version: "0.19.8"
           verb: call
           args: publish --source=. --tag=${{ github.ref_name }}
       - name: Publish latest tag
         if: startsWith(github.ref, 'refs/tags/v')
         uses: dagger/dagger-for-github@v7
         with:
+          version: "0.19.8"
           verb: call
           args: publish --source=. --tag=latest
