@@ -1,0 +1,18 @@
+# PostgreSQL data
+/data/
+
+# Binary
+/indexer
+
+# IDE
+.idea/
+.vscode/
+
+# OS
+.DS_Store
+
+# Environment
+.env
+
+# Local config (contains credentials)
+config.yaml

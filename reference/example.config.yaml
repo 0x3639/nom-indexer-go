@@ -1,0 +1,7 @@
+node_url_ws: 'ws://127.0.0.1:35998'
+
+database_address: '127.0.0.1'
+database_port: 5432
+database_name: ''
+database_username: ''
+database_password: ''

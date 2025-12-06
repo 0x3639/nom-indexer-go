@@ -1,0 +1,98 @@
+services:
+  postgres:
+    image: postgres:14
+    container_name: nom-indexer-postgres
+    environment:
+      POSTGRES_DB: nom_indexer
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-nomIndexerPass123}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./docker/postgres/postgresql.conf:/etc/postgresql/postgresql.conf
+    command: postgres -c config_file=/etc/postgresql/postgresql.conf
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d nom_indexer"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+    networks:
+      - nom-network
+    restart: unless-stopped
+
+  nom-indexer:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: nom-indexer
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      NODE_URL_WS: ${NODE_URL_WS:-ws://127.0.0.1:35998}
+      DATABASE_ADDRESS: postgres
+      DATABASE_PORT: 5432
+      DATABASE_NAME: nom_indexer
+      DATABASE_USERNAME: postgres
+      DATABASE_PASSWORD: ${POSTGRES_PASSWORD:-nomIndexerPass123}
+    networks:
+      - nom-network
+    restart: unless-stopped
+
+  go-zenon:
+    build:
+      context: ./docker/go-zenon
+      dockerfile: Dockerfile
+    container_name: go-zenon
+    volumes:
+      - zenon_data:/zenon-data
+    ports:
+      - "35997:35997"  # P2P port
+      - "35998:35998"  # WebSocket RPC port
+    networks:
+      - nom-network
+    restart: unless-stopped
+
+  api:
+    build:
+      context: ./api
+      dockerfile: Dockerfile
+    container_name: nom-query-api
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      DATABASE_URL: postgresql://postgres:${POSTGRES_PASSWORD:-nomIndexerPass123}@postgres:5432/nom_indexer
+      OPENAI_API_KEY: ${OPENAI_API_KEY}
+      OPENAI_MODEL: ${OPENAI_MODEL:-gpt-4-turbo-preview}
+    ports:
+      - "8000:8000"
+    networks:
+      - nom-network
+    restart: unless-stopped
+
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    container_name: nom-query-frontend
+    depends_on:
+      - api
+    environment:
+      NUXT_PUBLIC_API_URL: http://localhost:8000
+    ports:
+      - "3001:3000"
+    networks:
+      - nom-network
+    restart: unless-stopped
+
+volumes:
+  postgres_data:
+    name: nom-indexer-postgres-data
+  zenon_data:
+    name: go-zenon-data
+
+networks:
+  nom-network:
+    name: nom-indexer-network
+    driver: bridge

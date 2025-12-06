@@ -1,0 +1,15 @@
+DROP TABLE IF EXISTS reward_transactions;
+DROP TABLE IF EXISTS cumulative_rewards;
+DROP TABLE IF EXISTS fusions;
+DROP TABLE IF EXISTS votes;
+DROP TABLE IF EXISTS project_phases;
+DROP TABLE IF EXISTS projects;
+DROP TABLE IF EXISTS stakes;
+DROP TABLE IF EXISTS sentinels;
+DROP TABLE IF EXISTS pillar_updates;
+DROP TABLE IF EXISTS pillars;
+DROP TABLE IF EXISTS tokens;
+DROP TABLE IF EXISTS account_blocks;
+DROP TABLE IF EXISTS balances;
+DROP TABLE IF EXISTS accounts;
+DROP TABLE IF EXISTS momentums;

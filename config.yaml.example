@@ -1,0 +1,30 @@
+# nom-indexer-go configuration example
+# Copy this file to config.yaml and customize as needed
+# Environment variables take precedence over this file
+
+node:
+  # WebSocket URL for Zenon node
+  # Public testnet: wss://test.hc1node.com
+  # Local node: ws://127.0.0.1:35998
+  ws_url: "wss://test.hc1node.com"
+
+database:
+  host: "localhost"
+  port: 5432
+  name: "nom_indexer"
+  user: "postgres"
+  # Password can be set here OR via DATABASE_PASSWORD env var (env var takes precedence)
+  password: "your-secure-password-here"
+  pool_size: 10
+
+logging:
+  # debug, info, warn, error
+  level: "info"
+  # json, console
+  format: "console"
+
+cron:
+  # Interval for updating pillar voting activity
+  voting_activity_interval: "10m"
+  # Interval for updating token holder counts
+  token_holders_interval: "10m"
