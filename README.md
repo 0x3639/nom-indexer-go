@@ -95,13 +95,23 @@ migrations/                  - SQL migration files (5 versions)
 
 ### Sync Architecture
 
-The indexer runs three independent goroutines:
+The indexer runs four independent goroutines:
 
 1. **Momentum Subscription** - Real-time processing of new blocks (~10s intervals)
-2. **Bridge Sync Loop** - Syncs wrap/unwrap requests every 1 minute
-3. **Cached Data Sync Loop** - Updates pillars, sentinels, projects every 5 minutes
+2. **Subscription Watchdog** - Monitors for stalls and triggers auto-reconnect
+3. **Bridge Sync Loop** - Syncs wrap/unwrap requests every 1 minute
+4. **Cached Data Sync Loop** - Updates pillars, sentinels, projects every 5 minutes
 
 This architecture ensures momentum processing is never blocked by slow API calls.
+
+### Resilient WebSocket Subscription
+
+The indexer includes automatic recovery for WebSocket subscription failures:
+
+- **Heartbeat monitoring**: Tracks the last momentum received
+- **Stall detection**: Watchdog checks every 30s; triggers reconnect if no momentum for 60s
+- **Auto-reconnect**: Exponential backoff (5s initial, 5min max) with catch-up sync
+- **Zero data loss**: Performs sync before reconnecting to ensure no missed blocks
 
 ## Database Schema
 
