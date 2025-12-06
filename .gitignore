@@ -1,6 +1,10 @@
 # PostgreSQL data
 /data/
 
+# Database backups
+/backups/
+/scripts/backups/
+
 # Binary
 /indexer
 

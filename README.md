@@ -79,7 +79,6 @@ The indexer uses independent goroutines for different sync operations to maximiz
 ```
 cmd/
   indexer/main.go            - Entry point
-  migrate-cancel-ids/main.go - Migration tool for cancel IDs
 internal/
   config/                    - Configuration via Viper (env vars + YAML)
   database/                  - PostgreSQL connection pool (pgx)
@@ -157,6 +156,19 @@ go test ./...
 
 ```bash
 docker-compose up -d --build
+```
+
+### Backup and Restore
+
+```bash
+# Create a compressed backup (saved to ./backups/)
+./scripts/backup.sh
+
+# Create a backup at a specific path
+./scripts/backup.sh /path/to/mybackup.sql.gz
+
+# Restore from a backup (will prompt for confirmation)
+./scripts/restore.sh ./backups/nom_indexer_20250606_120000.sql.gz
 ```
 
 ## Technical Notes
