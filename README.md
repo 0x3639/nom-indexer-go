@@ -159,15 +159,6 @@ go test ./...
 docker-compose up -d --build
 ```
 
-### Migration Tool
-
-A separate tool exists for backfilling cancel_id values on existing data:
-
-```bash
-# Run the migration tool
-docker-compose -f docker-compose.migrate.yml up migrate-cancel-ids
-```
-
 ## Technical Notes
 
 - **Go 1.24** required (dependency requirement from znn-sdk-go v0.1.11)
