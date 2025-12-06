@@ -1,6 +1,7 @@
 package database
 
 import (
+	"errors"
 	"fmt"
 
 	"github.com/golang-migrate/migrate/v4"
@@ -32,16 +33,16 @@ func RunMigrations(pool *pgxpool.Pool, migrationsPath string, logger *zap.Logger
 		return fmt.Errorf("failed to create migrate instance: %w", err)
 	}
 
-	if err := m.Up(); err != nil && err != migrate.ErrNoChange {
-		return fmt.Errorf("failed to run migrations: %w", err)
+	if upErr := m.Up(); upErr != nil && !errors.Is(upErr, migrate.ErrNoChange) {
+		return fmt.Errorf("failed to run migrations: %w", upErr)
 	}
 
-	version, dirty, err := m.Version()
-	if err != nil && err != migrate.ErrNilVersion {
-		return fmt.Errorf("failed to get migration version: %w", err)
+	version, dirty, versionErr := m.Version()
+	if versionErr != nil && !errors.Is(versionErr, migrate.ErrNilVersion) {
+		return fmt.Errorf("failed to get migration version: %w", versionErr)
 	}
 
-	if err == migrate.ErrNilVersion {
+	if errors.Is(versionErr, migrate.ErrNilVersion) {
 		logger.Info("no migrations applied yet")
 	} else {
 		logger.Info("migrations completed",

@@ -60,6 +60,32 @@ docker-compose down
 docker-compose up -d --build
 ```
 
+## Dagger CI/CD
+
+The project uses [Dagger](https://dagger.io/) for CI/CD pipelines. The Dagger module is defined in `.dagger/main.go`.
+
+```bash
+# Run the full CI pipeline (lint, test, build)
+dagger call ci --source .
+
+# Run only linting (golangci-lint v2)
+dagger call lint --source .
+
+# Run only tests
+dagger call test --source .
+
+# Build the Docker image
+dagger call build --source .
+
+# Publish to GitHub Container Registry (requires auth)
+dagger call publish --source . --tag <version>
+```
+
+**Notes:**
+- Uses golangci-lint v2 with config in `.golangci.yml`
+- Import ordering follows gci rules: standard → third-party → local module
+- If the Dagger engine runs out of space, clean up with: `docker stop dagger-engine-* && docker rm dagger-engine-* && docker volume prune -f`
+
 ## Environment Variables
 
 | Variable | Description | Default |

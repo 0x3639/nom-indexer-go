@@ -1,0 +1,63 @@
+# golangci-lint configuration for nom-indexer-go
+# https://golangci-lint.run/usage/configuration/
+
+version: "2"
+
+run:
+  timeout: 5m
+  modules-download-mode: readonly
+
+linters:
+  default: standard
+  enable:
+    # Additional linters
+    - bodyclose     # Check HTTP response body is closed
+    - contextcheck  # Check context.Context is passed correctly
+    - durationcheck # Check for duration multiplications
+    - errorlint     # Find issues with error wrapping
+    - copyloopvar   # Check for pointers to loop variables
+    - misspell      # Find misspelled words
+    - nilerr        # Find code returning nil with non-nil error
+    - noctx         # Find HTTP requests without context
+    - prealloc      # Find slice preallocation opportunities
+    - predeclared   # Find shadowed predeclared identifiers
+    - sqlclosecheck # Check SQL rows/statements are closed
+    - unconvert     # Remove unnecessary type conversions
+    - wastedassign  # Find wasted assignments
+
+  settings:
+    errcheck:
+      check-type-assertions: true
+      check-blank: false
+
+    govet:
+      enable-all: true
+      disable:
+        - fieldalignment  # Too noisy for this project
+
+    misspell:
+      locale: US
+
+  exclusions:
+    rules:
+      # Exclude some linters from running on test files
+      - path: _test\.go
+        linters:
+          - errcheck
+          - bodyclose
+
+      # Exclude generated files
+      - path: \.gen\.go
+        linters:
+          - all
+
+formatters:
+  enable:
+    - gci
+
+  settings:
+    gci:
+      sections:
+        - standard
+        - default
+        - prefix(github.com/0x3639/nom-indexer-go)

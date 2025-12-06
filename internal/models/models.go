@@ -206,16 +206,16 @@ type Vote struct {
 
 // Fusion represents a plasma fusion entry
 type Fusion struct {
-	ID               string `db:"id"`
-	Address          string `db:"address"`
-	Beneficiary      string `db:"beneficiary"`
-	MomentumHash     string `db:"momentum_hash"`
+	ID                string `db:"id"`
+	Address           string `db:"address"`
+	Beneficiary       string `db:"beneficiary"`
+	MomentumHash      string `db:"momentum_hash"`
 	MomentumTimestamp int64  `db:"momentum_timestamp"`
-	MomentumHeight   int64  `db:"momentum_height"`
-	QsrAmount        int64  `db:"qsr_amount"`
-	ExpirationHeight int64  `db:"expiration_height"`
-	IsActive         bool   `db:"is_active"`
-	CancelID         string `db:"cancel_id"`
+	MomentumHeight    int64  `db:"momentum_height"`
+	QsrAmount         int64  `db:"qsr_amount"`
+	ExpirationHeight  int64  `db:"expiration_height"`
+	IsActive          bool   `db:"is_active"`
+	CancelID          string `db:"cancel_id"`
 }
 
 // CumulativeReward represents cumulative rewards for an address
@@ -255,17 +255,17 @@ func NewTxData() *TxData {
 
 // WrapTokenRequest represents a request to wrap tokens from Zenon to an external chain
 type WrapTokenRequest struct {
-	ID                       string `db:"id"`
-	NetworkClass             int    `db:"network_class"`
-	ChainID                  int    `db:"chain_id"`
-	ToAddress                string `db:"to_address"`
-	TokenStandard            string `db:"token_standard"`
-	TokenAddress             string `db:"token_address"`
-	Amount                   int64  `db:"amount"`
-	Fee                      int64  `db:"fee"`
-	Signature                string `db:"signature"`
-	CreationMomentumHeight   int64  `db:"creation_momentum_height"`
-	ConfirmationsToFinality  int    `db:"confirmations_to_finality"`
+	ID                      string `db:"id"`
+	NetworkClass            int    `db:"network_class"`
+	ChainID                 int    `db:"chain_id"`
+	ToAddress               string `db:"to_address"`
+	TokenStandard           string `db:"token_standard"`
+	TokenAddress            string `db:"token_address"`
+	Amount                  int64  `db:"amount"`
+	Fee                     int64  `db:"fee"`
+	Signature               string `db:"signature"`
+	CreationMomentumHeight  int64  `db:"creation_momentum_height"`
+	ConfirmationsToFinality int    `db:"confirmations_to_finality"`
 }
 
 // UnwrapTokenRequest represents a request to unwrap tokens from an external chain to Zenon

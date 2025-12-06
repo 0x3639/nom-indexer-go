@@ -3,9 +3,10 @@ package repository
 import (
 	"context"
 
-	"github.com/0x3639/nom-indexer-go/internal/models"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
+
+	"github.com/0x3639/nom-indexer-go/internal/models"
 )
 
 type StakeRepository struct {
@@ -70,4 +71,3 @@ func (r *StakeRepository) GetByID(ctx context.Context, id string) (*models.Stake
 	}
 	return &s, nil
 }
-

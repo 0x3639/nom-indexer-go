@@ -7,11 +7,12 @@ import (
 	"os/signal"
 	"syscall"
 
+	"github.com/0x3639/znn-sdk-go/rpc_client"
+	"go.uber.org/zap"
+
 	"github.com/0x3639/nom-indexer-go/internal/config"
 	"github.com/0x3639/nom-indexer-go/internal/database"
 	"github.com/0x3639/nom-indexer-go/internal/indexer"
-	"github.com/0x3639/znn-sdk-go/rpc_client"
-	"go.uber.org/zap"
 )
 
 func main() {
@@ -48,8 +49,8 @@ func main() {
 	if envPath := os.Getenv("MIGRATIONS_PATH"); envPath != "" {
 		migrationsPath = envPath
 	}
-	if err := database.RunMigrations(pool, migrationsPath, logger); err != nil {
-		logger.Fatal("failed to run migrations", zap.Error(err))
+	if migrationErr := database.RunMigrations(pool, migrationsPath, logger); migrationErr != nil {
+		logger.Fatal("failed to run migrations", zap.Error(migrationErr))
 	}
 
 	logger.Info("migrations complete")

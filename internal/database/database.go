@@ -5,9 +5,10 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/0x3639/nom-indexer-go/internal/config"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"go.uber.org/zap"
+
+	"github.com/0x3639/nom-indexer-go/internal/config"
 )
 
 // NewPool creates a new PostgreSQL connection pool

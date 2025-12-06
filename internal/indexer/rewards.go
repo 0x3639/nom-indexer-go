@@ -3,10 +3,11 @@ package indexer
 import (
 	"context"
 
-	"github.com/0x3639/nom-indexer-go/internal/models"
 	"github.com/jackc/pgx/v5"
 	"github.com/zenon-network/go-zenon/rpc/api"
 	"go.uber.org/zap"
+
+	"github.com/0x3639/nom-indexer-go/internal/models"
 )
 
 // indexLiquidityReward handles liquidity reward receive transactions
