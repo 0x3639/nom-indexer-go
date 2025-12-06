@@ -71,14 +71,15 @@ func Load() (*Config, error) {
 	v.SetEnvKeyReplacer(strings.NewReplacer(".", "_"))
 
 	// Bind specific environment variables (these take precedence)
-	v.BindEnv("node.ws_url", "NODE_URL_WS")
-	v.BindEnv("database.host", "DATABASE_ADDRESS")
-	v.BindEnv("database.port", "DATABASE_PORT")
-	v.BindEnv("database.name", "DATABASE_NAME")
-	v.BindEnv("database.user", "DATABASE_USERNAME")
-	v.BindEnv("database.password", "DATABASE_PASSWORD")
-	v.BindEnv("logging.level", "LOG_LEVEL")
-	v.BindEnv("logging.format", "LOG_FORMAT")
+	// Note: BindEnv errors are ignored as they only fail on invalid key names
+	_ = v.BindEnv("node.ws_url", "NODE_URL_WS")
+	_ = v.BindEnv("database.host", "DATABASE_ADDRESS")
+	_ = v.BindEnv("database.port", "DATABASE_PORT")
+	_ = v.BindEnv("database.name", "DATABASE_NAME")
+	_ = v.BindEnv("database.user", "DATABASE_USERNAME")
+	_ = v.BindEnv("database.password", "DATABASE_PASSWORD")
+	_ = v.BindEnv("logging.level", "LOG_LEVEL")
+	_ = v.BindEnv("logging.format", "LOG_FORMAT")
 
 	// Try to read config file (optional)
 	if err := v.ReadInConfig(); err != nil {
