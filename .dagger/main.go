@@ -38,7 +38,7 @@ func (m *NomIndexer) Lint(ctx context.Context, source *dagger.Directory) (string
 	return dag.Container().
 		From("golang:1.24-alpine").
 		WithExec([]string{"apk", "add", "--no-cache", "git", "gcc", "musl-dev", "binutils-gold"}).
-		WithExec([]string{"go", "install", "github.com/golangci/golangci-lint/cmd/golangci-lint@latest"}).
+		WithExec([]string{"go", "install", "github.com/golangci/golangci-lint/v2/cmd/golangci-lint@v2.7.1"}).
 		WithMountedCache("/go/pkg/mod", dag.CacheVolume("go-mod")).
 		WithMountedCache("/root/.cache/go-build", dag.CacheVolume("go-build")).
 		WithMountedCache("/root/.cache/golangci-lint", dag.CacheVolume("golangci-lint")).

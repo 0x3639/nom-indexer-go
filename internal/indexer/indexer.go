@@ -6,13 +6,14 @@ import (
 	"sync"
 	"time"
 
-	"github.com/0x3639/nom-indexer-go/internal/models"
-	"github.com/0x3639/nom-indexer-go/internal/repository"
 	"github.com/0x3639/znn-sdk-go/embedded"
 	"github.com/0x3639/znn-sdk-go/rpc_client"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/zenon-network/go-zenon/common/types"
 	"go.uber.org/zap"
+
+	"github.com/0x3639/nom-indexer-go/internal/models"
+	"github.com/0x3639/nom-indexer-go/internal/repository"
 )
 
 // Indexer handles the indexing of blockchain data
@@ -709,5 +710,3 @@ func (i *Indexer) GetPillars() []*models.Pillar {
 	copy(result, i.pillars)
 	return result
 }
-
-

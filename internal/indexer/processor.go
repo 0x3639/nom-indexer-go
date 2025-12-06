@@ -6,11 +6,12 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/0x3639/nom-indexer-go/internal/models"
 	"github.com/jackc/pgx/v5"
 	"github.com/zenon-network/go-zenon/common/types"
 	"github.com/zenon-network/go-zenon/rpc/api"
 	"go.uber.org/zap"
+
+	"github.com/0x3639/nom-indexer-go/internal/models"
 )
 
 // processMomentum processes a single momentum and all its account blocks
@@ -61,7 +62,7 @@ func (i *Indexer) processMomentum(ctx context.Context, m *api.Momentum) error {
 
 	// Execute batch
 	results := i.pool.SendBatch(ctx, batch)
-	defer results.Close()
+	defer func() { _ = results.Close() }()
 
 	// Check for errors in batch
 	for j := 0; j < batch.Len(); j++ {
@@ -92,7 +93,7 @@ func (i *Indexer) updateBalances(ctx context.Context, batch *pgx.Batch, headers 
 			for tokenStandard, balanceInfo := range accountInfo.BalanceInfoMap {
 				if balanceInfo.Balance != nil && balanceInfo.Balance.Sign() >= 0 {
 					// Check for Int64 overflow before conversion
-					balanceInt64 := int64(0)
+					var balanceInt64 int64
 					if balanceInfo.Balance.IsInt64() {
 						balanceInt64 = balanceInfo.Balance.Int64()
 					} else {

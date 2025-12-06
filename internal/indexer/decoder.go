@@ -4,11 +4,12 @@ import (
 	"bytes"
 	"fmt"
 
-	"github.com/0x3639/nom-indexer-go/internal/models"
 	"github.com/0x3639/znn-sdk-go/abi"
 	"github.com/0x3639/znn-sdk-go/embedded"
 	rpcapi "github.com/zenon-network/go-zenon/rpc/api"
 	"go.uber.org/zap"
+
+	"github.com/0x3639/nom-indexer-go/internal/models"
 )
 
 // tryDecodeTxData attempts to decode transaction data from an account block

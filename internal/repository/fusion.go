@@ -3,9 +3,10 @@ package repository
 import (
 	"context"
 
-	"github.com/0x3639/nom-indexer-go/internal/models"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
+
+	"github.com/0x3639/nom-indexer-go/internal/models"
 )
 
 type FusionRepository struct {
@@ -70,4 +71,3 @@ func (r *FusionRepository) GetByID(ctx context.Context, id string) (*models.Fusi
 	}
 	return &f, nil
 }
-

@@ -4,10 +4,11 @@ import (
 	"context"
 	"strconv"
 
-	"github.com/0x3639/nom-indexer-go/internal/models"
 	"github.com/jackc/pgx/v5"
 	"github.com/zenon-network/go-zenon/rpc/api"
 	"go.uber.org/zap"
+
+	"github.com/0x3639/nom-indexer-go/internal/models"
 )
 
 // indexEmbeddedContracts handles indexing for embedded contract interactions
