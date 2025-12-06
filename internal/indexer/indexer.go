@@ -16,6 +16,18 @@ import (
 	"github.com/0x3639/nom-indexer-go/internal/repository"
 )
 
+// Subscription watchdog constants
+const (
+	// How often to check if momentums are being received
+	watchdogCheckInterval = 30 * time.Second
+	// How long without a momentum before triggering reconnect
+	momentumStallThreshold = 60 * time.Second
+	// Maximum backoff time between reconnection attempts
+	maxReconnectBackoff = 5 * time.Minute
+	// Initial backoff time for reconnection
+	initialReconnectBackoff = 5 * time.Second
+)
+
 // Indexer handles the indexing of blockchain data
 type Indexer struct {
 	client *rpc_client.RpcClient
@@ -29,6 +41,13 @@ type Indexer struct {
 
 	// Pillar name to owner address mapping
 	pillarNameToOwner map[string]string
+
+	// Heartbeat tracking for subscription health
+	lastMomentumTime   time.Time
+	lastMomentumTimeMu sync.RWMutex
+
+	// Channel to signal reconnection needed
+	reconnectCh chan struct{}
 }
 
 // NewIndexer creates a new indexer instance
@@ -39,6 +58,31 @@ func NewIndexer(client *rpc_client.RpcClient, pool *pgxpool.Pool, logger *zap.Lo
 		repos:             repository.NewRepositories(pool),
 		logger:            logger,
 		pillarNameToOwner: make(map[string]string),
+		lastMomentumTime:  time.Now(),
+		reconnectCh:       make(chan struct{}, 1),
+	}
+}
+
+// updateLastMomentumTime updates the heartbeat timestamp
+func (i *Indexer) updateLastMomentumTime() {
+	i.lastMomentumTimeMu.Lock()
+	i.lastMomentumTime = time.Now()
+	i.lastMomentumTimeMu.Unlock()
+}
+
+// getLastMomentumTime returns the last momentum timestamp
+func (i *Indexer) getLastMomentumTime() time.Time {
+	i.lastMomentumTimeMu.RLock()
+	defer i.lastMomentumTimeMu.RUnlock()
+	return i.lastMomentumTime
+}
+
+// triggerReconnect signals that a reconnection is needed
+func (i *Indexer) triggerReconnect() {
+	select {
+	case i.reconnectCh <- struct{}{}:
+	default:
+		// Channel already has a pending reconnect signal
 	}
 }
 
@@ -61,7 +105,10 @@ func (i *Indexer) Run(ctx context.Context) error {
 	// This runs independently - momentums are processed immediately as they arrive
 	i.logger.Info("initial sync complete, starting real-time subscription")
 
-	return i.runSubscriptionLoop(ctx)
+	// Start subscription watchdog to detect stalls and trigger reconnects
+	go i.runSubscriptionWatchdog(ctx)
+
+	return i.runResilientSubscriptionLoop(ctx)
 }
 
 // sync performs the catch-up sync from last indexed height
@@ -139,31 +186,117 @@ func (i *Indexer) sync(ctx context.Context) error {
 	}
 }
 
-// runSubscriptionLoop runs the WebSocket subscription for real-time updates
-func (i *Indexer) runSubscriptionLoop(ctx context.Context) error {
-	// Create subscription to momentums
-	sub, momentumCh, err := i.client.SubscriberApi.ToMomentums(ctx)
-	if err != nil {
-		i.logger.Warn("failed to subscribe to momentums, falling back to polling", zap.Error(err))
-		return i.runPollingLoop(ctx)
-	}
-	defer sub.Unsubscribe()
+// runSubscriptionWatchdog monitors momentum reception and triggers reconnects when stalled
+func (i *Indexer) runSubscriptionWatchdog(ctx context.Context) {
+	i.logger.Info("starting subscription watchdog",
+		zap.Duration("checkInterval", watchdogCheckInterval),
+		zap.Duration("stallThreshold", momentumStallThreshold))
 
-	i.logger.Info("subscribed to momentums")
+	ticker := time.NewTicker(watchdogCheckInterval)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-ctx.Done():
+			i.logger.Info("subscription watchdog stopped")
+			return
+		case <-ticker.C:
+			lastTime := i.getLastMomentumTime()
+			timeSinceLast := time.Since(lastTime)
+
+			if timeSinceLast > momentumStallThreshold {
+				i.logger.Warn("momentum subscription appears stalled, triggering reconnect",
+					zap.Duration("timeSinceLastMomentum", timeSinceLast),
+					zap.Duration("threshold", momentumStallThreshold))
+				i.triggerReconnect()
+			}
+		}
+	}
+}
+
+// runResilientSubscriptionLoop runs the WebSocket subscription with automatic reconnection
+func (i *Indexer) runResilientSubscriptionLoop(ctx context.Context) error {
+	backoff := initialReconnectBackoff
 
 	for {
 		select {
 		case <-ctx.Done():
 			return ctx.Err()
+		default:
+		}
+
+		// Run a single subscription session
+		err := i.runSingleSubscriptionSession(ctx)
+
+		if ctx.Err() != nil {
+			return ctx.Err()
+		}
+
+		if err != nil {
+			i.logger.Warn("subscription session ended with error",
+				zap.Error(err),
+				zap.Duration("backoff", backoff))
+		} else {
+			i.logger.Info("subscription session ended, reconnecting",
+				zap.Duration("backoff", backoff))
+		}
+
+		// Wait before reconnecting (with backoff)
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-time.After(backoff):
+		}
+
+		// Do a catch-up sync before reconnecting to ensure we haven't missed blocks
+		i.logger.Info("performing catch-up sync before reconnecting")
+		if err := i.sync(ctx); err != nil {
+			i.logger.Error("catch-up sync failed", zap.Error(err))
+		}
+
+		// Increase backoff for next time (exponential with cap)
+		backoff = backoff * 2
+		if backoff > maxReconnectBackoff {
+			backoff = maxReconnectBackoff
+		}
+	}
+}
+
+// runSingleSubscriptionSession runs a single WebSocket subscription session
+// Returns when the session ends (either by error, channel close, or reconnect signal)
+func (i *Indexer) runSingleSubscriptionSession(ctx context.Context) error {
+	// Create subscription to momentums
+	sub, momentumCh, err := i.client.SubscriberApi.ToMomentums(ctx)
+	if err != nil {
+		return fmt.Errorf("failed to subscribe to momentums: %w", err)
+	}
+	defer sub.Unsubscribe()
+
+	i.logger.Info("subscribed to momentums")
+
+	// Reset heartbeat and backoff on successful connection
+	i.updateLastMomentumTime()
+
+	for {
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+
+		case <-i.reconnectCh:
+			i.logger.Info("reconnect signal received, ending subscription session")
+			return nil
+
 		case momentums, ok := <-momentumCh:
 			if !ok {
-				i.logger.Warn("momentum subscription closed, falling back to polling")
-				return i.runPollingLoop(ctx)
+				return fmt.Errorf("momentum subscription channel closed")
 			}
 
 			for _, m := range momentums {
 				i.logger.Info("received new momentum",
 					zap.Uint64("height", m.Height))
+
+				// Update heartbeat
+				i.updateLastMomentumTime()
 
 				// Fetch full momentum details
 				fullMomentum, err := i.client.LedgerApi.GetMomentumsByHeight(m.Height, 1)
@@ -179,27 +312,6 @@ func (i *Indexer) runSubscriptionLoop(ctx context.Context) error {
 						zap.Uint64("height", m.Height),
 						zap.Error(err))
 				}
-			}
-			// Note: updateCachedData now runs in its own goroutine (runCachedDataSyncLoop)
-			// so momentum processing is not blocked by slow sync operations
-		}
-	}
-}
-
-// runPollingLoop runs the polling loop as fallback
-func (i *Indexer) runPollingLoop(ctx context.Context) error {
-	ticker := time.NewTicker(10 * time.Second)
-	defer ticker.Stop()
-
-	i.logger.Info("running in polling mode")
-
-	for {
-		select {
-		case <-ctx.Done():
-			return ctx.Err()
-		case <-ticker.C:
-			if err := i.sync(ctx); err != nil {
-				i.logger.Error("sync error", zap.Error(err))
 			}
 		}
 	}
