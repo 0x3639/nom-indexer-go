@@ -9,10 +9,11 @@ import (
 )
 
 type Config struct {
-	Node     NodeConfig     `mapstructure:"node"`
-	Database DatabaseConfig `mapstructure:"database"`
-	Logging  LoggingConfig  `mapstructure:"logging"`
-	Cron     CronConfig     `mapstructure:"cron"`
+	Node              NodeConfig     `mapstructure:"node"`
+	Database          DatabaseConfig `mapstructure:"database"`
+	Logging           LoggingConfig  `mapstructure:"logging"`
+	Cron              CronConfig     `mapstructure:"cron"`
+	BackfillOnStartup bool           `mapstructure:"backfill_on_startup"`
 }
 
 type NodeConfig struct {
@@ -66,6 +67,7 @@ func Load() (*Config, error) {
 	v.SetDefault("logging.format", "console")
 	v.SetDefault("cron.voting_activity_interval", "10m")
 	v.SetDefault("cron.token_holders_interval", "10m")
+	v.SetDefault("backfill_on_startup", false)
 
 	// Enable environment variable binding
 	v.AutomaticEnv()
@@ -81,6 +83,7 @@ func Load() (*Config, error) {
 	_ = v.BindEnv("database.password", "DATABASE_PASSWORD")
 	_ = v.BindEnv("logging.level", "LOG_LEVEL")
 	_ = v.BindEnv("logging.format", "LOG_FORMAT")
+	_ = v.BindEnv("backfill_on_startup", "BACKFILL_ON_STARTUP")
 
 	// Try to read config file (optional)
 	if err := v.ReadInConfig(); err != nil {

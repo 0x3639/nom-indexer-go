@@ -97,6 +97,7 @@ dagger call publish --source . --tag <version>
 | DATABASE_USERNAME | Database user | postgres |
 | DATABASE_PASSWORD | Database password | - |
 | MIGRATIONS_PATH | Path to migrations folder | migrations |
+| BACKFILL_ON_STARTUP | Fill gaps in momentums/account blocks before syncing | false |
 
 ## Known Issues & Workarounds
 

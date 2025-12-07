@@ -80,6 +80,15 @@ func main() {
 		cancel()
 	}()
 
+	// Run backfill if enabled (fills gaps from previous runs before syncing)
+	if cfg.BackfillOnStartup {
+		logger.Info("backfill on startup enabled, checking for gaps")
+		if err := idx.Backfill(ctx); err != nil {
+			logger.Error("backfill failed", zap.Error(err))
+			// Don't fatal - continue with normal sync
+		}
+	}
+
 	// Run indexer
 	if err := idx.Run(ctx); err != nil {
 		if ctx.Err() != nil {

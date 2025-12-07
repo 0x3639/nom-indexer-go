@@ -10,6 +10,7 @@ import (
 	"github.com/0x3639/znn-sdk-go/rpc_client"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/zenon-network/go-zenon/common/types"
+	"github.com/zenon-network/go-zenon/rpc/api"
 	"go.uber.org/zap"
 
 	"github.com/0x3639/nom-indexer-go/internal/models"
@@ -758,4 +759,134 @@ func (i *Indexer) GetPillars() []*models.Pillar {
 	result := make([]*models.Pillar, len(i.pillars))
 	copy(result, i.pillars)
 	return result
+}
+
+// ProcessMomentumPublic is a public wrapper for processMomentum
+// Used by the backfill tool to process individual momentums
+func (i *Indexer) ProcessMomentumPublic(ctx context.Context, m *api.Momentum) error {
+	return i.processMomentum(ctx, m)
+}
+
+// UpdateCachedDataPublic is a public wrapper for updateCachedData
+// Used by the backfill tool to ensure pillar data is loaded
+func (i *Indexer) UpdateCachedDataPublic(ctx context.Context) error {
+	return i.updateCachedData(ctx)
+}
+
+// Backfill finds and reprocesses any missing or incomplete momentums.
+// Missing = height gaps in the momentums table
+// Incomplete = momentums where tx_count > actual account blocks stored
+func (i *Indexer) Backfill(ctx context.Context) error {
+	i.logger.Info("starting backfill check")
+
+	// Find missing momentum heights OR momentums with missing account blocks
+	query := `
+		WITH expected AS (
+			SELECT generate_series(1::bigint, (SELECT MAX(height) FROM momentums)) as height
+		),
+		missing_momentums AS (
+			SELECT e.height
+			FROM expected e
+			LEFT JOIN momentums m ON e.height = m.height
+			WHERE m.height IS NULL
+		),
+		incomplete_momentums AS (
+			SELECT m.height
+			FROM momentums m
+			LEFT JOIN (
+				SELECT momentum_height, COUNT(*) as actual_txs
+				FROM account_blocks
+				GROUP BY momentum_height
+			) ab ON m.height = ab.momentum_height
+			WHERE m.tx_count > 0 AND COALESCE(ab.actual_txs, 0) < m.tx_count
+		)
+		SELECT height FROM missing_momentums
+		UNION
+		SELECT height FROM incomplete_momentums
+		ORDER BY height
+	`
+
+	rows, err := i.pool.Query(ctx, query)
+	if err != nil {
+		return fmt.Errorf("failed to query missing momentums: %w", err)
+	}
+	defer rows.Close()
+
+	var missingHeights []uint64
+	for rows.Next() {
+		var height uint64
+		if err := rows.Scan(&height); err != nil {
+			return fmt.Errorf("failed to scan height: %w", err)
+		}
+		missingHeights = append(missingHeights, height)
+	}
+
+	if err := rows.Err(); err != nil {
+		return fmt.Errorf("error iterating rows: %w", err)
+	}
+
+	if len(missingHeights) == 0 {
+		i.logger.Info("backfill: no missing or incomplete momentums found")
+		return nil
+	}
+
+	i.logger.Info("backfill: found gaps to fill", zap.Int("count", len(missingHeights)))
+
+	// Process each missing momentum
+	for idx, height := range missingHeights {
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		default:
+		}
+
+		i.logger.Info("backfill: processing momentum",
+			zap.Uint64("height", height),
+			zap.Int("progress", idx+1),
+			zap.Int("total", len(missingHeights)))
+
+		// Fetch momentum from node
+		momentums, err := i.client.LedgerApi.GetMomentumsByHeight(height, 1)
+		if err != nil {
+			i.logger.Error("backfill: failed to fetch momentum",
+				zap.Uint64("height", height),
+				zap.Error(err))
+			continue
+		}
+
+		if momentums == nil || len(momentums.List) == 0 {
+			i.logger.Warn("backfill: momentum not found on node",
+				zap.Uint64("height", height))
+			continue
+		}
+
+		// Process the momentum
+		if processErr := i.processMomentum(ctx, momentums.List[0]); processErr != nil {
+			i.logger.Error("backfill: failed to process momentum",
+				zap.Uint64("height", height),
+				zap.Error(processErr))
+			// Try direct insert as fallback
+			i.backfillMomentumDirect(ctx, momentums.List[0])
+		}
+	}
+
+	i.logger.Info("backfill: complete", zap.Int("processed", len(missingHeights)))
+	return nil
+}
+
+// backfillMomentumDirect inserts just the momentum record as a fallback
+func (i *Indexer) backfillMomentumDirect(ctx context.Context, m *api.Momentum) {
+	_, err := i.pool.Exec(ctx, `
+		INSERT INTO momentums (height, hash, timestamp, tx_count, producer, producer_owner, producer_name)
+		VALUES ($1, $2, $3, $4, $5, '', '')
+		ON CONFLICT (height) DO NOTHING`,
+		m.Height, m.Hash.String(), int64(m.TimestampUnix), len(m.Content), m.Producer.String())
+	if err != nil {
+		i.logger.Error("backfill: failed to insert momentum directly",
+			zap.Uint64("height", m.Height),
+			zap.Error(err))
+	} else {
+		i.logger.Info("backfill: inserted momentum directly",
+			zap.Uint64("height", m.Height))
+	}
 }

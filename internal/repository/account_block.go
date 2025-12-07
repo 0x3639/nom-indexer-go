@@ -3,6 +3,7 @@ package repository
 import (
 	"context"
 	"encoding/json"
+	"strings"
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -18,13 +19,23 @@ func NewAccountBlockRepository(pool *pgxpool.Pool) *AccountBlockRepository {
 	return &AccountBlockRepository{pool: pool}
 }
 
+// sanitizeJSONForPostgres removes null bytes and other invalid Unicode escape sequences
+// that PostgreSQL JSONB doesn't support. PostgreSQL rejects \u0000 in JSONB.
+func sanitizeJSONForPostgres(s string) string {
+	// Remove literal \u0000 escape sequences (as they appear in JSON)
+	s = strings.ReplaceAll(s, `\u0000`, "")
+	// Also remove actual null bytes (shouldn't appear in JSON, but just in case)
+	s = strings.ReplaceAll(s, "\x00", "")
+	return s
+}
+
 // Insert inserts an account block
 func (r *AccountBlockRepository) Insert(ctx context.Context, ab *models.AccountBlock, txData *models.TxData) error {
 	input := "{}"
 	if txData != nil && len(txData.Inputs) > 0 {
 		inputBytes, err := json.Marshal(txData.Inputs)
 		if err == nil {
-			input = string(inputBytes)
+			input = sanitizeJSONForPostgres(string(inputBytes))
 		}
 		// On marshal error, keep default "{}"
 	}
@@ -52,7 +63,7 @@ func (r *AccountBlockRepository) InsertBatch(batch *pgx.Batch, ab *models.Accoun
 	if txData != nil && len(txData.Inputs) > 0 {
 		inputBytes, err := json.Marshal(txData.Inputs)
 		if err == nil {
-			input = string(inputBytes)
+			input = sanitizeJSONForPostgres(string(inputBytes))
 		}
 		// On marshal error, keep default "{}"
 	}
