@@ -1,5 +1,5 @@
-github.com/0x3639/znn-sdk-go v0.1.11 h1:08H0ebV1AF/H8eMhuRRhCIsQyI4AZum4C+B5ho+lNsc=
-github.com/0x3639/znn-sdk-go v0.1.11/go.mod h1:4RAjgYC2pFKV9E9cNgDxxfxootG8CttUY5mixroTUhM=
+github.com/0x3639/znn-sdk-go v0.1.12 h1:vS/VHkIwDLG4o3IdeJCZjOa4803xXRPzdwFXd4XXlnM=
+github.com/0x3639/znn-sdk-go v0.1.12/go.mod h1:4RAjgYC2pFKV9E9cNgDxxfxootG8CttUY5mixroTUhM=
 github.com/Azure/go-ansiterm v0.0.0-20230124172434-306776ec8161 h1:L/gRVlceqvL25UVaW/CKtUDjefjrs0SPonmDGUVOYP0=
 github.com/Azure/go-ansiterm v0.0.0-20230124172434-306776ec8161/go.mod h1:xomTg63KZ2rFqZQzSB4Vz2SUXa1BpHTVz9L5PTmPC4E=
 github.com/Microsoft/go-winio v0.6.2 h1:F2VQgta7ecxGYO8k3ZZz3RS8fVIXVxONVUPlNERoyfY=

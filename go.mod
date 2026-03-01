@@ -3,7 +3,7 @@ module github.com/0x3639/nom-indexer-go
 go 1.24.0
 
 require (
-	github.com/0x3639/znn-sdk-go v0.1.11
+	github.com/0x3639/znn-sdk-go v0.1.12
 	github.com/golang-migrate/migrate/v4 v4.19.1
 	github.com/jackc/pgx/v5 v5.7.6
 	github.com/spf13/viper v1.21.0
