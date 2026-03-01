@@ -8,6 +8,9 @@
 # Binary
 /indexer
 
+# Generated outreach reports
+phase-outreach-*.md
+
 # IDE
 .idea/
 .vscode/
