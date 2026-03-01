@@ -24,23 +24,22 @@ import (
 	"strconv"
 	"time"
 
-	"github.com/jackc/pgx/v5/pgxpool"
-
 	"github.com/0x3639/znn-sdk-go/abi"
 	"github.com/0x3639/znn-sdk-go/embedded"
+	"github.com/jackc/pgx/v5/pgxpool"
 )
 
 const acceleratorAddress = "z1qxemdeddedxaccelerat0rxxxxxxxxxxp4tk22"
 
 // accountBlockRow holds the fields we need from account_blocks.
 type accountBlockRow struct {
-	Hash              string
-	MomentumHash      string
-	MomentumTimestamp int64
-	MomentumHeight    int64
-	Address           string
-	Data              string // hex-encoded
-	Method            string
+	Hash               string
+	MomentumHash       string
+	MomentumTimestamp  int64
+	MomentumHeight     int64
+	Address            string
+	Data               string // hex-encoded
+	Method             string
 	PairedAccountBlock string
 }
 

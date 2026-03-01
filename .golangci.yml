@@ -51,6 +51,14 @@ linters:
         linters:
           - all
 
+      # Exclude standalone utility scripts from strict linting
+      - path: ^scripts/
+        linters:
+          - errcheck
+          - govet
+          - noctx
+          - prealloc
+
 formatters:
   enable:
     - gci
