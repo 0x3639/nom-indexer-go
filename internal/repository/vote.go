@@ -17,23 +17,33 @@ func NewVoteRepository(pool *pgxpool.Pool) *VoteRepository {
 	return &VoteRepository{pool: pool}
 }
 
-// Insert inserts a vote
+// Insert inserts or updates a vote (keeps the latest vote per voter+voting_id)
 func (r *VoteRepository) Insert(ctx context.Context, v *models.Vote) error {
 	_, err := r.pool.Exec(ctx, `
 		INSERT INTO votes (momentum_hash, momentum_timestamp, momentum_height,
 			voter_address, project_id, phase_id, voting_id, vote)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+		ON CONFLICT (voter_address, voting_id) DO UPDATE SET
+			momentum_hash = EXCLUDED.momentum_hash,
+			momentum_timestamp = EXCLUDED.momentum_timestamp,
+			momentum_height = EXCLUDED.momentum_height,
+			vote = EXCLUDED.vote`,
 		v.MomentumHash, v.MomentumTimestamp, v.MomentumHeight,
 		v.VoterAddress, v.ProjectID, v.PhaseID, v.VotingID, v.Vote)
 	return err
 }
 
-// InsertBatch adds a vote insert to a batch
+// InsertBatch adds a vote upsert to a batch (keeps the latest vote per voter+voting_id)
 func (r *VoteRepository) InsertBatch(batch *pgx.Batch, v *models.Vote) {
 	batch.Queue(`
 		INSERT INTO votes (momentum_hash, momentum_timestamp, momentum_height,
 			voter_address, project_id, phase_id, voting_id, vote)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+		ON CONFLICT (voter_address, voting_id) DO UPDATE SET
+			momentum_hash = EXCLUDED.momentum_hash,
+			momentum_timestamp = EXCLUDED.momentum_timestamp,
+			momentum_height = EXCLUDED.momentum_height,
+			vote = EXCLUDED.vote`,
 		v.MomentumHash, v.MomentumTimestamp, v.MomentumHeight,
 		v.VoterAddress, v.ProjectID, v.PhaseID, v.VotingID, v.Vote)
 }
