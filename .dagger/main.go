@@ -12,9 +12,24 @@ import (
 
 type NomIndexer struct{}
 
-// Build builds the Docker image using the existing Dockerfile
+// Build builds the indexer Docker image using the default Dockerfile.
 func (m *NomIndexer) Build(source *dagger.Directory) *dagger.Container {
 	return source.DockerBuild()
+}
+
+// BuildAPI builds the API Docker image (Dockerfile.api, CGO_ENABLED=0).
+// Keeps the API image small and proves the API never accidentally
+// imports anything that needs CGO.
+func (m *NomIndexer) BuildAPI(source *dagger.Directory) *dagger.Container {
+	return source.DockerBuild(dagger.DirectoryDockerBuildOpts{
+		Dockerfile: "Dockerfile.api",
+	})
+}
+
+// PublishAPI builds and pushes the API image to GitHub Container Registry.
+func (m *NomIndexer) PublishAPI(ctx context.Context, source *dagger.Directory, tag string) (string, error) {
+	return m.BuildAPI(source).
+		Publish(ctx, "ghcr.io/0x3639/nom-indexer-api:"+tag)
 }
 
 // Test runs go test with CGO enabled (required for secp256k1)
@@ -69,6 +84,8 @@ func (m *NomIndexer) CI(ctx context.Context, source *dagger.Directory) (string, 
 
 	// Build container to validate Dockerfile
 	_ = m.Build(source)
+	// Validate the API Dockerfile too (CGO-disabled build).
+	_ = m.BuildAPI(source)
 
 	return "CI passed: lint, test, and build succeeded!", nil
 }
