@@ -64,6 +64,13 @@ func New(d Deps) http.Handler {
 		r.Get("/momentums", handlers.MomentumsList(d.Repos.Momentum))
 		r.Get("/momentums/latest", handlers.MomentumsLatest(d.Repos.Momentum))
 		r.Get("/momentums/{height}", handlers.MomentumsGetByHeight(d.Repos.Momentum))
+
+		r.Get("/accounts/{address}", handlers.AccountsGet(d.Repos.Account))
+		r.Get("/accounts/{address}/balances", handlers.AccountsBalances(d.Repos.Balance))
+
+		r.Get("/tokens", handlers.TokensList(d.Repos.Token))
+		r.Get("/tokens/{token_standard}", handlers.TokensGet(d.Repos.Token))
+		r.Get("/tokens/{token_standard}/holders", handlers.TokensHolders(d.Repos.Balance))
 	})
 
 	return r

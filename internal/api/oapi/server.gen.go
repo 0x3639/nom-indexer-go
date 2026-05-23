@@ -76,6 +76,75 @@ func (e ListMomentumsParamsSort) Valid() bool {
 	}
 }
 
+// Account defines model for Account.
+type Account struct {
+	Address                  string  `json:"address"`
+	BlockCount               int64   `json:"block_count"`
+	Delegate                 *string `json:"delegate,omitempty"`
+	DelegationStartTimestamp *int64  `json:"delegation_start_timestamp,omitempty"`
+	FirstActiveAt            *int64  `json:"first_active_at,omitempty"`
+
+	// GenesisQsrBalance Raw int64 token amount (no decimals applied) serialized as a
+	// JSON string. Strings avoid JavaScript Number precision loss for
+	// values above 2^53-1 — ZNN total supply already exceeds that.
+	GenesisQsrBalance Amount `json:"genesis_qsr_balance"`
+
+	// GenesisZnnBalance Raw int64 token amount (no decimals applied) serialized as a
+	// JSON string. Strings avoid JavaScript Number precision loss for
+	// values above 2^53-1 — ZNN total supply already exceeds that.
+	GenesisZnnBalance Amount  `json:"genesis_znn_balance"`
+	LastActiveAt      *int64  `json:"last_active_at,omitempty"`
+	PublicKey         *string `json:"public_key,omitempty"`
+
+	// QsrReceived Raw int64 token amount (no decimals applied) serialized as a
+	// JSON string. Strings avoid JavaScript Number precision loss for
+	// values above 2^53-1 — ZNN total supply already exceeds that.
+	QsrReceived Amount `json:"qsr_received"`
+
+	// QsrSent Raw int64 token amount (no decimals applied) serialized as a
+	// JSON string. Strings avoid JavaScript Number precision loss for
+	// values above 2^53-1 — ZNN total supply already exceeds that.
+	QsrSent Amount `json:"qsr_sent"`
+
+	// ZnnReceived Raw int64 token amount (no decimals applied) serialized as a
+	// JSON string. Strings avoid JavaScript Number precision loss for
+	// values above 2^53-1 — ZNN total supply already exceeds that.
+	ZnnReceived Amount `json:"znn_received"`
+
+	// ZnnSent Raw int64 token amount (no decimals applied) serialized as a
+	// JSON string. Strings avoid JavaScript Number precision loss for
+	// values above 2^53-1 — ZNN total supply already exceeds that.
+	ZnnSent Amount `json:"znn_sent"`
+}
+
+// Amount Raw int64 token amount (no decimals applied) serialized as a
+// JSON string. Strings avoid JavaScript Number precision loss for
+// values above 2^53-1 — ZNN total supply already exceeds that.
+type Amount = string
+
+// Balance defines model for Balance.
+type Balance struct {
+	Address string `json:"address"`
+
+	// Balance Raw int64 token amount (no decimals applied) serialized as a
+	// JSON string. Strings avoid JavaScript Number precision loss for
+	// values above 2^53-1 — ZNN total supply already exceeds that.
+	Balance              Amount `json:"balance"`
+	LastUpdatedTimestamp int64  `json:"last_updated_timestamp"`
+	TokenStandard        string `json:"token_standard"`
+}
+
+// BalanceList defines model for BalanceList.
+type BalanceList struct {
+	Data []Balance `json:"data"`
+}
+
+// BalancePage defines model for BalancePage.
+type BalancePage struct {
+	Data       []Balance  `json:"data"`
+	Pagination Pagination `json:"pagination"`
+}
+
 // Health defines model for Health.
 type Health struct {
 	Status HealthStatus `json:"status"`
@@ -142,6 +211,43 @@ type Status struct {
 	Version         string `json:"version"`
 }
 
+// Token defines model for Token.
+type Token struct {
+	Decimals            int     `json:"decimals"`
+	Domain              *string `json:"domain,omitempty"`
+	HolderCount         int64   `json:"holder_count"`
+	IsBurnable          bool    `json:"is_burnable"`
+	IsMintable          bool    `json:"is_mintable"`
+	IsUtility           bool    `json:"is_utility"`
+	LastUpdateTimestamp int64   `json:"last_update_timestamp"`
+
+	// MaxSupply Raw int64 token amount (no decimals applied) serialized as a
+	// JSON string. Strings avoid JavaScript Number precision loss for
+	// values above 2^53-1 — ZNN total supply already exceeds that.
+	MaxSupply     Amount `json:"max_supply"`
+	Name          string `json:"name"`
+	Owner         string `json:"owner"`
+	Symbol        string `json:"symbol"`
+	TokenStandard string `json:"token_standard"`
+
+	// TotalBurned Raw int64 token amount (no decimals applied) serialized as a
+	// JSON string. Strings avoid JavaScript Number precision loss for
+	// values above 2^53-1 — ZNN total supply already exceeds that.
+	TotalBurned Amount `json:"total_burned"`
+
+	// TotalSupply Raw int64 token amount (no decimals applied) serialized as a
+	// JSON string. Strings avoid JavaScript Number precision loss for
+	// values above 2^53-1 — ZNN total supply already exceeds that.
+	TotalSupply      Amount `json:"total_supply"`
+	TransactionCount int64  `json:"transaction_count"`
+}
+
+// TokenList defines model for TokenList.
+type TokenList struct {
+	Data       []Token    `json:"data"`
+	Pagination Pagination `json:"pagination"`
+}
+
 // PageParam defines model for PageParam.
 type PageParam = int
 
@@ -175,8 +281,32 @@ type ListMomentumsParams struct {
 // ListMomentumsParamsSort defines parameters for ListMomentums.
 type ListMomentumsParamsSort string
 
+// ListTokensParams defines parameters for ListTokens.
+type ListTokensParams struct {
+	// Page 1-based page number. Defaults to 1. Out-of-range clamped silently.
+	Page *PageParam `form:"page,omitempty" json:"page,omitempty"`
+
+	// PageSize Items per page. Default 50, maximum 200. Out-of-range clamped silently.
+	PageSize *PageSizeParam `form:"page_size,omitempty" json:"page_size,omitempty"`
+}
+
+// ListTokenHoldersParams defines parameters for ListTokenHolders.
+type ListTokenHoldersParams struct {
+	// Page 1-based page number. Defaults to 1. Out-of-range clamped silently.
+	Page *PageParam `form:"page,omitempty" json:"page,omitempty"`
+
+	// PageSize Items per page. Default 50, maximum 200. Out-of-range clamped silently.
+	PageSize *PageSizeParam `form:"page_size,omitempty" json:"page_size,omitempty"`
+}
+
 // ServerInterface represents all server handlers.
 type ServerInterface interface {
+	// Get account info
+	// (GET /api/v1/accounts/{address})
+	GetAccount(w http.ResponseWriter, r *http.Request, address string)
+	// List balances for an account
+	// (GET /api/v1/accounts/{address}/balances)
+	GetAccountBalances(w http.ResponseWriter, r *http.Request, address string)
 	// List momentums
 	// (GET /api/v1/momentums)
 	ListMomentums(w http.ResponseWriter, r *http.Request, params ListMomentumsParams)
@@ -189,6 +319,15 @@ type ServerInterface interface {
 	// Indexer sync status
 	// (GET /api/v1/status)
 	GetStatus(w http.ResponseWriter, r *http.Request)
+	// List ZTS tokens
+	// (GET /api/v1/tokens)
+	ListTokens(w http.ResponseWriter, r *http.Request, params ListTokensParams)
+	// Get a ZTS token by ZTS identifier
+	// (GET /api/v1/tokens/{token_standard})
+	GetToken(w http.ResponseWriter, r *http.Request, tokenStandard string)
+	// Richlist for a token
+	// (GET /api/v1/tokens/{token_standard}/holders)
+	ListTokenHolders(w http.ResponseWriter, r *http.Request, tokenStandard string, params ListTokenHoldersParams)
 	// Liveness probe
 	// (GET /healthz)
 	GetHealthz(w http.ResponseWriter, r *http.Request)
@@ -202,6 +341,70 @@ type ServerInterfaceWrapper struct {
 }
 
 type MiddlewareFunc func(http.Handler) http.Handler
+
+// GetAccount operation middleware
+func (siw *ServerInterfaceWrapper) GetAccount(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+	_ = err
+
+	// ------------- Path parameter "address" -------------
+	var address string
+
+	err = runtime.BindStyledParameterWithOptions("simple", "address", r.PathValue("address"), &address, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: ""})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "address", Err: err})
+		return
+	}
+
+	ctx := r.Context()
+
+	ctx = context.WithValue(ctx, BearerAuthScopes, []string{})
+
+	r = r.WithContext(ctx)
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.GetAccount(w, r, address)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// GetAccountBalances operation middleware
+func (siw *ServerInterfaceWrapper) GetAccountBalances(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+	_ = err
+
+	// ------------- Path parameter "address" -------------
+	var address string
+
+	err = runtime.BindStyledParameterWithOptions("simple", "address", r.PathValue("address"), &address, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: ""})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "address", Err: err})
+		return
+	}
+
+	ctx := r.Context()
+
+	ctx = context.WithValue(ctx, BearerAuthScopes, []string{})
+
+	r = r.WithContext(ctx)
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.GetAccountBalances(w, r, address)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
 
 // ListMomentums operation middleware
 func (siw *ServerInterfaceWrapper) ListMomentums(w http.ResponseWriter, r *http.Request) {
@@ -331,6 +534,151 @@ func (siw *ServerInterfaceWrapper) GetStatus(w http.ResponseWriter, r *http.Requ
 
 	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		siw.Handler.GetStatus(w, r)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// ListTokens operation middleware
+func (siw *ServerInterfaceWrapper) ListTokens(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+	_ = err
+
+	ctx := r.Context()
+
+	ctx = context.WithValue(ctx, BearerAuthScopes, []string{})
+
+	r = r.WithContext(ctx)
+
+	// Parameter object where we will unmarshal all parameters from the context
+	var params ListTokensParams
+
+	// ------------- Optional query parameter "page" -------------
+
+	err = runtime.BindQueryParameterWithOptions("form", true, false, "page", r.URL.Query(), &params.Page, runtime.BindQueryParameterOptions{Type: "integer", Format: ""})
+	if err != nil {
+		var requiredError *runtime.RequiredParameterError
+		if errors.As(err, &requiredError) {
+			siw.ErrorHandlerFunc(w, r, &RequiredParamError{ParamName: "page"})
+		} else {
+			siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "page", Err: err})
+		}
+		return
+	}
+
+	// ------------- Optional query parameter "page_size" -------------
+
+	err = runtime.BindQueryParameterWithOptions("form", true, false, "page_size", r.URL.Query(), &params.PageSize, runtime.BindQueryParameterOptions{Type: "integer", Format: ""})
+	if err != nil {
+		var requiredError *runtime.RequiredParameterError
+		if errors.As(err, &requiredError) {
+			siw.ErrorHandlerFunc(w, r, &RequiredParamError{ParamName: "page_size"})
+		} else {
+			siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "page_size", Err: err})
+		}
+		return
+	}
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.ListTokens(w, r, params)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// GetToken operation middleware
+func (siw *ServerInterfaceWrapper) GetToken(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+	_ = err
+
+	// ------------- Path parameter "token_standard" -------------
+	var tokenStandard string
+
+	err = runtime.BindStyledParameterWithOptions("simple", "token_standard", r.PathValue("token_standard"), &tokenStandard, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: ""})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "token_standard", Err: err})
+		return
+	}
+
+	ctx := r.Context()
+
+	ctx = context.WithValue(ctx, BearerAuthScopes, []string{})
+
+	r = r.WithContext(ctx)
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.GetToken(w, r, tokenStandard)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// ListTokenHolders operation middleware
+func (siw *ServerInterfaceWrapper) ListTokenHolders(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+	_ = err
+
+	// ------------- Path parameter "token_standard" -------------
+	var tokenStandard string
+
+	err = runtime.BindStyledParameterWithOptions("simple", "token_standard", r.PathValue("token_standard"), &tokenStandard, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: ""})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "token_standard", Err: err})
+		return
+	}
+
+	ctx := r.Context()
+
+	ctx = context.WithValue(ctx, BearerAuthScopes, []string{})
+
+	r = r.WithContext(ctx)
+
+	// Parameter object where we will unmarshal all parameters from the context
+	var params ListTokenHoldersParams
+
+	// ------------- Optional query parameter "page" -------------
+
+	err = runtime.BindQueryParameterWithOptions("form", true, false, "page", r.URL.Query(), &params.Page, runtime.BindQueryParameterOptions{Type: "integer", Format: ""})
+	if err != nil {
+		var requiredError *runtime.RequiredParameterError
+		if errors.As(err, &requiredError) {
+			siw.ErrorHandlerFunc(w, r, &RequiredParamError{ParamName: "page"})
+		} else {
+			siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "page", Err: err})
+		}
+		return
+	}
+
+	// ------------- Optional query parameter "page_size" -------------
+
+	err = runtime.BindQueryParameterWithOptions("form", true, false, "page_size", r.URL.Query(), &params.PageSize, runtime.BindQueryParameterOptions{Type: "integer", Format: ""})
+	if err != nil {
+		var requiredError *runtime.RequiredParameterError
+		if errors.As(err, &requiredError) {
+			siw.ErrorHandlerFunc(w, r, &RequiredParamError{ParamName: "page_size"})
+		} else {
+			siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "page_size", Err: err})
+		}
+		return
+	}
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.ListTokenHolders(w, r, tokenStandard, params)
 	}))
 
 	for _, middleware := range siw.HandlerMiddlewares {
@@ -474,10 +822,15 @@ func HandlerWithOptions(si ServerInterface, options StdHTTPServerOptions) http.H
 		ErrorHandlerFunc:   options.ErrorHandlerFunc,
 	}
 
+	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/api/v1/accounts/{address}", wrapper.GetAccount)
+	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/api/v1/accounts/{address}/balances", wrapper.GetAccountBalances)
 	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/api/v1/momentums", wrapper.ListMomentums)
 	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/api/v1/momentums/latest", wrapper.GetLatestMomentum)
 	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/api/v1/momentums/{height}", wrapper.GetMomentumByHeight)
 	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/api/v1/status", wrapper.GetStatus)
+	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/api/v1/tokens", wrapper.ListTokens)
+	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/api/v1/tokens/{token_standard}", wrapper.GetToken)
+	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/api/v1/tokens/{token_standard}/holders", wrapper.ListTokenHolders)
 	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/healthz", wrapper.GetHealthz)
 
 	return m
@@ -488,46 +841,63 @@ func HandlerWithOptions(si ServerInterface, options StdHTTPServerOptions) http.H
 // const string: with thousands of chunks the chained `+` fold is several
 // times slower for the Go compiler than parsing a slice literal.
 var swaggerSpec = []string{
-	"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",
+	"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",
 }
 
 // decodeSpec returns the embedded OpenAPI spec as raw JSON bytes,

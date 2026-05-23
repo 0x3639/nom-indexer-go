@@ -195,6 +195,115 @@ components:
         pagination:
           $ref: '#/components/schemas/Pagination'
 
+    Amount:
+      type: string
+      description: |
+        Raw int64 token amount (no decimals applied) serialized as a
+        JSON string. Strings avoid JavaScript Number precision loss for
+        values above 2^53-1 — ZNN total supply already exceeds that.
+      pattern: '^-?[0-9]+$'
+      examples: ["100000000000"]
+
+    Account:
+      type: object
+      required:
+        - address
+        - block_count
+        - genesis_znn_balance
+        - genesis_qsr_balance
+        - znn_sent
+        - znn_received
+        - qsr_sent
+        - qsr_received
+      properties:
+        address: { type: string }
+        block_count: { type: integer, format: int64 }
+        public_key: { type: string }
+        delegate: { type: string }
+        delegation_start_timestamp: { type: integer, format: int64 }
+        genesis_znn_balance: { $ref: '#/components/schemas/Amount' }
+        genesis_qsr_balance: { $ref: '#/components/schemas/Amount' }
+        znn_sent: { $ref: '#/components/schemas/Amount' }
+        znn_received: { $ref: '#/components/schemas/Amount' }
+        qsr_sent: { $ref: '#/components/schemas/Amount' }
+        qsr_received: { $ref: '#/components/schemas/Amount' }
+        first_active_at: { type: integer, format: int64 }
+        last_active_at: { type: integer, format: int64 }
+
+    Balance:
+      type: object
+      required: [address, token_standard, balance, last_updated_timestamp]
+      properties:
+        address: { type: string }
+        token_standard: { type: string }
+        balance: { $ref: '#/components/schemas/Amount' }
+        last_updated_timestamp: { type: integer, format: int64 }
+
+    BalanceList:
+      type: object
+      required: [data]
+      properties:
+        data:
+          type: array
+          items:
+            $ref: '#/components/schemas/Balance'
+
+    BalancePage:
+      type: object
+      required: [data, pagination]
+      properties:
+        data:
+          type: array
+          items:
+            $ref: '#/components/schemas/Balance'
+        pagination:
+          $ref: '#/components/schemas/Pagination'
+
+    Token:
+      type: object
+      required:
+        - token_standard
+        - name
+        - symbol
+        - decimals
+        - owner
+        - total_supply
+        - max_supply
+        - is_burnable
+        - is_mintable
+        - is_utility
+        - total_burned
+        - last_update_timestamp
+        - holder_count
+        - transaction_count
+      properties:
+        token_standard: { type: string, examples: ["zts1znnxxxxxxxxxxxxx9z4ulx"] }
+        name: { type: string }
+        symbol: { type: string }
+        domain: { type: string }
+        decimals: { type: integer }
+        owner: { type: string }
+        total_supply: { $ref: '#/components/schemas/Amount' }
+        max_supply: { $ref: '#/components/schemas/Amount' }
+        is_burnable: { type: boolean }
+        is_mintable: { type: boolean }
+        is_utility: { type: boolean }
+        total_burned: { $ref: '#/components/schemas/Amount' }
+        last_update_timestamp: { type: integer, format: int64 }
+        holder_count: { type: integer, format: int64 }
+        transaction_count: { type: integer, format: int64 }
+
+    TokenList:
+      type: object
+      required: [data, pagination]
+      properties:
+        data:
+          type: array
+          items:
+            $ref: '#/components/schemas/Token'
+        pagination:
+          $ref: '#/components/schemas/Pagination'
+
   responses:
     Unauthorized:
       description: Missing or invalid bearer token.
@@ -301,6 +410,152 @@ paths:
             application/problem+json:
               schema:
                 $ref: '#/components/schemas/Problem'
+        '429':
+          $ref: '#/components/responses/RateLimited'
+
+  /api/v1/accounts/{address}:
+    get:
+      operationId: getAccount
+      summary: Get account info
+      description: |
+        Returns the account's flow metrics (lifetime ZNN/QSR sent/received,
+        first/last activity) plus delegation state. Returns 404 if the
+        indexer has never observed the address.
+      tags: [accounts]
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: address
+          in: path
+          required: true
+          schema: { type: string, examples: ["z1qq…"] }
+      responses:
+        '200':
+          description: Account info.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Account'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          description: No account with that address.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
+        '429':
+          $ref: '#/components/responses/RateLimited'
+
+  /api/v1/accounts/{address}/balances:
+    get:
+      operationId: getAccountBalances
+      summary: List balances for an account
+      description: |
+        Returns every (token_standard, balance) row for the address,
+        sorted by balance DESC. Not paginated — an account typically
+        holds a handful of tokens.
+      tags: [accounts]
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: address
+          in: path
+          required: true
+          schema: { type: string }
+      responses:
+        '200':
+          description: List of balances.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/BalanceList'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '429':
+          $ref: '#/components/responses/RateLimited'
+
+  /api/v1/tokens:
+    get:
+      operationId: listTokens
+      summary: List ZTS tokens
+      description: |
+        Returns ZTS tokens ordered by holder_count DESC (most-held first),
+        then token_standard ASC for stability.
+      tags: [tokens]
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: '#/components/parameters/PageParam'
+        - $ref: '#/components/parameters/PageSizeParam'
+      responses:
+        '200':
+          description: Paginated list of tokens.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TokenList'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '429':
+          $ref: '#/components/responses/RateLimited'
+
+  /api/v1/tokens/{token_standard}:
+    get:
+      operationId: getToken
+      summary: Get a ZTS token by ZTS identifier
+      tags: [tokens]
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: token_standard
+          in: path
+          required: true
+          schema: { type: string }
+      responses:
+        '200':
+          description: Token info.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Token'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          description: No token with that standard.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
+        '429':
+          $ref: '#/components/responses/RateLimited'
+
+  /api/v1/tokens/{token_standard}/holders:
+    get:
+      operationId: listTokenHolders
+      summary: Richlist for a token
+      description: |
+        Returns addresses holding the token, sorted by balance DESC.
+        Excludes zero balances.
+      tags: [tokens]
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: token_standard
+          in: path
+          required: true
+          schema: { type: string }
+        - $ref: '#/components/parameters/PageParam'
+        - $ref: '#/components/parameters/PageSizeParam'
+      responses:
+        '200':
+          description: Paginated holder list.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/BalancePage'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
         '429':
           $ref: '#/components/responses/RateLimited'
 
