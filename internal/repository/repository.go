@@ -11,6 +11,7 @@ type Repositories struct {
 	AccountBlock *AccountBlockRepository
 	Balance      *BalanceRepository
 	Token        *TokenRepository
+	TokenEvent   *TokenEventRepository
 	Pillar       *PillarRepository
 	PillarUpdate *PillarUpdateRepository
 	Sentinel     *SentinelRepository
@@ -21,6 +22,9 @@ type Repositories struct {
 	Vote         *VoteRepository
 	Reward       *RewardRepository
 	Bridge       *BridgeRepository
+	BridgeConfig *BridgeConfigRepository
+	Delegation   *DelegationRepository
+	StatHistory  *StatHistoryRepository
 }
 
 // NewRepositories creates all repository instances
@@ -31,6 +35,7 @@ func NewRepositories(pool *pgxpool.Pool) *Repositories {
 		AccountBlock: NewAccountBlockRepository(pool),
 		Balance:      NewBalanceRepository(pool),
 		Token:        NewTokenRepository(pool),
+		TokenEvent:   NewTokenEventRepository(pool),
 		Pillar:       NewPillarRepository(pool),
 		PillarUpdate: NewPillarUpdateRepository(pool),
 		Sentinel:     NewSentinelRepository(pool),
@@ -41,5 +46,8 @@ func NewRepositories(pool *pgxpool.Pool) *Repositories {
 		Vote:         NewVoteRepository(pool),
 		Reward:       NewRewardRepository(pool),
 		Bridge:       NewBridgeRepository(pool),
+		BridgeConfig: NewBridgeConfigRepository(pool),
+		Delegation:   NewDelegationRepository(pool),
+		StatHistory:  NewStatHistoryRepository(pool),
 	}
 }

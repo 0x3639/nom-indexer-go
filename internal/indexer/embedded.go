@@ -93,23 +93,28 @@ func (i *Indexer) indexPillarContract(ctx context.Context, batch *pgx.Batch, blo
 			i.repos.PillarUpdate.InsertBatch(batch, update)
 		}
 	case "Delegate":
-		// Update account delegation
+		// Update account delegation + append to delegation history (close
+		// the previous open interval if any, then open a new one).
 		pillarName := txData.Inputs["name"]
 		if pillarName != "" && block.PairedAccountBlock != nil {
 			pillarOwner := i.getPillarOwnerAddress(pillarName)
 			if pillarOwner != "" {
 				delegatorAddress := block.PairedAccountBlock.Address.String()
-				i.repos.Account.UpdateDelegateBatch(batch, delegatorAddress, pillarOwner, int64(m.TimestampUnix))
+				ts := int64(m.TimestampUnix)
+				i.repos.Account.UpdateDelegateBatch(batch, delegatorAddress, pillarOwner, ts)
+				i.repos.Delegation.CloseActiveBatch(batch, delegatorAddress, ts)
+				i.repos.Delegation.OpenBatch(batch, delegatorAddress, pillarOwner, ts)
 				i.logger.Debug("delegation recorded",
 					zap.String("delegator", delegatorAddress),
 					zap.String("pillar", pillarName))
 			}
 		}
 	case "Undelegate":
-		// Clear account delegation
+		// Clear account delegation + close any open delegation interval.
 		if block.PairedAccountBlock != nil {
 			delegatorAddress := block.PairedAccountBlock.Address.String()
 			i.repos.Account.UpdateDelegateBatch(batch, delegatorAddress, "", 0)
+			i.repos.Delegation.CloseActiveBatch(batch, delegatorAddress, int64(m.TimestampUnix))
 			i.logger.Debug("undelegation recorded", zap.String("delegator", delegatorAddress))
 		}
 	case "Revoke":
@@ -283,16 +288,65 @@ func (i *Indexer) indexTokenContract(ctx context.Context, batch *pgx.Batch, bloc
 	method := txData.Method
 
 	switch method {
-	case "Burn":
-		// Update token burn amount
-		if block.PairedAccountBlock != nil {
-			tokenStandard := block.PairedAccountBlock.TokenStandard.String()
-			burnAmount := block.PairedAccountBlock.Amount.Int64()
-			i.repos.Token.UpdateBurnAmountBatch(batch, tokenStandard, burnAmount)
-			i.logger.Debug("token burn recorded",
-				zap.String("token", tokenStandard),
-				zap.Int64("amount", burnAmount))
+	case "Mint":
+		// A Mint contract-receive on the token contract. Inputs carry the
+		// destination token, amount, and receiver; the paired send block's
+		// address is the issuer (typically an embedded reward contract or a
+		// token owner).
+		if block.PairedAccountBlock == nil {
+			return
 		}
+		tokenStandard := txData.Inputs["tokenStandard"]
+		amountStr := txData.Inputs["amount"]
+		receiver := txData.Inputs["receiveAddress"]
+		amount, err := strconv.ParseInt(amountStr, 10, 64)
+		if err != nil {
+			i.logger.Warn("invalid mint amount",
+				zap.String("amount", amountStr),
+				zap.String("hash", block.Hash.String()),
+				zap.Error(err))
+			return
+		}
+		mint := &models.TokenMint{
+			AccountBlockHash:  block.Hash.String(),
+			MomentumHeight:    int64(m.Height),
+			MomentumTimestamp: int64(m.TimestampUnix),
+			TokenStandard:     tokenStandard,
+			Issuer:            block.PairedAccountBlock.Address.String(),
+			Receiver:          receiver,
+			Amount:            amount,
+		}
+		i.repos.TokenEvent.InsertMintBatch(batch, mint)
+		i.logger.Debug("token mint recorded",
+			zap.String("token", tokenStandard),
+			zap.String("issuer", mint.Issuer),
+			zap.String("receiver", mint.Receiver),
+			zap.Int64("amount", amount))
+
+	case "Burn":
+		// A Burn contract-receive on the token contract. The paired send
+		// carries the actual amount and token; the send's address is the
+		// burner.
+		if block.PairedAccountBlock == nil {
+			return
+		}
+		tokenStandard := block.PairedAccountBlock.TokenStandard.String()
+		burnAmount := block.PairedAccountBlock.Amount.Int64()
+		burner := block.PairedAccountBlock.Address.String()
+		i.repos.TokenEvent.InsertBurnBatch(batch, &models.TokenBurn{
+			AccountBlockHash:  block.Hash.String(),
+			MomentumHeight:    int64(m.Height),
+			MomentumTimestamp: int64(m.TimestampUnix),
+			TokenStandard:     tokenStandard,
+			Burner:            burner,
+			Amount:            burnAmount,
+		})
+		i.repos.Token.UpdateBurnAmountBatch(batch, tokenStandard, burnAmount)
+		i.logger.Debug("token burn recorded",
+			zap.String("token", tokenStandard),
+			zap.String("burner", burner),
+			zap.Int64("amount", burnAmount))
+
 	case "UpdateToken":
 		// Update token last update timestamp
 		tokenStandard := txData.Inputs["tokenStandard"]

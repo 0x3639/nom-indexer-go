@@ -43,7 +43,8 @@ func (i *Indexer) indexReceivedReward(ctx context.Context, batch *pgx.Batch, blo
 	}
 
 	sourceAddress := block.PairedAccountBlock.Address.String()
-	rewardType := i.determineRewardType(sourceAddress)
+	receiverAddress := block.Address.String()
+	rewardType := i.classifyReward(ctx, sourceAddress, receiverAddress)
 
 	if rewardType == models.RewardTypeUnknown {
 		return
@@ -51,7 +52,7 @@ func (i *Indexer) indexReceivedReward(ctx context.Context, batch *pgx.Batch, blo
 
 	rt := &models.RewardTransaction{
 		Hash:              block.Hash.String(),
-		Address:           block.Address.String(),
+		Address:           receiverAddress,
 		RewardType:        rewardType,
 		MomentumTimestamp: int64(m.TimestampUnix),
 		MomentumHeight:    int64(m.Height),
@@ -70,7 +71,40 @@ func (i *Indexer) indexReceivedReward(ctx context.Context, batch *pgx.Batch, blo
 		zap.Int64("amount", rt.Amount))
 }
 
-// determineRewardType determines the reward type based on source address
+// classifyReward maps (source contract, receiver) to a RewardType. Pillar
+// rewards split into PillarTypePillar (when the receiver is the pillar's own
+// withdraw address) vs RewardTypeDelegation (delegator share). Other sources
+// route directly to their type. Errors fall back to "Pillar" so we don't lose
+// the row entirely when the lookup fails — that matches the historical
+// behavior of determineRewardType.
+func (i *Indexer) classifyReward(ctx context.Context, sourceAddress, receiverAddress string) models.RewardType {
+	switch sourceAddress {
+	case models.SentinelAddress:
+		return models.RewardTypeSentinel
+	case models.StakeAddress:
+		return models.RewardTypeStake
+	case models.LiquidityAddress:
+		return models.RewardTypeLiquidity
+	case models.PillarAddress:
+		isPillar, err := i.repos.Pillar.IsWithdrawAddress(ctx, receiverAddress)
+		if err != nil {
+			i.logger.Warn("classifyReward: IsWithdrawAddress failed, defaulting to Pillar",
+				zap.String("receiver", receiverAddress),
+				zap.Error(err))
+			return models.RewardTypePillar
+		}
+		if isPillar {
+			return models.RewardTypePillar
+		}
+		return models.RewardTypeDelegation
+	default:
+		return models.RewardTypeUnknown
+	}
+}
+
+// determineRewardType is retained for backwards compatibility (used by tests
+// and by the historical-data backfill script). It does not split Pillar vs
+// Delegation — callers that need the split should use classifyReward.
 func (i *Indexer) determineRewardType(sourceAddress string) models.RewardType {
 	switch sourceAddress {
 	case models.PillarAddress:

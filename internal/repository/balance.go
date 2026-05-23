@@ -20,20 +20,24 @@ func NewBalanceRepository(pool *pgxpool.Pool) *BalanceRepository {
 // Upsert inserts or updates a balance
 func (r *BalanceRepository) Upsert(ctx context.Context, b *models.Balance) error {
 	_, err := r.pool.Exec(ctx, `
-		INSERT INTO balances (address, token_standard, balance)
-		VALUES ($1, $2, $3)
-		ON CONFLICT (address, token_standard) DO UPDATE SET balance = $3`,
-		b.Address, b.TokenStandard, b.Balance)
+		INSERT INTO balances (address, token_standard, balance, last_updated_timestamp)
+		VALUES ($1, $2, $3, $4)
+		ON CONFLICT (address, token_standard) DO UPDATE SET
+			balance = EXCLUDED.balance,
+			last_updated_timestamp = EXCLUDED.last_updated_timestamp`,
+		b.Address, b.TokenStandard, b.Balance, b.LastUpdatedTimestamp)
 	return err
 }
 
 // UpsertBatch adds a balance upsert to a batch
 func (r *BalanceRepository) UpsertBatch(batch *pgx.Batch, b *models.Balance) {
 	batch.Queue(`
-		INSERT INTO balances (address, token_standard, balance)
-		VALUES ($1, $2, $3)
-		ON CONFLICT (address, token_standard) DO UPDATE SET balance = $3`,
-		b.Address, b.TokenStandard, b.Balance)
+		INSERT INTO balances (address, token_standard, balance, last_updated_timestamp)
+		VALUES ($1, $2, $3, $4)
+		ON CONFLICT (address, token_standard) DO UPDATE SET
+			balance = EXCLUDED.balance,
+			last_updated_timestamp = EXCLUDED.last_updated_timestamp`,
+		b.Address, b.TokenStandard, b.Balance, b.LastUpdatedTimestamp)
 }
 
 // GetByAddressAndToken retrieves a balance by address and token standard

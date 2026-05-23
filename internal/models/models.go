@@ -51,13 +51,23 @@ type Account struct {
 	PublicKey                string `db:"public_key"`
 	Delegate                 string `db:"delegate"`
 	DelegationStartTimestamp int64  `db:"delegation_start_timestamp"`
+	// Flow metrics — populated incrementally as blocks are processed.
+	GenesisZnnBalance int64  `db:"genesis_znn_balance"`
+	GenesisQsrBalance int64  `db:"genesis_qsr_balance"`
+	ZnnSent           int64  `db:"znn_sent"`
+	ZnnReceived       int64  `db:"znn_received"`
+	QsrSent           int64  `db:"qsr_sent"`
+	QsrReceived       int64  `db:"qsr_received"`
+	FirstActiveAt     *int64 `db:"first_active_at"`
+	LastActiveAt      *int64 `db:"last_active_at"`
 }
 
 // Balance represents a token balance for an account
 type Balance struct {
-	Address       string `db:"address"`
-	TokenStandard string `db:"token_standard"`
-	Balance       int64  `db:"balance"`
+	Address              string `db:"address"`
+	TokenStandard        string `db:"token_standard"`
+	Balance              int64  `db:"balance"`
+	LastUpdatedTimestamp int64  `db:"last_updated_timestamp"`
 }
 
 // AccountBlock represents a transaction
@@ -283,4 +293,155 @@ type UnwrapTokenRequest struct {
 	Redeemed                   bool   `db:"redeemed"`
 	Revoked                    bool   `db:"revoked"`
 	RedeemableIn               int64  `db:"redeemable_in"`
+}
+
+// TokenMint is a single mint event on a token.
+type TokenMint struct {
+	ID                int64  `db:"id"`
+	AccountBlockHash  string `db:"account_block_hash"`
+	MomentumHeight    int64  `db:"momentum_height"`
+	MomentumTimestamp int64  `db:"momentum_timestamp"`
+	TokenStandard     string `db:"token_standard"`
+	Issuer            string `db:"issuer"`
+	Receiver          string `db:"receiver"`
+	Amount            int64  `db:"amount"`
+}
+
+// TokenBurn is a single burn event on a token.
+type TokenBurn struct {
+	ID                int64  `db:"id"`
+	AccountBlockHash  string `db:"account_block_hash"`
+	MomentumHeight    int64  `db:"momentum_height"`
+	MomentumTimestamp int64  `db:"momentum_timestamp"`
+	TokenStandard     string `db:"token_standard"`
+	Burner            string `db:"burner"`
+	Amount            int64  `db:"amount"`
+}
+
+// BridgeNetwork is one configured destination network on the Zenon bridge.
+type BridgeNetwork struct {
+	NetworkClass         int    `db:"network_class"`
+	ChainID              int    `db:"chain_id"`
+	Name                 string `db:"name"`
+	ContractAddress      string `db:"contract_address"`
+	Metadata             string `db:"metadata"`
+	LastUpdatedTimestamp int64  `db:"last_updated_timestamp"`
+}
+
+// BridgeNetworkToken pairs a Zenon ZTS with a remote-chain token + config.
+type BridgeNetworkToken struct {
+	NetworkClass  int    `db:"network_class"`
+	ChainID       int    `db:"chain_id"`
+	TokenStandard string `db:"token_standard"`
+	TokenAddress  string `db:"token_address"`
+	Bridgeable    bool   `db:"bridgeable"`
+	Redeemable    bool   `db:"redeemable"`
+	Owned         bool   `db:"owned"`
+	MinAmount     int64  `db:"min_amount"`
+	FeePercentage int    `db:"fee_percentage"`
+	RedeemDelay   int    `db:"redeem_delay"`
+	Metadata      string `db:"metadata"`
+}
+
+// BridgeAdmin is a singleton row (row_id=1) describing the active administrator
+// and bridge-wide flags pulled from BridgeApi.GetBridgeInfo.
+type BridgeAdmin struct {
+	Administrator             string `db:"administrator"`
+	CompressedTssECDSAPubKey  string `db:"compressed_tss_ecdsa_pubkey"`
+	DecompressedTssECDSAPubKey string `db:"decompressed_tss_ecdsa_pubkey"`
+	AllowKeyGen               bool   `db:"allow_key_gen"`
+	Halted                    bool   `db:"halted"`
+	UnhaltedAt                int64  `db:"unhalted_at"`
+	UnhaltDurationInMomentums int64  `db:"unhalt_duration_in_momentums"`
+	TssNonce                  int64  `db:"tss_nonce"`
+	Metadata                  string `db:"metadata"`
+	LastUpdatedTimestamp      int64  `db:"last_updated_timestamp"`
+}
+
+// BridgeGuardian is one entry on the guardian set pulled from SecurityInfo.
+type BridgeGuardian struct {
+	Address              string `db:"address"`
+	Nominated            bool   `db:"nominated"`
+	Accepted             bool   `db:"accepted"`
+	LastUpdatedTimestamp int64  `db:"last_updated_timestamp"`
+}
+
+// BridgeOrchestratorInfo mirrors OrchestratorInfo from the SDK (singleton).
+type BridgeOrchestratorInfo struct {
+	WindowSize              int64 `db:"window_size"`
+	KeyGenThreshold         int   `db:"key_gen_threshold"`
+	ConfirmationsToFinality int   `db:"confirmations_to_finality"`
+	EstimatedMomentumTime   int   `db:"estimated_momentum_time"`
+	AllowKeyGenHeight       int64 `db:"allow_key_gen_height"`
+	LastUpdatedTimestamp    int64 `db:"last_updated_timestamp"`
+}
+
+// BridgeSecurityInfo mirrors SecurityInfo's delay fields (singleton).
+type BridgeSecurityInfo struct {
+	AdministratorDelay   int64 `db:"administrator_delay"`
+	SoftDelay            int64 `db:"soft_delay"`
+	LastUpdatedTimestamp int64 `db:"last_updated_timestamp"`
+}
+
+// NetworkStatHistory is a daily network-wide snapshot row.
+type NetworkStatHistory struct {
+	Date             string `db:"date"`
+	TotalTx          int64  `db:"total_tx"`
+	DailyTx          int64  `db:"daily_tx"`
+	TotalAddresses   int64  `db:"total_addresses"`
+	DailyAddresses   int64  `db:"daily_addresses"`
+	ActiveAddresses  int64  `db:"active_addresses"`
+	TotalTokens      int64  `db:"total_tokens"`
+	DailyTokens      int64  `db:"daily_tokens"`
+	TotalStakes      int64  `db:"total_stakes"`
+	DailyStakes      int64  `db:"daily_stakes"`
+	TotalFusions     int64  `db:"total_fusions"`
+	DailyFusions     int64  `db:"daily_fusions"`
+	TotalPillars     int64  `db:"total_pillars"`
+	TotalSentinels   int64  `db:"total_sentinels"`
+}
+
+// TokenStatHistory is a daily per-token snapshot row.
+type TokenStatHistory struct {
+	Date              string `db:"date"`
+	TokenStandard     string `db:"token_standard"`
+	DailyMinted       int64  `db:"daily_minted"`
+	DailyBurned       int64  `db:"daily_burned"`
+	TotalSupply       int64  `db:"total_supply"`
+	TotalHolders      int64  `db:"total_holders"`
+	TotalTransactions int64  `db:"total_transactions"`
+}
+
+// PillarStatHistory is a daily per-pillar snapshot row.
+type PillarStatHistory struct {
+	Date               string `db:"date"`
+	PillarOwnerAddress string `db:"pillar_owner_address"`
+	Rank               int    `db:"rank"`
+	Weight             int64  `db:"weight"`
+	MomentumRewards    int64  `db:"momentum_rewards"`
+	DelegateRewards    int64  `db:"delegate_rewards"`
+	TotalDelegators    int64  `db:"total_delegators"`
+}
+
+// BridgeStatHistory is a daily per-(network, token) bridge snapshot row.
+type BridgeStatHistory struct {
+	Date             string `db:"date"`
+	NetworkClass     int    `db:"network_class"`
+	ChainID          int    `db:"chain_id"`
+	TokenStandard    string `db:"token_standard"`
+	WrapTxCount      int64  `db:"wrap_tx_count"`
+	WrappedAmount    int64  `db:"wrapped_amount"`
+	UnwrapTxCount    int64  `db:"unwrap_tx_count"`
+	UnwrappedAmount  int64  `db:"unwrapped_amount"`
+	TotalVolume      int64  `db:"total_volume"`
+}
+
+// Delegation is one interval of an account delegating to a pillar.
+// EndedAt is nil for the currently-active delegation.
+type Delegation struct {
+	ID                 int64  `db:"id"`
+	DelegatorAddress   string `db:"delegator_address"`
+	PillarOwnerAddress string `db:"pillar_owner_address"`
+	StartedAt          int64  `db:"started_at"`
+	EndedAt            *int64 `db:"ended_at"`
 }

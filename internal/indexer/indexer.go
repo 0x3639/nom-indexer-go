@@ -546,7 +546,9 @@ func (i *Indexer) runBridgeSyncLoop(ctx context.Context, interval time.Duration)
 	}
 }
 
-// syncBridgeData syncs wrap and unwrap token requests from the bridge
+// syncBridgeData syncs wrap and unwrap token requests from the bridge.
+// Bridge configuration (networks, admin, guardians, orchestrator + security
+// info) is also pulled here on a best-effort basis.
 func (i *Indexer) syncBridgeData(ctx context.Context) {
 	i.logger.Info("bridge sync: starting")
 
@@ -558,7 +560,157 @@ func (i *Indexer) syncBridgeData(ctx context.Context) {
 		i.logger.Warn("bridge sync: failed to update unwrap requests", zap.Error(err))
 	}
 
+	if err := i.updateBridgeConfig(ctx); err != nil {
+		i.logger.Warn("bridge sync: failed to update bridge config", zap.Error(err))
+	}
+
 	i.logger.Info("bridge sync: complete")
+}
+
+// updateBridgeConfig refreshes the cached bridge configuration tables by
+// pulling GetBridgeInfo / GetSecurityInfo / GetOrchestratorInfo / GetAllNetworks
+// from the SDK and upserting them. Any individual sub-step failure is
+// non-fatal so partial config still lands.
+func (i *Indexer) updateBridgeConfig(ctx context.Context) error {
+	now := time.Now().Unix()
+
+	if info, err := i.client.BridgeApi.GetBridgeInfo(); err != nil {
+		i.logger.Warn("bridge config: GetBridgeInfo failed", zap.Error(err))
+	} else if info != nil {
+		if err := i.repos.BridgeConfig.UpsertAdmin(ctx, &models.BridgeAdmin{
+			Administrator:              info.Administrator.String(),
+			CompressedTssECDSAPubKey:   info.CompressedTssECDSAPubKey,
+			DecompressedTssECDSAPubKey: info.DecompressedTssECDSAPubKey,
+			AllowKeyGen:                info.AllowKeyGen,
+			Halted:                     info.Halted,
+			UnhaltedAt:                 int64(info.UnhaltedAt),
+			UnhaltDurationInMomentums:  int64(info.UnhaltDurationInMomentums),
+			TssNonce:                   int64(info.TssNonce),
+			Metadata:                   info.Metadata,
+			LastUpdatedTimestamp:       now,
+		}); err != nil {
+			i.logger.Warn("bridge config: upsert admin failed", zap.Error(err))
+		}
+	}
+
+	if sec, err := i.client.BridgeApi.GetSecurityInfo(); err != nil {
+		i.logger.Warn("bridge config: GetSecurityInfo failed", zap.Error(err))
+	} else if sec != nil {
+		if err := i.repos.BridgeConfig.UpsertSecurityInfo(ctx, &models.BridgeSecurityInfo{
+			AdministratorDelay:   int64(sec.AdministratorDelay),
+			SoftDelay:            int64(sec.SoftDelay),
+			LastUpdatedTimestamp: now,
+		}); err != nil {
+			i.logger.Warn("bridge config: upsert security failed", zap.Error(err))
+		}
+
+		// Upsert nominated and accepted guardians from the security info.
+		nominated := make(map[string]bool, len(sec.Guardians))
+		for _, addr := range sec.Guardians {
+			nominated[addr.String()] = true
+		}
+		voted := make(map[string]bool, len(sec.GuardiansVotes))
+		for _, addr := range sec.GuardiansVotes {
+			voted[addr.String()] = true
+		}
+		// Union of both sets — any address that appears anywhere is current.
+		seen := make(map[string]bool, len(nominated)+len(voted))
+		for addr := range nominated {
+			seen[addr] = true
+		}
+		for addr := range voted {
+			seen[addr] = true
+		}
+		for addr := range seen {
+			if err := i.repos.BridgeConfig.UpsertGuardian(ctx, &models.BridgeGuardian{
+				Address:              addr,
+				Nominated:            nominated[addr],
+				Accepted:             voted[addr],
+				LastUpdatedTimestamp: now,
+			}); err != nil {
+				i.logger.Warn("bridge config: upsert guardian failed",
+					zap.String("address", addr), zap.Error(err))
+			}
+		}
+		// Anything not refreshed in this pass is treated as no longer active.
+		if err := i.repos.BridgeConfig.MarkGuardiansAbsent(ctx, now); err != nil {
+			i.logger.Warn("bridge config: mark absent guardians failed", zap.Error(err))
+		}
+	}
+
+	if orch, err := i.client.BridgeApi.GetOrchestratorInfo(); err != nil {
+		i.logger.Warn("bridge config: GetOrchestratorInfo failed", zap.Error(err))
+	} else if orch != nil {
+		if err := i.repos.BridgeConfig.UpsertOrchestratorInfo(ctx, &models.BridgeOrchestratorInfo{
+			WindowSize:              int64(orch.WindowSize),
+			KeyGenThreshold:         int(orch.KeyGenThreshold),
+			ConfirmationsToFinality: int(orch.ConfirmationsToFinality),
+			EstimatedMomentumTime:   int(orch.EstimatedMomentumTime),
+			AllowKeyGenHeight:       int64(orch.AllowKeyGenHeight),
+			LastUpdatedTimestamp:    now,
+		}); err != nil {
+			i.logger.Warn("bridge config: upsert orchestrator failed", zap.Error(err))
+		}
+	}
+
+	// Paginate through bridge networks; each network carries its TokenPairs.
+	pageSize := uint32(50)
+	pageIndex := uint32(0)
+	for {
+		list, err := i.client.BridgeApi.GetAllNetworks(pageIndex, pageSize)
+		if err != nil {
+			i.logger.Warn("bridge config: GetAllNetworks failed",
+				zap.Uint32("page", pageIndex), zap.Error(err))
+			break
+		}
+		if list == nil || len(list.List) == 0 {
+			break
+		}
+		for _, n := range list.List {
+			if err := i.repos.BridgeConfig.UpsertNetwork(ctx, &models.BridgeNetwork{
+				NetworkClass:         int(n.NetworkClass),
+				ChainID:              int(n.ChainId),
+				Name:                 n.Name,
+				ContractAddress:      n.ContractAddress,
+				Metadata:             n.Metadata,
+				LastUpdatedTimestamp: now,
+			}); err != nil {
+				i.logger.Warn("bridge config: upsert network failed",
+					zap.String("name", n.Name), zap.Error(err))
+				continue
+			}
+			for _, tp := range n.TokenPairs {
+				minAmt := safeBigIntToInt64(tp.MinAmount, i.logger,
+					"bridge token pair min_amount overflow",
+					zap.String("network", n.Name),
+					zap.String("token", tp.TokenStandard.String()))
+				if err := i.repos.BridgeConfig.UpsertNetworkToken(ctx, &models.BridgeNetworkToken{
+					NetworkClass:  int(n.NetworkClass),
+					ChainID:       int(n.ChainId),
+					TokenStandard: tp.TokenStandard.String(),
+					TokenAddress:  tp.TokenAddress,
+					Bridgeable:    tp.Bridgeable,
+					Redeemable:    tp.Redeemable,
+					Owned:         tp.Owned,
+					MinAmount:     minAmt,
+					FeePercentage: int(tp.FeePercentage),
+					RedeemDelay:   int(tp.RedeemDelay),
+					Metadata:      tp.Metadata,
+				}); err != nil {
+					i.logger.Warn("bridge config: upsert network token failed",
+						zap.String("network", n.Name),
+						zap.String("token", tp.TokenStandard.String()),
+						zap.Error(err))
+				}
+			}
+		}
+		if len(list.List) < int(pageSize) {
+			break
+		}
+		pageIndex++
+	}
+
+	return nil
 }
 
 // updateBridgeWrapRequests fetches and stores wrap token requests from the bridge.

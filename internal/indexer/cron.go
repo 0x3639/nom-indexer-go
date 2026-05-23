@@ -6,27 +6,34 @@ import (
 	"time"
 
 	"go.uber.org/zap"
+
+	"github.com/0x3639/nom-indexer-go/internal/models"
 )
 
 // runCronLoop schedules updatePillarVotingActivity and updateTokenHolderCounts
 // on independent intervals. Ports the Dart reference's `_runCron` (main.dart).
 //
-// Both jobs run once on startup and then on the configured interval. They
-// share the loop goroutine and back off via ticker.C; ctx cancellation stops
-// them cleanly.
+// Daily stat snapshot jobs (network/token/pillar/bridge) fire on a 1-hour
+// ticker so the current day's row is kept up to date even mid-day.
 func (i *Indexer) runCronLoop(ctx context.Context, votingActivityInterval, tokenHoldersInterval time.Duration) {
+	statsInterval := time.Hour
+
 	i.logger.Info("starting cron loop",
 		zap.Duration("voting_activity_interval", votingActivityInterval),
-		zap.Duration("token_holders_interval", tokenHoldersInterval))
+		zap.Duration("token_holders_interval", tokenHoldersInterval),
+		zap.Duration("stat_snapshot_interval", statsInterval))
 
 	// Run once on startup so dashboards have data immediately.
 	i.runVotingActivity(ctx)
 	i.runTokenHolderCounts(ctx)
+	i.runStatSnapshots(ctx)
 
 	votingTicker := time.NewTicker(votingActivityInterval)
 	defer votingTicker.Stop()
 	holderTicker := time.NewTicker(tokenHoldersInterval)
 	defer holderTicker.Stop()
+	statsTicker := time.NewTicker(statsInterval)
+	defer statsTicker.Stop()
 
 	for {
 		select {
@@ -37,8 +44,215 @@ func (i *Indexer) runCronLoop(ctx context.Context, votingActivityInterval, token
 			i.runVotingActivity(ctx)
 		case <-holderTicker.C:
 			i.runTokenHolderCounts(ctx)
+		case <-statsTicker.C:
+			i.runStatSnapshots(ctx)
 		}
 	}
+}
+
+// runStatSnapshots refreshes the current day's row in each *_stat_histories
+// table. Each snapshot job is independent; one failure does not block the
+// others.
+func (i *Indexer) runStatSnapshots(ctx context.Context) {
+	start := time.Now()
+	today := time.Now().UTC().Format("2006-01-02")
+	// Today as midnight Unix seconds; used to bucket by momentum_timestamp.
+	todayStart, err := time.Parse("2006-01-02", today)
+	if err != nil {
+		i.logger.Warn("stat snapshots: parse today failed", zap.Error(err))
+		return
+	}
+	startTs := todayStart.Unix()
+	endTs := startTs + 86400
+
+	if err := i.snapshotNetworkStats(ctx, today, startTs, endTs); err != nil {
+		i.logger.Warn("stat snapshots: network failed", zap.Error(err))
+	}
+	if err := i.snapshotTokenStats(ctx, today); err != nil {
+		i.logger.Warn("stat snapshots: tokens failed", zap.Error(err))
+	}
+	if err := i.snapshotPillarStats(ctx, today); err != nil {
+		i.logger.Warn("stat snapshots: pillars failed", zap.Error(err))
+	}
+	if err := i.snapshotBridgeStats(ctx, today, startTs, endTs); err != nil {
+		i.logger.Warn("stat snapshots: bridge failed", zap.Error(err))
+	}
+
+	i.logger.Info("stat snapshots refreshed",
+		zap.String("date", today),
+		zap.Duration("duration", time.Since(start)))
+}
+
+func (i *Indexer) snapshotNetworkStats(ctx context.Context, date string, startTs, endTs int64) error {
+	stat := &models.NetworkStatHistory{Date: date}
+
+	if err := i.pool.QueryRow(ctx, `
+		SELECT
+			COALESCE((SELECT SUM(tx_count) FROM momentums), 0)::bigint AS total_tx,
+			COALESCE((SELECT SUM(tx_count) FROM momentums
+				WHERE timestamp >= $1 AND timestamp < $2), 0)::bigint AS daily_tx,
+			COALESCE((SELECT COUNT(*) FROM accounts), 0)::bigint AS total_addresses,
+			COALESCE((SELECT COUNT(*) FROM accounts
+				WHERE first_active_at >= $1 AND first_active_at < $2), 0)::bigint AS daily_addresses,
+			COALESCE((SELECT COUNT(*) FROM accounts
+				WHERE last_active_at >= $1 AND last_active_at < $2), 0)::bigint AS active_addresses,
+			COALESCE((SELECT COUNT(*) FROM tokens), 0)::bigint AS total_tokens,
+			COALESCE((SELECT COUNT(*) FROM stakes), 0)::bigint AS total_stakes,
+			COALESCE((SELECT COUNT(*) FROM stakes
+				WHERE start_timestamp >= $1 AND start_timestamp < $2), 0)::bigint AS daily_stakes,
+			COALESCE((SELECT COUNT(*) FROM fusions), 0)::bigint AS total_fusions,
+			COALESCE((SELECT COUNT(*) FROM fusions
+				WHERE momentum_timestamp >= $1 AND momentum_timestamp < $2), 0)::bigint AS daily_fusions,
+			COALESCE((SELECT COUNT(*) FROM pillars WHERE is_revoked = false), 0)::bigint AS total_pillars,
+			COALESCE((SELECT COUNT(*) FROM sentinels WHERE active = true), 0)::bigint AS total_sentinels`,
+		startTs, endTs).Scan(
+		&stat.TotalTx, &stat.DailyTx, &stat.TotalAddresses, &stat.DailyAddresses,
+		&stat.ActiveAddresses, &stat.TotalTokens, &stat.TotalStakes, &stat.DailyStakes,
+		&stat.TotalFusions, &stat.DailyFusions, &stat.TotalPillars, &stat.TotalSentinels); err != nil {
+		return fmt.Errorf("aggregate network stats: %w", err)
+	}
+
+	return i.repos.StatHistory.UpsertNetworkStat(ctx, stat)
+}
+
+func (i *Indexer) snapshotTokenStats(ctx context.Context, date string) error {
+	tokens, err := i.repos.Token.GetAll(ctx)
+	if err != nil {
+		return err
+	}
+	for _, t := range tokens {
+		if ctx.Err() != nil {
+			return ctx.Err()
+		}
+		mints, burns, sumErr := i.repos.TokenEvent.SumDailyMintsBurns(ctx, t.TokenStandard, date)
+		if sumErr != nil {
+			i.logger.Warn("token stat: sum daily mints/burns failed",
+				zap.String("token", t.TokenStandard), zap.Error(sumErr))
+			continue
+		}
+		if err := i.repos.StatHistory.UpsertTokenStat(ctx, &models.TokenStatHistory{
+			Date:              date,
+			TokenStandard:     t.TokenStandard,
+			DailyMinted:       mints,
+			DailyBurned:       burns,
+			TotalSupply:       t.TotalSupply,
+			TotalHolders:      t.HolderCount,
+			TotalTransactions: t.TransactionCount,
+		}); err != nil {
+			i.logger.Warn("token stat upsert failed",
+				zap.String("token", t.TokenStandard), zap.Error(err))
+		}
+	}
+	return nil
+}
+
+func (i *Indexer) snapshotPillarStats(ctx context.Context, date string) error {
+	pillars := i.GetPillars()
+	for _, p := range pillars {
+		if ctx.Err() != nil {
+			return ctx.Err()
+		}
+		delegators, err := i.repos.Delegation.CountActiveByPillar(ctx, p.OwnerAddress)
+		if err != nil {
+			i.logger.Warn("pillar stat: delegator count failed",
+				zap.String("owner", p.OwnerAddress), zap.Error(err))
+			delegators = 0
+		}
+		if err := i.repos.StatHistory.UpsertPillarStat(ctx, &models.PillarStatHistory{
+			Date:               date,
+			PillarOwnerAddress: p.OwnerAddress,
+			Rank:               p.Rank,
+			Weight:             p.Weight,
+			// Reward totals are left at zero for now; a future job can backfill
+			// them from reward_transactions joined against delegations history.
+			MomentumRewards: 0,
+			DelegateRewards: 0,
+			TotalDelegators: delegators,
+		}); err != nil {
+			i.logger.Warn("pillar stat upsert failed",
+				zap.String("owner", p.OwnerAddress), zap.Error(err))
+		}
+	}
+	return nil
+}
+
+func (i *Indexer) snapshotBridgeStats(ctx context.Context, date string, startTs, endTs int64) error {
+	// Aggregate wrap requests by (network_class, chain_id, token_standard) for today.
+	rows, err := i.pool.Query(ctx, `
+		SELECT network_class, chain_id, token_standard,
+			COUNT(*)::bigint AS wrap_tx,
+			COALESCE(SUM(amount), 0)::bigint AS wrapped_amount
+		FROM wrap_token_requests
+		WHERE creation_momentum_height IN (
+			SELECT height FROM momentums WHERE timestamp >= $1 AND timestamp < $2
+		)
+		GROUP BY network_class, chain_id, token_standard`,
+		startTs, endTs)
+	if err != nil {
+		return fmt.Errorf("query wrap aggregates: %w", err)
+	}
+	stats := map[string]*models.BridgeStatHistory{}
+	for rows.Next() {
+		var s models.BridgeStatHistory
+		if err := rows.Scan(&s.NetworkClass, &s.ChainID, &s.TokenStandard,
+			&s.WrapTxCount, &s.WrappedAmount); err != nil {
+			rows.Close()
+			return err
+		}
+		s.Date = date
+		s.TotalVolume = s.WrappedAmount
+		key := fmt.Sprintf("%d:%d:%s", s.NetworkClass, s.ChainID, s.TokenStandard)
+		stats[key] = &s
+	}
+	rows.Close()
+	if err := rows.Err(); err != nil {
+		return err
+	}
+
+	// Unwrap side.
+	rows, err = i.pool.Query(ctx, `
+		SELECT network_class, chain_id, token_standard,
+			COUNT(*)::bigint AS unwrap_tx,
+			COALESCE(SUM(amount), 0)::bigint AS unwrapped_amount
+		FROM unwrap_token_requests
+		WHERE registration_momentum_height IN (
+			SELECT height FROM momentums WHERE timestamp >= $1 AND timestamp < $2
+		)
+		GROUP BY network_class, chain_id, token_standard`,
+		startTs, endTs)
+	if err != nil {
+		return fmt.Errorf("query unwrap aggregates: %w", err)
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var nc, ci int
+		var ts string
+		var tx, amount int64
+		if err := rows.Scan(&nc, &ci, &ts, &tx, &amount); err != nil {
+			return err
+		}
+		key := fmt.Sprintf("%d:%d:%s", nc, ci, ts)
+		s := stats[key]
+		if s == nil {
+			s = &models.BridgeStatHistory{
+				Date: date, NetworkClass: nc, ChainID: ci, TokenStandard: ts,
+			}
+			stats[key] = s
+		}
+		s.UnwrapTxCount = tx
+		s.UnwrappedAmount = amount
+		s.TotalVolume += amount
+	}
+	if err := rows.Err(); err != nil {
+		return err
+	}
+
+	for _, s := range stats {
+		if err := i.repos.StatHistory.UpsertBridgeStat(ctx, s); err != nil {
+			i.logger.Warn("bridge stat upsert failed", zap.Error(err))
+		}
+	}
+	return nil
 }
 
 // runVotingActivity recomputes voting_activity for every pillar. The score is

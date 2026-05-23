@@ -56,7 +56,7 @@ func (i *Indexer) processMomentum(ctx context.Context, m *api.Momentum) error {
 		// genesis has tens of thousands and per-address GetAccountInfoByAddress
 		// would be prohibitively slow.
 		if m.Height > 1 && len(m.Content) < genesisBalanceUpdateThreshold {
-			if err := i.updateBalances(ctx, batch, m.Content); err != nil {
+			if err := i.updateBalances(ctx, batch, m.Content, int64(m.TimestampUnix)); err != nil {
 				i.logger.Warn("failed to update balances", zap.Error(err))
 			}
 		}
@@ -129,7 +129,7 @@ func (i *Indexer) processMomentum(ctx context.Context, m *api.Momentum) error {
 }
 
 // updateBalances updates balances for all addresses in a momentum
-func (i *Indexer) updateBalances(ctx context.Context, batch *pgx.Batch, headers []*types.AccountHeader) error {
+func (i *Indexer) updateBalances(ctx context.Context, batch *pgx.Batch, headers []*types.AccountHeader, momentumTimestamp int64) error {
 	for _, header := range headers {
 		accountInfo, err := i.client.LedgerApi.GetAccountInfoByAddress(header.Address)
 		if err != nil {
@@ -151,9 +151,10 @@ func (i *Indexer) updateBalances(ctx context.Context, batch *pgx.Batch, headers 
 						zap.String("address", header.Address.String()),
 						zap.String("token", tokenStandard.String()))
 					balance := &models.Balance{
-						Address:       header.Address.String(),
-						TokenStandard: tokenStandard.String(),
-						Balance:       balanceInt64,
+						Address:              header.Address.String(),
+						TokenStandard:        tokenStandard.String(),
+						Balance:              balanceInt64,
+						LastUpdatedTimestamp: momentumTimestamp,
 					}
 					i.repos.Balance.UpsertBatch(batch, balance)
 				}
@@ -232,6 +233,23 @@ func (i *Indexer) processAccountBlocks(ctx context.Context, batch *pgx.Batch, m 
 		}
 
 		i.repos.AccountBlock.InsertBatch(batch, accountBlock, txData)
+
+		// Track ZNN/QSR flow + activity on the involved accounts. Sends bump
+		// znn_sent/qsr_sent on the sender; receives bump znn_received/qsr_received
+		// on the receiver. Both always update first/last activity.
+		ts := int64(m.TimestampUnix)
+		sender := block.Address.String()
+		tokenStd := block.TokenStandard.String()
+		switch block.BlockType {
+		case utils.BlockTypeUserSend, utils.BlockTypeContractSend:
+			i.repos.Account.AddSendBatch(batch, sender, tokenStd, amountInt64, ts)
+		case utils.BlockTypeUserReceive, utils.BlockTypeContractReceive, utils.BlockTypeGenesisReceive:
+			i.repos.Account.AddReceiveBatch(batch, sender, tokenStd, amountInt64, ts)
+			// At genesis (height 1), seed genesis_*_balance from the received amount.
+			if block.BlockType == utils.BlockTypeGenesisReceive && m.Height == 1 {
+				i.repos.Account.SetGenesisBalanceBatch(batch, sender, tokenStd, amountInt64)
+			}
+		}
 
 		// Update paired block reference
 		if block.PairedAccountBlock != nil {

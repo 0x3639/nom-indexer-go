@@ -175,6 +175,21 @@ func (r *PillarRepository) GetSpawnTimestampByOwner(ctx context.Context, ownerAd
 	return timestamp, nil
 }
 
+// IsWithdrawAddress reports whether the given address is the withdraw
+// address of any current pillar OR appears as a historical withdraw address
+// in pillar_updates. Used by the reward classifier to distinguish a pillar's
+// own reward receipt from a delegator's.
+func (r *PillarRepository) IsWithdrawAddress(ctx context.Context, address string) (bool, error) {
+	var exists bool
+	err := r.pool.QueryRow(ctx, `
+		SELECT EXISTS(
+			SELECT 1 FROM pillars WHERE withdraw_address = $1
+			UNION
+			SELECT 1 FROM pillar_updates WHERE withdraw_address = $1
+		)`, address).Scan(&exists)
+	return exists, err
+}
+
 // GetRevokeTimestamp retrieves revoke timestamp by owner address
 func (r *PillarRepository) GetRevokeTimestamp(ctx context.Context, ownerAddress string) (int64, error) {
 	var timestamp int64
