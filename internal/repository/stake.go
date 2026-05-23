@@ -2,6 +2,7 @@ package repository
 
 import (
 	"context"
+	"fmt"
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -55,6 +56,74 @@ func (r *StakeRepository) SetInactiveBatch(batch *pgx.Batch, cancelID, address s
 		UPDATE stakes SET is_active = false
 		WHERE cancel_id = $1 AND address = $2`,
 		cancelID, address)
+}
+
+// List returns stakes ordered by start_timestamp descending. activeOnly
+// filters to is_active = true.
+func (r *StakeRepository) List(ctx context.Context, activeOnly bool, opts ListOpts) ([]*models.Stake, int64, error) {
+	where := ""
+	if activeOnly {
+		where = "WHERE is_active = true"
+	}
+	query := `
+		SELECT id, address, start_timestamp, expiration_timestamp, znn_amount,
+			duration_in_sec, is_active, cancel_id, COUNT(*) OVER () AS total
+		FROM stakes ` + where + `
+		ORDER BY start_timestamp DESC
+		LIMIT $1 OFFSET $2`
+	rows, err := r.pool.Query(ctx, query, opts.Limit, opts.Offset)
+	if err != nil {
+		return nil, 0, err
+	}
+	defer rows.Close()
+	var (
+		out   []*models.Stake
+		total int64
+	)
+	for rows.Next() {
+		var s models.Stake
+		if err := rows.Scan(&s.ID, &s.Address, &s.StartTimestamp, &s.ExpirationTimestamp, &s.ZnnAmount,
+			&s.DurationInSec, &s.IsActive, &s.CancelID, &total); err != nil {
+			return nil, 0, err
+		}
+		out = append(out, &s)
+	}
+	return out, total, rows.Err()
+}
+
+// ListByAddress returns stakes owned by the given address.
+func (r *StakeRepository) ListByAddress(ctx context.Context, address string, activeOnly bool, opts ListOpts) ([]*models.Stake, int64, error) {
+	if address == "" {
+		return nil, 0, fmt.Errorf("address is required")
+	}
+	where := "WHERE address = $1"
+	if activeOnly {
+		where += " AND is_active = true"
+	}
+	query := `
+		SELECT id, address, start_timestamp, expiration_timestamp, znn_amount,
+			duration_in_sec, is_active, cancel_id, COUNT(*) OVER () AS total
+		FROM stakes ` + where + `
+		ORDER BY start_timestamp DESC
+		LIMIT $2 OFFSET $3`
+	rows, err := r.pool.Query(ctx, query, address, opts.Limit, opts.Offset)
+	if err != nil {
+		return nil, 0, err
+	}
+	defer rows.Close()
+	var (
+		out   []*models.Stake
+		total int64
+	)
+	for rows.Next() {
+		var s models.Stake
+		if err := rows.Scan(&s.ID, &s.Address, &s.StartTimestamp, &s.ExpirationTimestamp, &s.ZnnAmount,
+			&s.DurationInSec, &s.IsActive, &s.CancelID, &total); err != nil {
+			return nil, 0, err
+		}
+		out = append(out, &s)
+	}
+	return out, total, rows.Err()
 }
 
 // GetByID retrieves a stake by ID

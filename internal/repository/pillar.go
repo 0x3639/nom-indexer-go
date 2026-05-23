@@ -2,6 +2,7 @@ package repository
 
 import (
 	"context"
+	"fmt"
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -208,6 +209,92 @@ func (r *PillarRepository) GetRevokeTimestamp(ctx context.Context, ownerAddress 
 		return 0, err
 	}
 	return timestamp, nil
+}
+
+// List returns pillars ordered by rank ascending. If includeRevoked is
+// false (the default for /api/v1/pillars), revoked pillars are excluded.
+func (r *PillarRepository) List(ctx context.Context, includeRevoked bool, opts ListOpts) ([]*models.Pillar, int64, error) {
+	where := "WHERE is_revoked = false"
+	if includeRevoked {
+		where = ""
+	}
+	query := fmt.Sprintf(`
+		SELECT owner_address, producer_address, withdraw_address, name, rank,
+			give_momentum_reward_percentage, give_delegate_reward_percentage, is_revocable,
+			revoke_cooldown, revoke_timestamp, weight, epoch_produced_momentums, epoch_expected_momentums,
+			slot_cost_qsr, spawn_timestamp, voting_activity, produced_momentum_count, is_revoked,
+			COUNT(*) OVER () AS total
+		FROM pillars
+		%s
+		ORDER BY rank ASC
+		LIMIT $1 OFFSET $2`, where)
+	rows, err := r.pool.Query(ctx, query, opts.Limit, opts.Offset)
+	if err != nil {
+		return nil, 0, err
+	}
+	defer rows.Close()
+
+	var (
+		out   []*models.Pillar
+		total int64
+	)
+	for rows.Next() {
+		var p models.Pillar
+		if err := rows.Scan(
+			&p.OwnerAddress, &p.ProducerAddress, &p.WithdrawAddress, &p.Name, &p.Rank,
+			&p.GiveMomentumRewardPercentage, &p.GiveDelegateRewardPercentage, &p.IsRevocable,
+			&p.RevokeCooldown, &p.RevokeTimestamp, &p.Weight, &p.EpochProducedMomentums, &p.EpochExpectedMomentums,
+			&p.SlotCostQsr, &p.SpawnTimestamp, &p.VotingActivity, &p.ProducedMomentumCount, &p.IsRevoked, &total); err != nil {
+			return nil, 0, err
+		}
+		out = append(out, &p)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, 0, err
+	}
+	return out, total, nil
+}
+
+// PillarDelegator is a flattened view of an account currently delegating
+// to a pillar. Returned by ListDelegators.
+type PillarDelegator struct {
+	Address                  string `db:"address"`
+	DelegationStartTimestamp int64  `db:"delegation_start_timestamp"`
+}
+
+// ListDelegators returns the addresses currently delegated to a pillar,
+// paginated. Uses the accounts.delegate column (the indexer keeps this in
+// sync with each Delegate / Undelegate event).
+func (r *PillarRepository) ListDelegators(ctx context.Context, pillarOwner string, opts ListOpts) ([]*PillarDelegator, int64, error) {
+	if pillarOwner == "" {
+		return nil, 0, fmt.Errorf("pillar owner is required")
+	}
+	rows, err := r.pool.Query(ctx, `
+		SELECT address, delegation_start_timestamp, COUNT(*) OVER () AS total
+		FROM accounts
+		WHERE delegate = $1
+		ORDER BY delegation_start_timestamp ASC
+		LIMIT $2 OFFSET $3`, pillarOwner, opts.Limit, opts.Offset)
+	if err != nil {
+		return nil, 0, err
+	}
+	defer rows.Close()
+
+	var (
+		out   []*PillarDelegator
+		total int64
+	)
+	for rows.Next() {
+		var d PillarDelegator
+		if err := rows.Scan(&d.Address, &d.DelegationStartTimestamp, &total); err != nil {
+			return nil, 0, err
+		}
+		out = append(out, &d)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, 0, err
+	}
+	return out, total, nil
 }
 
 // GetAll retrieves all pillars

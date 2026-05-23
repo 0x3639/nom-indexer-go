@@ -2,6 +2,7 @@ package repository
 
 import (
 	"context"
+	"fmt"
 
 	"github.com/jackc/pgx/v5/pgxpool"
 
@@ -66,6 +67,56 @@ func (r *ProjectRepository) GetIDFromVotingID(ctx context.Context, votingID stri
 		return "", err
 	}
 	return id, nil
+}
+
+// GetByID returns a single project.
+func (r *ProjectRepository) GetByID(ctx context.Context, id string) (*models.Project, error) {
+	if id == "" {
+		return nil, fmt.Errorf("id is required")
+	}
+	var p models.Project
+	err := r.pool.QueryRow(ctx, `
+		SELECT id, voting_id, owner, name, description, url,
+			znn_funds_needed, qsr_funds_needed, creation_timestamp, last_update_timestamp,
+			status, yes_votes, no_votes, total_votes
+		FROM projects WHERE id = $1`, id).Scan(
+		&p.ID, &p.VotingID, &p.Owner, &p.Name, &p.Description, &p.URL,
+		&p.ZnnFundsNeeded, &p.QsrFundsNeeded, &p.CreationTimestamp, &p.LastUpdateTimestamp,
+		&p.Status, &p.YesVotes, &p.NoVotes, &p.TotalVotes)
+	if err != nil {
+		return nil, err
+	}
+	return &p, nil
+}
+
+// List returns projects ordered by creation_timestamp descending.
+func (r *ProjectRepository) List(ctx context.Context, opts ListOpts) ([]*models.Project, int64, error) {
+	rows, err := r.pool.Query(ctx, `
+		SELECT id, voting_id, owner, name, description, url,
+			znn_funds_needed, qsr_funds_needed, creation_timestamp, last_update_timestamp,
+			status, yes_votes, no_votes, total_votes,
+			COUNT(*) OVER () AS total
+		FROM projects
+		ORDER BY creation_timestamp DESC
+		LIMIT $1 OFFSET $2`, opts.Limit, opts.Offset)
+	if err != nil {
+		return nil, 0, err
+	}
+	defer rows.Close()
+	var (
+		out   []*models.Project
+		total int64
+	)
+	for rows.Next() {
+		var p models.Project
+		if err := rows.Scan(&p.ID, &p.VotingID, &p.Owner, &p.Name, &p.Description, &p.URL,
+			&p.ZnnFundsNeeded, &p.QsrFundsNeeded, &p.CreationTimestamp, &p.LastUpdateTimestamp,
+			&p.Status, &p.YesVotes, &p.NoVotes, &p.TotalVotes, &total); err != nil {
+			return nil, 0, err
+		}
+		out = append(out, &p)
+	}
+	return out, total, rows.Err()
 }
 
 // GetAll retrieves all projects

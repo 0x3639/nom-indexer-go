@@ -2,6 +2,7 @@ package repository
 
 import (
 	"context"
+	"fmt"
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -56,6 +57,38 @@ func (r *VoteRepository) GetVoteCountForProjects(ctx context.Context, voterAddre
 		WHERE voter_address = $1 AND project_id = ANY($2) AND phase_id = ''`,
 		voterAddress, projectIDs).Scan(&count)
 	return count, err
+}
+
+// ListByProject returns votes targeting either the project directly or
+// any of its phases, ordered by momentum_height descending.
+func (r *VoteRepository) ListByProject(ctx context.Context, projectID string, opts ListOpts) ([]*models.Vote, int64, error) {
+	if projectID == "" {
+		return nil, 0, fmt.Errorf("project_id is required")
+	}
+	rows, err := r.pool.Query(ctx, `
+		SELECT id, momentum_hash, momentum_timestamp, momentum_height,
+			voter_address, project_id, phase_id, voting_id, vote,
+			COUNT(*) OVER () AS total
+		FROM votes WHERE project_id = $1
+		ORDER BY momentum_height DESC
+		LIMIT $2 OFFSET $3`, projectID, opts.Limit, opts.Offset)
+	if err != nil {
+		return nil, 0, err
+	}
+	defer rows.Close()
+	var (
+		out   []*models.Vote
+		total int64
+	)
+	for rows.Next() {
+		var v models.Vote
+		if err := rows.Scan(&v.ID, &v.MomentumHash, &v.MomentumTimestamp, &v.MomentumHeight,
+			&v.VoterAddress, &v.ProjectID, &v.PhaseID, &v.VotingID, &v.Vote, &total); err != nil {
+			return nil, 0, err
+		}
+		out = append(out, &v)
+	}
+	return out, total, rows.Err()
 }
 
 // GetVoteCountForPhases counts distinct phases voted on by a voter
