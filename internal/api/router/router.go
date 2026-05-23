@@ -75,6 +75,12 @@ func New(d Deps) http.Handler {
 		r.Get("/tokens", handlers.TokensList(d.Repos.Token))
 		r.Get("/tokens/{token_standard}", handlers.TokensGet(d.Repos.Token))
 		r.Get("/tokens/{token_standard}/holders", handlers.TokensHolders(d.Repos.Balance))
+
+		r.Get("/pillars", handlers.PillarsList(d.Repos.Pillar))
+		r.Get("/pillars/{name}", handlers.PillarsGetByName(d.Repos.Pillar))
+		r.Get("/pillars/{name}/delegators", handlers.PillarsDelegators(d.Repos.Pillar))
+
+		r.Get("/sentinels", handlers.SentinelsList(d.Repos.Sentinel))
 	})
 
 	return r

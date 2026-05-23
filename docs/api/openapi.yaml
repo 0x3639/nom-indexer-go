@@ -328,6 +328,88 @@ components:
         paired_account_block: { type: string }
         descendant_of: { type: string }
 
+    Pillar:
+      type: object
+      required:
+        - owner_address
+        - producer_address
+        - withdraw_address
+        - name
+        - rank
+        - is_revocable
+        - weight
+        - slot_cost_qsr
+        - is_revoked
+      properties:
+        owner_address: { type: string }
+        producer_address: { type: string }
+        withdraw_address: { type: string }
+        name: { type: string }
+        rank: { type: integer }
+        give_momentum_reward_percentage: { type: integer }
+        give_delegate_reward_percentage: { type: integer }
+        is_revocable: { type: boolean }
+        revoke_cooldown: { type: integer }
+        revoke_timestamp: { type: integer, format: int64 }
+        weight: { $ref: '#/components/schemas/Amount' }
+        epoch_produced_momentums: { type: integer }
+        epoch_expected_momentums: { type: integer }
+        slot_cost_qsr: { $ref: '#/components/schemas/Amount' }
+        spawn_timestamp: { type: integer, format: int64 }
+        voting_activity: { type: number, format: float }
+        produced_momentum_count: { type: integer, format: int64 }
+        is_revoked: { type: boolean }
+
+    PillarList:
+      type: object
+      required: [data, pagination]
+      properties:
+        data:
+          type: array
+          items:
+            $ref: '#/components/schemas/Pillar'
+        pagination:
+          $ref: '#/components/schemas/Pagination'
+
+    PillarDelegator:
+      type: object
+      required: [address, delegation_start_timestamp]
+      properties:
+        address: { type: string }
+        delegation_start_timestamp: { type: integer, format: int64 }
+
+    PillarDelegatorList:
+      type: object
+      required: [data, pagination]
+      properties:
+        data:
+          type: array
+          items:
+            $ref: '#/components/schemas/PillarDelegator'
+        pagination:
+          $ref: '#/components/schemas/Pagination'
+
+    Sentinel:
+      type: object
+      required: [owner, registration_timestamp, is_revocable, active]
+      properties:
+        owner: { type: string }
+        registration_timestamp: { type: integer, format: int64 }
+        is_revocable: { type: boolean }
+        revoke_cooldown: { type: string }
+        active: { type: boolean }
+
+    SentinelList:
+      type: object
+      required: [data, pagination]
+      properties:
+        data:
+          type: array
+          items:
+            $ref: '#/components/schemas/Sentinel'
+        pagination:
+          $ref: '#/components/schemas/Pagination'
+
     AccountBlockList:
       type: object
       required: [data, pagination]
@@ -683,6 +765,128 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/BalancePage'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '429':
+          $ref: '#/components/responses/RateLimited'
+
+  /api/v1/pillars:
+    get:
+      operationId: listPillars
+      summary: List pillars
+      description: |
+        Returns pillars ordered by rank ascending. Excludes revoked
+        pillars by default; pass `?include_revoked=true` to include them.
+      tags: [pillars]
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: '#/components/parameters/PageParam'
+        - $ref: '#/components/parameters/PageSizeParam'
+        - name: include_revoked
+          in: query
+          schema: { type: boolean, default: false }
+      responses:
+        '200':
+          description: Paginated list of pillars.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PillarList'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '429':
+          $ref: '#/components/responses/RateLimited'
+
+  /api/v1/pillars/{name}:
+    get:
+      operationId: getPillar
+      summary: Get a pillar by name
+      tags: [pillars]
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: name
+          in: path
+          required: true
+          schema: { type: string }
+      responses:
+        '200':
+          description: The requested pillar.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Pillar'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          description: No pillar with that name.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
+        '429':
+          $ref: '#/components/responses/RateLimited'
+
+  /api/v1/pillars/{name}/delegators:
+    get:
+      operationId: listPillarDelegators
+      summary: List delegators for a pillar
+      description: |
+        Returns the addresses currently delegated to the pillar, sorted
+        by delegation_start_timestamp ASC (longest-tenured first).
+      tags: [pillars]
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: name
+          in: path
+          required: true
+          schema: { type: string }
+        - $ref: '#/components/parameters/PageParam'
+        - $ref: '#/components/parameters/PageSizeParam'
+      responses:
+        '200':
+          description: Paginated delegator list.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PillarDelegatorList'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          description: No pillar with that name.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
+        '429':
+          $ref: '#/components/responses/RateLimited'
+
+  /api/v1/sentinels:
+    get:
+      operationId: listSentinels
+      summary: List sentinels
+      description: |
+        Returns sentinels ordered by registration_timestamp DESC
+        (newest first). Active sentinels only by default; pass
+        `?include_inactive=true` to include retired sentinels.
+      tags: [sentinels]
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: '#/components/parameters/PageParam'
+        - $ref: '#/components/parameters/PageSizeParam'
+        - name: include_inactive
+          in: query
+          schema: { type: boolean, default: false }
+      responses:
+        '200':
+          description: Paginated sentinel list.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SentinelList'
         '401':
           $ref: '#/components/responses/Unauthorized'
         '429':
