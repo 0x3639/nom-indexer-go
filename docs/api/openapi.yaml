@@ -46,6 +46,37 @@ components:
         HS256-signed JWT minted via `cmd/jwt-issue`. Carries `sub`, `exp`, `iat`,
         and an OAuth 2.0 space-separated `scope` claim.
 
+  parameters:
+    PageParam:
+      name: page
+      in: query
+      description: 1-based page number. Defaults to 1. Out-of-range clamped silently.
+      required: false
+      schema:
+        type: integer
+        minimum: 1
+        default: 1
+        examples: [1]
+    PageSizeParam:
+      name: page_size
+      in: query
+      description: Items per page. Default 50, maximum 200. Out-of-range clamped silently.
+      required: false
+      schema:
+        type: integer
+        minimum: 1
+        maximum: 200
+        default: 50
+        examples: [50]
+    SortParam:
+      name: sort
+      in: query
+      description: Sort direction over the endpoint's documented sort column. Defaults vary per endpoint.
+      required: false
+      schema:
+        type: string
+        enum: [asc, desc]
+
   schemas:
     Problem:
       type: object
@@ -85,6 +116,85 @@ components:
           type: string
           enum: [ok]
 
+    Pagination:
+      type: object
+      required: [page, page_size, total]
+      properties:
+        page:
+          type: integer
+          examples: [1]
+        page_size:
+          type: integer
+          examples: [50]
+        total:
+          type: integer
+          format: int64
+          description: Total rows matching the query across all pages.
+          examples: [12345]
+
+    Status:
+      type: object
+      description: Indexer sync state derived from the database.
+      required: [latest_height, latest_timestamp, indexer_lag_seconds, version]
+      properties:
+        latest_height:
+          type: integer
+          format: int64
+          minimum: 0
+          description: Height of the most-recently-indexed momentum (0 if empty).
+          examples: [12345]
+        latest_timestamp:
+          type: integer
+          format: int64
+          description: Unix-seconds timestamp of the latest momentum.
+          examples: [1700000000]
+        indexer_lag_seconds:
+          type: integer
+          format: int64
+          description: Server clock minus latest_timestamp. Grows when the indexer falls behind.
+          examples: [5]
+        version:
+          type: string
+          examples: ["dev"]
+
+    Momentum:
+      type: object
+      required: [height, hash, timestamp, tx_count, producer]
+      properties:
+        height:
+          type: integer
+          format: int64
+          minimum: 0
+          examples: [12345]
+        hash:
+          type: string
+          examples: ["6b4a32ff…"]
+        timestamp:
+          type: integer
+          format: int64
+          examples: [1700000000]
+        tx_count:
+          type: integer
+          examples: [3]
+        producer:
+          type: string
+          examples: ["z1qq…"]
+        producer_owner:
+          type: string
+        producer_name:
+          type: string
+
+    MomentumList:
+      type: object
+      required: [data, pagination]
+      properties:
+        data:
+          type: array
+          items:
+            $ref: '#/components/schemas/Momentum'
+        pagination:
+          $ref: '#/components/schemas/Pagination'
+
   responses:
     Unauthorized:
       description: Missing or invalid bearer token.
@@ -116,3 +226,120 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/Health'
+
+  /api/v1/status:
+    get:
+      operationId: getStatus
+      summary: Indexer sync status
+      description: |
+        Returns the latest indexed momentum height, its timestamp, and
+        `indexer_lag_seconds = now - latest_timestamp`. Computed from the
+        database alone — does not hit the Zenon node.
+      tags: [meta]
+      security:
+        - bearerAuth: []
+      responses:
+        '200':
+          description: Current sync state.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Status'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '429':
+          $ref: '#/components/responses/RateLimited'
+
+  /api/v1/momentums:
+    get:
+      operationId: listMomentums
+      summary: List momentums
+      description: |
+        Returns momentums ordered by height (default `desc`). Page through
+        the full chain with `?page=` and `?page_size=`.
+      tags: [momentums]
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: '#/components/parameters/PageParam'
+        - $ref: '#/components/parameters/PageSizeParam'
+        - $ref: '#/components/parameters/SortParam'
+      responses:
+        '200':
+          description: Paginated list of momentums.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/MomentumList'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '429':
+          $ref: '#/components/responses/RateLimited'
+
+  /api/v1/momentums/latest:
+    get:
+      operationId: getLatestMomentum
+      summary: Get the most-recently-indexed momentum
+      description: |
+        Returns the highest-height momentum. Returns 404 if the indexer
+        has not processed any blocks yet.
+      tags: [momentums]
+      security:
+        - bearerAuth: []
+      responses:
+        '200':
+          description: The latest momentum.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Momentum'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          description: No momentums have been indexed yet.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
+        '429':
+          $ref: '#/components/responses/RateLimited'
+
+  /api/v1/momentums/{height}:
+    get:
+      operationId: getMomentumByHeight
+      summary: Get a momentum by height
+      tags: [momentums]
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: height
+          in: path
+          required: true
+          schema:
+            type: integer
+            format: int64
+            minimum: 0
+            examples: [12345]
+      responses:
+        '200':
+          description: The requested momentum.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Momentum'
+        '400':
+          description: Height is not a non-negative integer.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          description: No momentum exists at that height.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
+        '429':
+          $ref: '#/components/responses/RateLimited'

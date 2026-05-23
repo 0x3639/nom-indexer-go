@@ -8,7 +8,9 @@ package oapi
 import (
 	"bytes"
 	"compress/flate"
+	"context"
 	"encoding/base64"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/url"
@@ -16,6 +18,11 @@ import (
 	"strings"
 
 	"github.com/getkin/kin-openapi/openapi3"
+	"github.com/oapi-codegen/runtime"
+)
+
+const (
+	BearerAuthScopes bearerAuthContextKey = "bearerAuth.Scopes"
 )
 
 // Defines values for HealthStatus.
@@ -33,6 +40,42 @@ func (e HealthStatus) Valid() bool {
 	}
 }
 
+// Defines values for SortParam.
+const (
+	SortParamAsc  SortParam = "asc"
+	SortParamDesc SortParam = "desc"
+)
+
+// Valid indicates whether the value is a known member of the SortParam enum.
+func (e SortParam) Valid() bool {
+	switch e {
+	case SortParamAsc:
+		return true
+	case SortParamDesc:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for ListMomentumsParamsSort.
+const (
+	ListMomentumsParamsSortAsc  ListMomentumsParamsSort = "asc"
+	ListMomentumsParamsSortDesc ListMomentumsParamsSort = "desc"
+)
+
+// Valid indicates whether the value is a known member of the ListMomentumsParamsSort enum.
+func (e ListMomentumsParamsSort) Valid() bool {
+	switch e {
+	case ListMomentumsParamsSortAsc:
+		return true
+	case ListMomentumsParamsSortDesc:
+		return true
+	default:
+		return false
+	}
+}
+
 // Health defines model for Health.
 type Health struct {
 	Status HealthStatus `json:"status"`
@@ -40,6 +83,32 @@ type Health struct {
 
 // HealthStatus defines model for Health.Status.
 type HealthStatus string
+
+// Momentum defines model for Momentum.
+type Momentum struct {
+	Hash          string  `json:"hash"`
+	Height        int64   `json:"height"`
+	Producer      string  `json:"producer"`
+	ProducerName  *string `json:"producer_name,omitempty"`
+	ProducerOwner *string `json:"producer_owner,omitempty"`
+	Timestamp     int64   `json:"timestamp"`
+	TxCount       int     `json:"tx_count"`
+}
+
+// MomentumList defines model for MomentumList.
+type MomentumList struct {
+	Data       []Momentum `json:"data"`
+	Pagination Pagination `json:"pagination"`
+}
+
+// Pagination defines model for Pagination.
+type Pagination struct {
+	Page     int `json:"page"`
+	PageSize int `json:"page_size"`
+
+	// Total Total rows matching the query across all pages.
+	Total int64 `json:"total"`
+}
 
 // Problem RFC 7807 problem details.
 type Problem struct {
@@ -60,6 +129,28 @@ type Problem struct {
 	Type string `json:"type"`
 }
 
+// Status Indexer sync state derived from the database.
+type Status struct {
+	// IndexerLagSeconds Server clock minus latest_timestamp. Grows when the indexer falls behind.
+	IndexerLagSeconds int64 `json:"indexer_lag_seconds"`
+
+	// LatestHeight Height of the most-recently-indexed momentum (0 if empty).
+	LatestHeight int64 `json:"latest_height"`
+
+	// LatestTimestamp Unix-seconds timestamp of the latest momentum.
+	LatestTimestamp int64  `json:"latest_timestamp"`
+	Version         string `json:"version"`
+}
+
+// PageParam defines model for PageParam.
+type PageParam = int
+
+// PageSizeParam defines model for PageSizeParam.
+type PageSizeParam = int
+
+// SortParam defines model for SortParam.
+type SortParam string
+
 // RateLimited RFC 7807 problem details.
 type RateLimited = Problem
 
@@ -69,8 +160,35 @@ type Unauthorized = Problem
 // bearerAuthContextKey is the context key for bearerAuth security scheme
 type bearerAuthContextKey string
 
+// ListMomentumsParams defines parameters for ListMomentums.
+type ListMomentumsParams struct {
+	// Page 1-based page number. Defaults to 1. Out-of-range clamped silently.
+	Page *PageParam `form:"page,omitempty" json:"page,omitempty"`
+
+	// PageSize Items per page. Default 50, maximum 200. Out-of-range clamped silently.
+	PageSize *PageSizeParam `form:"page_size,omitempty" json:"page_size,omitempty"`
+
+	// Sort Sort direction over the endpoint's documented sort column. Defaults vary per endpoint.
+	Sort *ListMomentumsParamsSort `form:"sort,omitempty" json:"sort,omitempty"`
+}
+
+// ListMomentumsParamsSort defines parameters for ListMomentums.
+type ListMomentumsParamsSort string
+
 // ServerInterface represents all server handlers.
 type ServerInterface interface {
+	// List momentums
+	// (GET /api/v1/momentums)
+	ListMomentums(w http.ResponseWriter, r *http.Request, params ListMomentumsParams)
+	// Get the most-recently-indexed momentum
+	// (GET /api/v1/momentums/latest)
+	GetLatestMomentum(w http.ResponseWriter, r *http.Request)
+	// Get a momentum by height
+	// (GET /api/v1/momentums/{height})
+	GetMomentumByHeight(w http.ResponseWriter, r *http.Request, height int64)
+	// Indexer sync status
+	// (GET /api/v1/status)
+	GetStatus(w http.ResponseWriter, r *http.Request)
 	// Liveness probe
 	// (GET /healthz)
 	GetHealthz(w http.ResponseWriter, r *http.Request)
@@ -84,6 +202,143 @@ type ServerInterfaceWrapper struct {
 }
 
 type MiddlewareFunc func(http.Handler) http.Handler
+
+// ListMomentums operation middleware
+func (siw *ServerInterfaceWrapper) ListMomentums(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+	_ = err
+
+	ctx := r.Context()
+
+	ctx = context.WithValue(ctx, BearerAuthScopes, []string{})
+
+	r = r.WithContext(ctx)
+
+	// Parameter object where we will unmarshal all parameters from the context
+	var params ListMomentumsParams
+
+	// ------------- Optional query parameter "page" -------------
+
+	err = runtime.BindQueryParameterWithOptions("form", true, false, "page", r.URL.Query(), &params.Page, runtime.BindQueryParameterOptions{Type: "integer", Format: ""})
+	if err != nil {
+		var requiredError *runtime.RequiredParameterError
+		if errors.As(err, &requiredError) {
+			siw.ErrorHandlerFunc(w, r, &RequiredParamError{ParamName: "page"})
+		} else {
+			siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "page", Err: err})
+		}
+		return
+	}
+
+	// ------------- Optional query parameter "page_size" -------------
+
+	err = runtime.BindQueryParameterWithOptions("form", true, false, "page_size", r.URL.Query(), &params.PageSize, runtime.BindQueryParameterOptions{Type: "integer", Format: ""})
+	if err != nil {
+		var requiredError *runtime.RequiredParameterError
+		if errors.As(err, &requiredError) {
+			siw.ErrorHandlerFunc(w, r, &RequiredParamError{ParamName: "page_size"})
+		} else {
+			siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "page_size", Err: err})
+		}
+		return
+	}
+
+	// ------------- Optional query parameter "sort" -------------
+
+	err = runtime.BindQueryParameterWithOptions("form", true, false, "sort", r.URL.Query(), &params.Sort, runtime.BindQueryParameterOptions{Type: "string", Format: ""})
+	if err != nil {
+		var requiredError *runtime.RequiredParameterError
+		if errors.As(err, &requiredError) {
+			siw.ErrorHandlerFunc(w, r, &RequiredParamError{ParamName: "sort"})
+		} else {
+			siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "sort", Err: err})
+		}
+		return
+	}
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.ListMomentums(w, r, params)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// GetLatestMomentum operation middleware
+func (siw *ServerInterfaceWrapper) GetLatestMomentum(w http.ResponseWriter, r *http.Request) {
+
+	ctx := r.Context()
+
+	ctx = context.WithValue(ctx, BearerAuthScopes, []string{})
+
+	r = r.WithContext(ctx)
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.GetLatestMomentum(w, r)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// GetMomentumByHeight operation middleware
+func (siw *ServerInterfaceWrapper) GetMomentumByHeight(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+	_ = err
+
+	// ------------- Path parameter "height" -------------
+	var height int64
+
+	err = runtime.BindStyledParameterWithOptions("simple", "height", r.PathValue("height"), &height, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "integer", Format: "int64"})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "height", Err: err})
+		return
+	}
+
+	ctx := r.Context()
+
+	ctx = context.WithValue(ctx, BearerAuthScopes, []string{})
+
+	r = r.WithContext(ctx)
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.GetMomentumByHeight(w, r, height)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// GetStatus operation middleware
+func (siw *ServerInterfaceWrapper) GetStatus(w http.ResponseWriter, r *http.Request) {
+
+	ctx := r.Context()
+
+	ctx = context.WithValue(ctx, BearerAuthScopes, []string{})
+
+	r = r.WithContext(ctx)
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.GetStatus(w, r)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
 
 // GetHealthz operation middleware
 func (siw *ServerInterfaceWrapper) GetHealthz(w http.ResponseWriter, r *http.Request) {
@@ -219,6 +474,10 @@ func HandlerWithOptions(si ServerInterface, options StdHTTPServerOptions) http.H
 		ErrorHandlerFunc:   options.ErrorHandlerFunc,
 	}
 
+	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/api/v1/momentums", wrapper.ListMomentums)
+	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/api/v1/momentums/latest", wrapper.GetLatestMomentum)
+	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/api/v1/momentums/{height}", wrapper.GetMomentumByHeight)
+	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/api/v1/status", wrapper.GetStatus)
 	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/healthz", wrapper.GetHealthz)
 
 	return m
@@ -229,28 +488,46 @@ func HandlerWithOptions(si ServerInterface, options StdHTTPServerOptions) http.H
 // const string: with thousands of chunks the chained `+` fold is several
 // times slower for the Go compiler than parsing a slice literal.
 var swaggerSpec = []string{
-	"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",
+	"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",
 }
 
 // decodeSpec returns the embedded OpenAPI spec as raw JSON bytes,

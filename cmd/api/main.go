@@ -4,8 +4,9 @@
 // docs/api/ for the full specification, including authentication (HS256
 // JWT) and the per-endpoint contract in docs/api/openapi.yaml.
 //
-// This main composes the middleware stack and a chi router; per-domain
-// handlers land in internal/api/handlers in subsequent milestones.
+// This main composes the database pool, repositories, middleware stack,
+// and router — the route table itself lives in internal/api/router so
+// the router test can drift-check it against the OpenAPI spec.
 package main
 
 import (
@@ -18,14 +19,17 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/go-chi/chi/v5"
 	"go.uber.org/zap"
 
-	"github.com/0x3639/nom-indexer-go/internal/api/httpx"
-	apimw "github.com/0x3639/nom-indexer-go/internal/api/middleware"
+	"github.com/0x3639/nom-indexer-go/internal/api/router"
 	"github.com/0x3639/nom-indexer-go/internal/auth"
 	"github.com/0x3639/nom-indexer-go/internal/config"
+	"github.com/0x3639/nom-indexer-go/internal/database"
+	"github.com/0x3639/nom-indexer-go/internal/repository"
 )
+
+// version is overridable at build time via -ldflags "-X main.version=…".
+var version = "dev"
 
 func main() {
 	cfg, err := config.Load()
@@ -50,7 +54,24 @@ func main() {
 		logger.Fatal("failed to initialize JWT signer", zap.Error(err))
 	}
 
-	r := newRouter(cfg, logger, signer)
+	poolCtx, poolCancel := context.WithTimeout(context.Background(), 30*time.Second)
+	pool, err := database.NewPool(poolCtx, &cfg.Database, logger)
+	poolCancel()
+	if err != nil {
+		logger.Fatal("failed to connect to database", zap.Error(err))
+	}
+	defer pool.Close()
+
+	repos := repository.NewRepositories(pool)
+
+	r := router.New(router.Deps{
+		Repos:              repos,
+		Signer:             signer,
+		Logger:             logger,
+		CORSAllowedOrigins: cfg.API.CORSAllowedOriginsList(),
+		RateLimitPerMinute: cfg.API.RateLimitPerMinute,
+		Version:            version,
+	})
 
 	srv := &http.Server{
 		Addr:              fmt.Sprintf(":%d", cfg.API.Port),
@@ -85,37 +106,4 @@ func main() {
 		logger.Warn("graceful shutdown failed", zap.Error(err))
 	}
 	logger.Info("API stopped")
-}
-
-// newRouter builds the chi router with the middleware stack. Subsequent
-// milestones add domain handlers under /api/v1/.
-func newRouter(cfg *config.Config, logger *zap.Logger, signer *auth.Signer) http.Handler {
-	r := chi.NewRouter()
-
-	// Always-on middleware (every route, including /healthz).
-	r.Use(apimw.RequestID)
-	r.Use(apimw.Logger(logger))
-	r.Use(apimw.Recover(logger))
-	r.Use(apimw.CORS(cfg.API.CORSAllowedOriginsList()))
-
-	// Unauthenticated routes.
-	r.Get("/healthz", healthz)
-	// /readyz, /metrics, /api/v1/{...} land in later milestones.
-
-	// Authenticated /api/v1 subtree.
-	r.Route("/api/v1", func(r chi.Router) {
-		r.Use(apimw.Auth(signer))
-		r.Use(apimw.RateLimit(cfg.API.RateLimitPerMinute))
-
-		// Placeholder; real handlers land in M4+.
-		r.Get("/status", func(w http.ResponseWriter, _ *http.Request) {
-			httpx.WriteJSON(w, http.StatusOK, map[string]string{"version": "dev"})
-		})
-	})
-
-	return r
-}
-
-func healthz(w http.ResponseWriter, _ *http.Request) {
-	httpx.WriteJSON(w, http.StatusOK, map[string]string{"status": "ok"})
 }
