@@ -22,16 +22,12 @@ jobs:
         with:
           python-version: "3.12"
           cache: pip
+          cache-dependency-path: scripts/docs/requirements.txt
 
       - name: Install mkdocs and plugins
         run: |
           python -m pip install --upgrade pip
-          pip install \
-            mkdocs-material \
-            mkdocs-mermaid2-plugin \
-            mkdocs-include-markdown-plugin \
-            mkdocs-swagger-ui-tag \
-            pymdown-extensions
+          pip install -r scripts/docs/requirements.txt
 
       - name: Verify llms.txt is in sync
         run: |

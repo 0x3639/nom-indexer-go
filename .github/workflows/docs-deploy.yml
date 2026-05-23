@@ -24,14 +24,12 @@ jobs:
         with:
           python-version: "3.12"
           cache: pip
+          cache-dependency-path: scripts/docs/requirements.txt
 
       - name: Install mkdocs and plugins
         run: |
           python -m pip install --upgrade pip
-          pip install \
-            mkdocs-material \
-            mkdocs-include-markdown-plugin \
-            pymdown-extensions
+          pip install -r scripts/docs/requirements.txt
 
       - name: Regenerate llms.txt and llms-full.txt
         run: |

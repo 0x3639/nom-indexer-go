@@ -1,0 +1,9 @@
+# Pinned docs build dependencies for mkdocs-material + plugins.
+# Used by .github/workflows/docs-deploy.yml and docs-pr-preview.yml.
+
+mkdocs-material>=9.7,<10
+mkdocs-include-markdown-plugin>=6,<8
+pymdown-extensions>=10,<11
+
+# llms.txt generator dependency.
+PyYAML>=6,<7
