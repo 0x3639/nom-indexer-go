@@ -7,10 +7,12 @@
 package router
 
 import (
+	"context"
 	"net/http"
 	"time"
 
 	"github.com/go-chi/chi/v5"
+	"github.com/jackc/pgx/v5/pgxpool"
 	"go.uber.org/zap"
 
 	"github.com/0x3639/nom-indexer-go/internal/api/handlers"
@@ -20,12 +22,19 @@ import (
 	"github.com/0x3639/nom-indexer-go/internal/repository"
 )
 
+// MetricsMiddleware is an optional Prometheus-style middleware applied
+// before any other middleware so its label set includes the chi route
+// pattern. Nil disables observation entirely (used by tests).
+type MetricsMiddleware func(http.Handler) http.Handler
+
 // Deps bundles everything router.New needs. Build it in cmd/api/main.go;
 // tests pass a fake-repos variant.
 type Deps struct {
 	Repos              *repository.Repositories
 	Signer             *auth.Signer
 	Logger             *zap.Logger
+	Pool               *pgxpool.Pool // used by /readyz to ping the DB; may be nil in tests
+	Metrics            MetricsMiddleware
 	CORSAllowedOrigins []string
 	RateLimitPerMinute int
 	Version            string
@@ -48,9 +57,13 @@ func New(d Deps) http.Handler {
 	r.Use(apimw.Logger(d.Logger))
 	r.Use(apimw.Recover(d.Logger))
 	r.Use(apimw.CORS(d.CORSAllowedOrigins))
+	if d.Metrics != nil {
+		r.Use(d.Metrics)
+	}
 
 	// Unauthenticated routes.
 	r.Get("/healthz", healthz)
+	r.Get("/readyz", readyz(d.Pool))
 
 	// Authenticated /api/v1 subtree.
 	r.Route("/api/v1", func(r chi.Router) {
@@ -107,4 +120,22 @@ func New(d Deps) http.Handler {
 
 func healthz(w http.ResponseWriter, _ *http.Request) {
 	httpx.WriteJSON(w, http.StatusOK, map[string]string{"status": "ok"})
+}
+
+// readyz pings the database and reports ready/not_ready. A nil pool
+// (test mode) is treated as "ready" — there's nothing to verify.
+func readyz(pool *pgxpool.Pool) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if pool == nil {
+			httpx.WriteJSON(w, http.StatusOK, map[string]string{"status": "ready"})
+			return
+		}
+		ctx, cancel := context.WithTimeout(r.Context(), 3*time.Second)
+		defer cancel()
+		if err := pool.Ping(ctx); err != nil {
+			httpx.WriteProblem(w, http.StatusServiceUnavailable, "db_unavailable", err.Error())
+			return
+		}
+		httpx.WriteJSON(w, http.StatusOK, map[string]string{"status": "ready"})
+	}
 }
