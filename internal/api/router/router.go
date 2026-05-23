@@ -95,6 +95,11 @@ func New(d Deps) http.Handler {
 		r.Get("/projects/{id}", handlers.ProjectsGet(d.Repos.Project))
 		r.Get("/projects/{id}/phases", handlers.ProjectsPhases(d.Repos.ProjectPhase))
 		r.Get("/projects/{id}/votes", handlers.ProjectsVotes(d.Repos.Vote))
+
+		r.Get("/bridge/wraps", handlers.BridgeWraps(d.Repos.Bridge))
+		r.Get("/bridge/unwraps", handlers.BridgeUnwraps(d.Repos.Bridge))
+		r.Get("/accounts/{address}/bridge/wraps", handlers.BridgeWrapsByAddress(d.Repos.Bridge))
+		r.Get("/accounts/{address}/bridge/unwraps", handlers.BridgeUnwrapsByAddress(d.Repos.Bridge))
 	})
 
 	return r

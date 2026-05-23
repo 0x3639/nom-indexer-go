@@ -605,6 +605,54 @@ components:
         data: { type: array, items: { $ref: '#/components/schemas/Vote' } }
         pagination: { $ref: '#/components/schemas/Pagination' }
 
+    WrapTokenRequest:
+      type: object
+      required: [id, network_class, chain_id, to_address, token_standard, token_address, amount, fee, creation_momentum_height, confirmations_to_finality]
+      properties:
+        id: { type: string }
+        network_class: { type: integer }
+        chain_id: { type: integer }
+        to_address: { type: string }
+        token_standard: { type: string }
+        token_address: { type: string }
+        amount: { $ref: '#/components/schemas/Amount' }
+        fee: { $ref: '#/components/schemas/Amount' }
+        signature: { type: string }
+        creation_momentum_height: { type: integer, format: int64 }
+        confirmations_to_finality: { type: integer }
+
+    WrapTokenRequestList:
+      type: object
+      required: [data, pagination]
+      properties:
+        data: { type: array, items: { $ref: '#/components/schemas/WrapTokenRequest' } }
+        pagination: { $ref: '#/components/schemas/Pagination' }
+
+    UnwrapTokenRequest:
+      type: object
+      required: [transaction_hash, log_index, network_class, chain_id, to_address, token_standard, token_address, amount, registration_momentum_height, redeemed, revoked, redeemable_in]
+      properties:
+        transaction_hash: { type: string }
+        log_index: { type: integer, format: int64 }
+        network_class: { type: integer }
+        chain_id: { type: integer }
+        to_address: { type: string }
+        token_standard: { type: string }
+        token_address: { type: string }
+        amount: { $ref: '#/components/schemas/Amount' }
+        signature: { type: string }
+        registration_momentum_height: { type: integer, format: int64 }
+        redeemed: { type: boolean }
+        revoked: { type: boolean }
+        redeemable_in: { type: integer, format: int64 }
+
+    UnwrapTokenRequestList:
+      type: object
+      required: [data, pagination]
+      properties:
+        data: { type: array, items: { $ref: '#/components/schemas/UnwrapTokenRequest' } }
+        pagination: { $ref: '#/components/schemas/Pagination' }
+
     AccountBlockList:
       type: object
       required: [data, pagination]
@@ -1287,6 +1335,90 @@ paths:
           content:
             application/json:
               schema: { $ref: '#/components/schemas/VoteList' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '429': { $ref: '#/components/responses/RateLimited' }
+
+  /api/v1/bridge/wraps:
+    get:
+      operationId: listBridgeWraps
+      summary: List wrap (Zenon → external chain) requests
+      tags: [bridge]
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: '#/components/parameters/PageParam'
+        - $ref: '#/components/parameters/PageSizeParam'
+      responses:
+        '200':
+          description: Paginated wrap-request list.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/WrapTokenRequestList' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '429': { $ref: '#/components/responses/RateLimited' }
+
+  /api/v1/bridge/unwraps:
+    get:
+      operationId: listBridgeUnwraps
+      summary: List unwrap (external chain → Zenon) requests
+      tags: [bridge]
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: '#/components/parameters/PageParam'
+        - $ref: '#/components/parameters/PageSizeParam'
+      responses:
+        '200':
+          description: Paginated unwrap-request list.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/UnwrapTokenRequestList' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '429': { $ref: '#/components/responses/RateLimited' }
+
+  /api/v1/accounts/{address}/bridge/wraps:
+    get:
+      operationId: listAccountBridgeWraps
+      summary: List wraps with to_address = {address}
+      tags: [accounts]
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: address
+          in: path
+          required: true
+          schema: { type: string }
+        - $ref: '#/components/parameters/PageParam'
+        - $ref: '#/components/parameters/PageSizeParam'
+      responses:
+        '200':
+          description: Paginated wrap-request list.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/WrapTokenRequestList' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '429': { $ref: '#/components/responses/RateLimited' }
+
+  /api/v1/accounts/{address}/bridge/unwraps:
+    get:
+      operationId: listAccountBridgeUnwraps
+      summary: List unwraps with to_address = {address}
+      tags: [accounts]
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: address
+          in: path
+          required: true
+          schema: { type: string }
+        - $ref: '#/components/parameters/PageParam'
+        - $ref: '#/components/parameters/PageSizeParam'
+      responses:
+        '200':
+          description: Paginated unwrap-request list.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/UnwrapTokenRequestList' }
         '401': { $ref: '#/components/responses/Unauthorized' }
         '429': { $ref: '#/components/responses/RateLimited' }
 
