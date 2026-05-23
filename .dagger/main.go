@@ -35,7 +35,7 @@ func (m *NomIndexer) PublishAPI(ctx context.Context, source *dagger.Directory, t
 // Test runs go test with CGO enabled (required for secp256k1)
 func (m *NomIndexer) Test(ctx context.Context, source *dagger.Directory) (string, error) {
 	return dag.Container().
-		From("golang:1.24-alpine").
+		From("golang:1.25-alpine").
 		WithExec([]string{"apk", "add", "--no-cache", "git", "gcc", "musl-dev"}).
 		WithMountedCache("/go/pkg/mod", dag.CacheVolume("go-mod")).
 		WithMountedCache("/root/.cache/go-build", dag.CacheVolume("go-build")).
@@ -46,12 +46,13 @@ func (m *NomIndexer) Test(ctx context.Context, source *dagger.Directory) (string
 		Stdout(ctx)
 }
 
-// Lint runs golangci-lint on the source code
-// Note: Uses Go 1.24 base image and installs golangci-lint since pre-built images
-// don't yet support Go 1.24
+// Lint runs golangci-lint on the source code.
+// golangci-lint is built from source inside the golang:1.25 base image
+// so it tracks the Go toolchain version pinned in go.mod (1.25). The
+// official pre-built binaries lag the latest Go release by several weeks.
 func (m *NomIndexer) Lint(ctx context.Context, source *dagger.Directory) (string, error) {
 	return dag.Container().
-		From("golang:1.24-alpine").
+		From("golang:1.25-alpine").
 		WithExec([]string{"apk", "add", "--no-cache", "git", "gcc", "musl-dev", "binutils-gold"}).
 		WithExec([]string{"go", "install", "github.com/golangci/golangci-lint/v2/cmd/golangci-lint@v2.7.1"}).
 		WithMountedCache("/go/pkg/mod", dag.CacheVolume("go-mod")).
