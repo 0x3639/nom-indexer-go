@@ -23,3 +23,5 @@ phase-outreach-*.md
 
 # Local config (contains credentials)
 config.yaml
+/.venv-docs/
+/site/

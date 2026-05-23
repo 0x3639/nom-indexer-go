@@ -32,7 +32,7 @@ fi
 # Check if container is running
 if ! docker ps --format '{{.Names}}' | grep -q "^${CONTAINER_NAME}$"; then
     echo "Error: Container '${CONTAINER_NAME}' is not running."
-    echo "Start it with: docker-compose up -d postgres"
+    echo "Start it with: docker compose up -d postgres"
     exit 1
 fi
 
@@ -66,4 +66,4 @@ fi
 echo ""
 echo "Restore completed successfully!"
 echo ""
-echo "You can now restart the indexer with: docker-compose up -d indexer"
+echo "You can now restart the indexer with: docker compose up -d indexer"

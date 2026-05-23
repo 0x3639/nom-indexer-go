@@ -240,7 +240,7 @@ func backupVotesTable() error {
 		return fmt.Errorf("docker not available or not running: %w", err)
 	}
 	if !bytes.Contains(out, []byte(containerName)) {
-		return fmt.Errorf("container %q is not running — start it with: docker-compose up -d postgres", containerName)
+		return fmt.Errorf("container %q is not running — start it with: docker compose up -d postgres", containerName)
 	}
 
 	// Create backup directory

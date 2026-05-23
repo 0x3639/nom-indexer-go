@@ -104,6 +104,14 @@ func (r *PillarRepository) IncrementMomentumCount(ctx context.Context, ownerAddr
 	return err
 }
 
+// IncrementMomentumCountBatch adds a produced-momentum counter update to a batch.
+func (r *PillarRepository) IncrementMomentumCountBatch(batch *pgx.Batch, ownerAddress string) {
+	batch.Queue(`
+		UPDATE pillars SET produced_momentum_count = produced_momentum_count + 1
+		WHERE owner_address = $1`,
+		ownerAddress)
+}
+
 // UpdateVotingActivity updates the voting activity
 func (r *PillarRepository) UpdateVotingActivity(ctx context.Context, ownerAddress string, votingActivity float32) error {
 	_, err := r.pool.Exec(ctx, `

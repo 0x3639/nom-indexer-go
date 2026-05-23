@@ -67,11 +67,7 @@ func (i *Indexer) processMomentum(ctx context.Context, m *api.Momentum) error {
 
 	// Increment pillar momentum count
 	if producerOwner != "" {
-		if err := i.repos.Pillar.IncrementMomentumCount(ctx, producerOwner); err != nil {
-			i.logger.Warn("failed to increment pillar momentum count",
-				zap.String("owner", producerOwner),
-				zap.Error(err))
-		}
+		i.repos.Pillar.IncrementMomentumCountBatch(batch, producerOwner)
 	}
 
 	// Insert momentum

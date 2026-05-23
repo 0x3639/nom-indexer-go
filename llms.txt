@@ -1,0 +1,136 @@
+# nom-indexer-go
+
+> Documentation for the nom-indexer-go Zenon Network indexer.
+
+Hash-formatted flat index of every documentation page, generated from mkdocs.yml. See https://llmstxt.org for the convention.
+
+- [Home](docs/index.md): A Go service that indexes the Zenon Network blockchain (NoM) into PostgreSQL.
+## Architecture
+
+- [Overview](docs/architecture/overview.md): The big picture: one process, one Postgres database, several
+- [Data flow](docs/architecture/data-flow.md): A line-by-line trace of what happens between "the node tells us a new
+- [Sync and recovery](docs/architecture/sync-and-recovery.md): How the indexer catches up from a cold start, transitions to real-time
+- [Cron and snapshots](docs/architecture/cron-and-snapshots.md): The cron goroutine in
+- [Bridge sync](docs/architecture/bridge-sync.md): The bridge sync goroutine refreshes three categories of data on a
+## Schema
+
+- [Overview](docs/schema/index.md): This is the canonical contract between the indexer and its consumers. Every
+- [Conventions](docs/schema/conventions.md): These rules apply across every table in this schema. Where a per-table page
+- [ERD](docs/schema/erd.md): Relations are by convention only — the schema declares **no** foreign-key
+- [Generated reference](docs/schema/_generated.md): This page is a placeholder for the optional `tbls`-generated schema
+### Core
+
+- [momentums](docs/schema/momentums.md): One row per block header. The schema's primary ledger anchor — every other
+- [accounts](docs/schema/accounts.md): One row per address that has ever been observed in a block. Tracks the
+- [balances](docs/schema/balances.md): Current token balance for an (address, token_standard) pair, plus the
+- [account_blocks](docs/schema/account_blocks.md): Every transaction the indexer has seen, with decoded ABI method + inputs
+- [tokens](docs/schema/tokens.md): ZTS token registry — one row per token standard, with current supply,
+- [token_mints](docs/schema/token_mints.md): One row per `Token.Mint` event. The issuer (the embedded reward contract
+- [token_burns](docs/schema/token_burns.md): One row per `Token.Burn` event. The burner, the amount, and the token are
+### Pillars and delegation
+
+- [pillars](docs/schema/pillars.md): Current state of every pillar (validator) the network has ever registered.
+- [pillar_updates](docs/schema/pillar_updates.md): Append-only log of pillar configuration changes. Each `Register`,
+- [delegations](docs/schema/delegations.md): Time-bucketed delegation history. Each row represents one continuous
+### Sentinels, stakes, plasma
+
+- [sentinels](docs/schema/sentinels.md): Active sentinel node registrations. Refreshed from `SentinelApi.GetAllActive`
+- [stakes](docs/schema/stakes.md): One row per `Stake.Stake` event. Tracks the staked amount, duration, expiry,
+- [fusions](docs/schema/fusions.md): Plasma fusion entries — QSR fused (locked) to grant plasma to a beneficiary
+### Accelerator-Z
+
+- [projects](docs/schema/projects.md): Accelerator-Z funding proposals. Refreshed from
+- [project_phases](docs/schema/project_phases.md): Accelerator-Z sub-grants. A project's funding can be broken into multiple
+- [votes](docs/schema/votes.md): Pillar votes on Accelerator-Z projects and phases. One row per
+### Rewards
+
+- [cumulative_rewards](docs/schema/cumulative_rewards.md): Running per-(address, reward type, token) total of reward amounts received.
+- [reward_transactions](docs/schema/reward_transactions.md): One row per reward-receive block: the actual on-chain event that credited
+### Bridge
+
+- [wrap_token_requests](docs/schema/wrap_token_requests.md): A user's intent to wrap a Zenon ZTS token onto an external chain (Ethereum,
+- [unwrap_token_requests](docs/schema/unwrap_token_requests.md): An external-chain → Zenon unwrap intent (a user redeeming a wrapped token
+- [bridge_networks](docs/schema/bridge_networks.md): Cached configuration of each destination network the Zenon bridge is
+- [bridge_network_tokens](docs/schema/bridge_network_tokens.md): Per-(network, token) bridge configuration: external-chain token contract,
+- [bridge_admin](docs/schema/bridge_admin.md): Singleton table — exactly one row keyed `row_id = 1` — holding the bridge
+- [bridge_guardians](docs/schema/bridge_guardians.md): Active bridge guardians — the set of addresses that can vote on bridge
+- [bridge_orchestrator_info](docs/schema/bridge_orchestrator_info.md): Singleton table holding the bridge orchestrator's operating parameters
+- [bridge_security_info](docs/schema/bridge_security_info.md): Singleton with the bridge security delay parameters from
+### Daily snapshots
+
+- [network_stat_histories](docs/schema/network_stat_histories.md): Daily network-wide snapshot — one row per UTC date. Aggregates total /
+- [token_stat_histories](docs/schema/token_stat_histories.md): Daily per-token snapshot. For each (date, token) the row records that day's
+- [pillar_stat_histories](docs/schema/pillar_stat_histories.md): Daily per-pillar snapshot. Captures rank, weight, and active-delegator count
+- [bridge_stat_histories](docs/schema/bridge_stat_histories.md): Daily per-(network, chain, token) bridge volume snapshot. Aggregates wrap
+## Indexing
+
+- [Overview](docs/indexing/index.md): How a momentum becomes rows. Starting at the wire and ending at committed
+- [Pillar contract](docs/indexing/pillar-contract.md): `z1qxemdeddedxpyllarxxxxxxxxxxxxxxxsy3fmg` — defined as
+- [Sentinel contract](docs/indexing/sentinel-contract.md): `z1qxemdeddedxsentynelxxxxxxxxxxxxxwy0r2r` — `SentinelAddress`.
+- [Stake contract](docs/indexing/stake-contract.md): `z1qxemdeddedxstakexxxxxxxxxxxxxxxxjv8v62` — `StakeAddress`.
+- [Plasma contract](docs/indexing/plasma-contract.md): `z1qxemdeddedxplasmaxxxxxxxxxxxxxxxxsctrp` — `PlasmaAddress`.
+- [Accelerator-Z contract](docs/indexing/accelerator-contract.md): `z1qxemdeddedxaccelerat0rxxxxxxxxxxp4tk22` — `AcceleratorAddress`.
+- [Token contract](docs/indexing/token-contract.md): `z1qxemdeddedxt0kenxxxxxxxxxxxxxxxxh9amk0` — `TokenAddress`.
+- [Liquidity contract](docs/indexing/liquidity-contract.md): `z1qxemdeddedxlyquydytyxxxxxxxxxxxxflaaae` — `LiquidityAddress`.
+- [Bridge contract](docs/indexing/bridge-contract.md): `z1qxemdeddedxdrydgexxxxxxxxxxxxxxxmqgr0d` — `BridgeAddress`.
+- [Rewards](docs/indexing/rewards.md): Reward indexing is the most subtle piece of the per-block pipeline. It
+- [ABI decoding](docs/indexing/abi-decoding.md): How raw account-block call data becomes `(method, inputs)` for the
+## Operations
+
+- [Deploy](docs/operations/deploy.md): The canonical deployment is Docker Compose. Two containers: the
+- [Monitoring](docs/operations/monitoring.md): What "healthy" looks like and how to spot trouble.
+- [Backfill](docs/operations/backfill.md): Three paths exist for filling gaps in the indexer's tables. Pick by use case.
+- [Backup and restore](docs/operations/backup-restore.md): Two shell scripts ship with the repo:
+- [Failure modes](docs/operations/failure-modes.md): Known ways the indexer can stall or misbehave, with detection and
+- [Scaling](docs/operations/scaling.md): This indexer is a single-process service writing to one Postgres
+- [Runbook](docs/operations/runbook.md): Numbered playbooks for the most common incidents. Each is a tight
+## Development
+
+- [Setup](docs/development/setup.md): How to get a local checkout building and tests running.
+- [Project layout](docs/development/project-layout.md): Where everything lives, and what depends on what.
+- [Add a contract handler](docs/development/add-contract-handler.md): How to wire indexing for a new embedded contract. The recipe assumes
+- [Add a table](docs/development/add-table.md): A new table touches five things: migration, model, repository,
+- [Add a cron job](docs/development/add-cron-job.md): The cron loop in
+- [Coding style](docs/development/coding-style.md): What `golangci-lint v2` enforces, plus the unwritten conventions you'll
+- [CI](docs/development/ci.md): The project uses [Dagger](https://dagger.io) for the Go pipeline and
+- [Authoring docs](docs/development/docs.md): The doc site is mkdocs-material with plain Markdown source. Anyone
+## Testing
+
+- [Strategy](docs/testing/strategy.md): Two tiers: fast unit tests run by default; integration tests gated by
+- [Integration database](docs/testing/integration-db.md): How to provision a Postgres for the `-tags integration` tests.
+- [Writing tests](docs/testing/writing-tests.md): Patterns to follow when adding tests to the codebase.
+## Config
+
+- [Reference](docs/config/reference.md): Every knob exposed to operators. Sources are resolved in this order
+- [Cron intervals](docs/config/cron-intervals.md): The indexer runs five periodic loops. Two are tunable via config; three
+- [Node selection](docs/config/node-selection.md): The indexer requires a WebSocket-enabled Zenon node. The default
+## Migrations
+
+- [Guide](docs/migrations/guide.md): How to add and ship a schema change.
+- [Rollback](docs/migrations/rollback.md): Down migrations are first-class. They exist for two reasons:
+- [History](docs/migrations/history.md): Narrative of every migration with the problem it solved.
+## Code reference
+
+- [Overview](docs/code-reference/index.md): One-paragraph overview per `internal/*` package, with links to the
+- [internal/indexer](docs/code-reference/indexer.md): Source: [`internal/indexer/`](https://github.com/0x3639/nom-indexer-go/tree/main/internal/indexer)
+- [internal/repository](docs/code-reference/repository.md): Source: [`internal/repository/`](https://github.com/0x3639/nom-indexer-go/tree/main/internal/repository)
+- [internal/models](docs/code-reference/models.md): Source: [`internal/models/`](https://github.com/0x3639/nom-indexer-go/tree/main/internal/models)
+- [internal/config](docs/code-reference/config.md): Source: [`internal/config/`](https://github.com/0x3639/nom-indexer-go/tree/main/internal/config)
+- [internal/database](docs/code-reference/database.md): Source: [`internal/database/`](https://github.com/0x3639/nom-indexer-go/tree/main/internal/database)
+## API
+
+- [Overview](docs/api/index.md): A REST API for the indexer is planned. This page is a stub; endpoint references
+- [Authentication](docs/api/auth.md): The REST API has not been implemented yet, so there is no runtime
+- [Pagination](docs/api/pagination.md): The REST API has not been implemented yet, so pagination parameters and
+## MCP
+
+- [Overview](docs/mcp/index.md): A Model Context Protocol server is planned. This page is a stub; tool and
+- [Resources](docs/mcp/resources.md): The MCP server has not been implemented yet, so no resources are exposed
+- [Tools](docs/mcp/tools.md): The MCP server has not been implemented yet, so no tools are exposed by
+## Reference
+
+- [Glossary](docs/reference/glossary.md): Zenon-specific terms used throughout this codebase and the docs.
+- [Addresses](docs/reference/addresses.md): Every constant in
+- [FAQ](docs/reference/faq.md): Common questions and the queries / files that answer them.
+- [Known issues](docs/reference/known-issues.md): Canonical list of known limitations and historical bugs that left
+- [External links](docs/reference/external-links.md): Curated jumping-off points for upstream Zenon ecosystem resources.

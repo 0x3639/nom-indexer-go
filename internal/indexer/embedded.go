@@ -65,7 +65,10 @@ func (i *Indexer) indexPillarContract(ctx context.Context, batch *pgx.Batch, blo
 				descendant := block.DescendantBlocks[0]
 				if descendant.ToAddress.String() == models.TokenAddress {
 					// The descendant is a Burn transaction to the token contract
-					slotCostQsr := descendant.Amount.Int64()
+					slotCostQsr := safeBigIntToInt64(descendant.Amount, i.logger,
+						"pillar slot cost overflow",
+						zap.String("name", name),
+						zap.String("owner", ownerAddress))
 					i.repos.Pillar.UpdateSpawnInfoBatch(batch, ownerAddress, int64(m.TimestampUnix), slotCostQsr)
 					i.logger.Debug("pillar registered with spawn info",
 						zap.String("name", name),
@@ -145,10 +148,13 @@ func (i *Indexer) indexStakeContract(ctx context.Context, batch *pgx.Batch, bloc
 			}
 
 			stakeID := block.PairedAccountBlock.Hash.String()
+			znnAmount := safeBigIntToInt64(block.PairedAccountBlock.Amount, i.logger,
+				"stake amount overflow",
+				zap.String("stakeID", stakeID))
 			stake := &models.Stake{
 				ID:                  stakeID,
 				Address:             block.PairedAccountBlock.Address.String(),
-				ZnnAmount:           block.PairedAccountBlock.Amount.Int64(),
+				ZnnAmount:           znnAmount,
 				StartTimestamp:      int64(m.TimestampUnix),
 				DurationInSec:       duration,
 				ExpirationTimestamp: int64(m.TimestampUnix) + int64(duration),
@@ -197,11 +203,14 @@ func (i *Indexer) indexPlasmaContract(ctx context.Context, batch *pgx.Batch, blo
 				beneficiary = block.PairedAccountBlock.Address.String()
 			}
 			fusionID := block.PairedAccountBlock.Hash.String()
+			qsrAmount := safeBigIntToInt64(block.PairedAccountBlock.Amount, i.logger,
+				"fusion qsr amount overflow",
+				zap.String("fusionID", fusionID))
 			fusion := &models.Fusion{
 				ID:                fusionID,
 				Address:           block.PairedAccountBlock.Address.String(),
 				Beneficiary:       beneficiary,
-				QsrAmount:         block.PairedAccountBlock.Amount.Int64(),
+				QsrAmount:         qsrAmount,
 				MomentumTimestamp: int64(m.TimestampUnix),
 				MomentumHeight:    int64(m.Height),
 				MomentumHash:      m.Hash.String(),
@@ -331,7 +340,10 @@ func (i *Indexer) indexTokenContract(ctx context.Context, batch *pgx.Batch, bloc
 			return
 		}
 		tokenStandard := block.PairedAccountBlock.TokenStandard.String()
-		burnAmount := block.PairedAccountBlock.Amount.Int64()
+		burnAmount := safeBigIntToInt64(block.PairedAccountBlock.Amount, i.logger,
+			"token burn amount overflow",
+			zap.String("hash", block.Hash.String()),
+			zap.String("token", tokenStandard))
 		burner := block.PairedAccountBlock.Address.String()
 		i.repos.TokenEvent.InsertBurnBatch(batch, &models.TokenBurn{
 			AccountBlockHash:  block.Hash.String(),

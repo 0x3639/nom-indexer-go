@@ -1,0 +1,42 @@
+name: Docs PR preview
+
+on:
+  pull_request:
+    paths:
+      - 'docs/**'
+      - 'mkdocs.yml'
+      - 'scripts/docs/**'
+      - '.github/workflows/docs-*.yml'
+      - 'README.md'
+      - 'CLAUDE.md'
+      - 'CONTRIBUTING.md'
+      - 'CHANGELOG.md'
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Install mkdocs and plugins
+        run: |
+          python -m pip install --upgrade pip
+          pip install \
+            mkdocs-material \
+            mkdocs-mermaid2-plugin \
+            mkdocs-include-markdown-plugin \
+            mkdocs-swagger-ui-tag \
+            pymdown-extensions
+
+      - name: Verify llms.txt is in sync
+        run: |
+          python scripts/docs/gen-llms-txt.py --check
+          python scripts/docs/gen-llms-full.py --check
+
+      - name: Build site (strict)
+        run: mkdocs build --strict

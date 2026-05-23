@@ -4,25 +4,24 @@
 //
 // The reward pattern, expressed against our schema:
 //
-//   receive block (block_type = UserReceive = 3)
-//       .paired_account_block -> send block (block_type = ContractSend = 4)
-//           .address ∈ {Pillar, Sentinel, Stake}
-//   receive.to_address      = EmptyAddress
-//   receive.token_standard  = EmptyTokenStandard
+//	receive block (block_type = UserReceive = 3)
+//	    .paired_account_block -> send block (block_type = ContractSend = 4)
+//	        .address ∈ {Pillar, Sentinel, Stake}
+//	receive.to_address      = EmptyAddress
+//	receive.token_standard  = EmptyTokenStandard
 //
 // Or, for liquidity rewards:
 //
-//   receive block (block_type = UserReceive = 3)
-//       .paired_account_block -> send block whose .address = LiquidityTreasuryAddress
+//	receive block (block_type = UserReceive = 3)
+//	    .paired_account_block -> send block whose .address = LiquidityTreasuryAddress
 //
 // Usage:
 //
 //	DATABASE_PASSWORD=<password> go run ./scripts/backfill-rewards
 //
-// The script is idempotent: it uses ON CONFLICT DO NOTHING for
-// reward_transactions, but cumulative_rewards uses an additive ON CONFLICT
-// UPDATE, so running it twice WILL double-count. Truncate cumulative_rewards
-// first if re-running.
+// The script only updates cumulative_rewards after inserting a new
+// reward_transactions row. Existing reward hashes are skipped, so re-running
+// the script will not double-count rows it already inserted.
 package main
 
 import (

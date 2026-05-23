@@ -1,0 +1,19 @@
+openapi: 3.1.0
+info:
+  title: nom-indexer-go API
+  version: 0.0.0
+  description: |
+    Placeholder OpenAPI 3.1 contract. The API server has not been implemented
+    yet. See specs/API_SPECIFICATION.md for the draft implementation brief.
+
+    When the API ships, this file is filled in and rendered as Swagger UI via
+    mkdocs-swagger-ui-tag.
+  contact:
+    name: nom-indexer-go
+    url: https://github.com/0x3639/nom-indexer-go
+servers:
+  - url: http://localhost:8080
+    description: Local development server (not yet implemented)
+paths: {}
+components:
+  schemas: {}

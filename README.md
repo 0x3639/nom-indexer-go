@@ -4,218 +4,88 @@
 [![PostgreSQL](https://img.shields.io/badge/PostgreSQL-16-336791?style=flat&logo=postgresql&logoColor=white)](https://www.postgresql.org/)
 [![Docker](https://img.shields.io/badge/Docker-ready-2496ED?style=flat&logo=docker&logoColor=white)](https://www.docker.com/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
+[![Docs](https://img.shields.io/badge/docs-mkdocs--material-526CFE)](https://0x3639.github.io/nom-indexer-go/)
 
-A high-performance blockchain indexer for the [Zenon Network](https://zenon.network), written in Go. This is a port of the original [Dart-based nom-indexer](https://github.com/zenon-tools/nom-indexer).
+A high-performance blockchain indexer for the [Zenon Network](https://zenon.network), written in Go. Ports the original [Dart nom-indexer](https://github.com/zenon-tools/nom-indexer) to a typed, batched, transactional Postgres pipeline.
 
-## Overview
+The service subscribes to a Zenon node over WebSocket, decodes embedded-contract activity, and writes a normalized 30-table schema that downstream consumers — including the forthcoming REST API and MCP server — can query directly.
 
-nom-indexer-go indexes blockchain data from the Network of Momentum (NoM) into PostgreSQL for efficient querying. It tracks:
+## Documentation
 
-- **Momentums** - Block headers with producer information
-- **Account Blocks** - All transactions with decoded contract data
-- **Balances** - Token balances per address
-- **Pillars** - Validator nodes and their configuration history
-- **Sentinels** - Sentinel node registrations
-- **Stakes** - Staking entries with cancel IDs (computed via ABI encoding)
-- **Delegations** - Delegation records
-- **Fusions** - Plasma fusion entries with cancel IDs
-- **Tokens** - ZTS token metadata and statistics
-- **Accelerator-Z** - Projects, phases, and pillar votes (with computed voting IDs)
-- **Rewards** - Reward distributions by type
-- **Bridge** - Wrap/unwrap token requests with finality tracking
+Full docs live at **[0x3639.github.io/nom-indexer-go](https://0x3639.github.io/nom-indexer-go/)** (or browse [`docs/`](docs/) on GitHub).
 
-## Quick Start
+- [Architecture](docs/architecture/overview.md) — system context, goroutines, data flow
+- [Schema reference](docs/schema/index.md) — every table, write path, gotchas
+- [Indexing flow](docs/indexing/index.md) — per-contract event handlers
+- [Operations](docs/operations/deploy.md) — deploy, monitor, backfill, runbook
+- [Development](docs/development/setup.md) — local setup, recipes
+- [Config reference](docs/config/reference.md) — every env var + YAML key
+- [Glossary](docs/reference/glossary.md) — Zenon-specific terminology
 
-### Prerequisites
+LLM-friendly flat indexes are at [`llms.txt`](llms.txt) and [`llms-full.txt`](llms-full.txt).
 
-- Docker and Docker Compose
-- A Zenon Network node with WebSocket enabled (or use the default public node)
+## Quick start
 
-### Running with Docker
+Prerequisites: Docker, Docker Compose. (Optional: a private Zenon node WS URL.)
 
 ```bash
-# Clone the repository
 git clone https://github.com/0x3639/nom-indexer-go.git
 cd nom-indexer-go
 
-# Set local Postgres credentials (.env is gitignored)
+# Local Postgres credentials (.env is gitignored).
 cp .env.example .env
-# Edit .env and set POSTGRES_PASSWORD to a real value before continuing.
+# Edit .env and set POSTGRES_PASSWORD before continuing.
 
-# Start the indexer (uses default public node)
-docker-compose up -d
+docker compose up -d
 
-# View logs
+# Follow the indexer.
 docker logs nom-indexer -f
 
-# Check indexing progress
-docker exec nom-indexer-postgres psql -U "$POSTGRES_USER" -d "$POSTGRES_DB" -c "SELECT MAX(height) FROM momentums;"
+# Check sync progress.
+docker exec nom-indexer-postgres psql -U "$POSTGRES_USER" -d "$POSTGRES_DB" \
+  -c "SELECT MAX(height) FROM momentums;"
 ```
 
-### Using a Custom Node
+To point at a custom node, set `NODE_URL_WS` in `.env` before `docker compose up`.
 
-```bash
-# Set your node's WebSocket URL
-export NODE_URL_WS=wss://your-node.example.com:35998
+For full deploy/operate guidance see [`docs/operations/deploy.md`](docs/operations/deploy.md). For every env var see [`docs/config/reference.md`](docs/config/reference.md).
 
-# Start with custom node
-docker-compose up -d
-```
+## What's indexed
 
-## Configuration
+A normalized Postgres schema across 30 tables: momentums, account_blocks, balances, accounts (with genesis + flow metrics), tokens, token_mints, token_burns, pillars, pillar_updates, sentinels, stakes, delegations (history), fusions, projects, project_phases, votes, cumulative_rewards, reward_transactions, wrap/unwrap requests, bridge configuration (networks, network tokens, admin, guardians, orchestrator info, security info), and four daily snapshot tables. See [`docs/schema/`](docs/schema/index.md) for the full reference.
 
-Configuration can be set via environment variables or `config.yaml`:
+## Architecture at a glance
 
-| Variable | Description | Default |
-|----------|-------------|---------|
-| `NODE_URL_WS` | WebSocket URL for Zenon node | `wss://test.hc1node.com` |
-| `DATABASE_ADDRESS` | PostgreSQL host | `localhost` |
-| `DATABASE_PORT` | PostgreSQL port | `5432` |
-| `DATABASE_NAME` | Database name | `nom_indexer` |
-| `DATABASE_USERNAME` | Database user | `postgres` |
-| `DATABASE_PASSWORD` | Database password | - |
-| `MIGRATIONS_PATH` | Path to migrations folder | `migrations` |
+The service coordinates several independent work lanes so momentum processing is not blocked by slow side-tasks:
 
-## Architecture
+1. **Sync / subscription** — initial catch-up, then real-time WebSocket subscription with SDK reconnect callbacks.
+2. **Bridge sync loop** — every 1 minute: wrap/unwrap requests plus bridge configuration snapshot.
+3. **Cached data sync loop** — every 5 minutes: pillars, sentinels, accelerator projects + phases.
+4. **Cron loop** — voting activity + token holder counts (10m each), daily stat snapshots (1h).
+5. **Backfill** — optional one-shot on startup, plus the `cmd/backfill` tool for ad-hoc gap filling.
 
-The indexer uses independent goroutines for different sync operations to maximize throughput:
-
-```
-cmd/
-  indexer/main.go            - Entry point
-internal/
-  config/                    - Configuration via Viper (env vars + YAML)
-  database/                  - PostgreSQL connection pool (pgx)
-  indexer/
-    indexer.go               - Main loop with concurrent sync goroutines
-    processor.go             - Momentum and block processing
-    decoder.go               - ABI decoding for embedded contracts
-    embedded.go              - Contract event handlers
-    rewards.go               - Reward tracking
-  models/                    - Database models
-  repository/                - Data access layer (one per table)
-migrations/                  - SQL migration files (5 versions)
-```
-
-### Sync Architecture
-
-The indexer runs four independent goroutines:
-
-1. **Momentum Subscription** - Real-time processing of new blocks (~10s intervals)
-2. **Subscription Watchdog** - Monitors for stalls and triggers auto-reconnect
-3. **Bridge Sync Loop** - Syncs wrap/unwrap requests every 1 minute
-4. **Cached Data Sync Loop** - Updates pillars, sentinels, projects every 5 minutes
-
-This architecture ensures momentum processing is never blocked by slow API calls.
-
-### Resilient WebSocket Subscription
-
-The indexer includes automatic recovery for WebSocket subscription failures:
-
-- **Heartbeat monitoring**: Tracks the last momentum received
-- **Stall detection**: Watchdog checks every 30s; triggers reconnect if no momentum for 60s
-- **Auto-reconnect**: Exponential backoff (5s initial, 5min max) with catch-up sync
-- **Zero data loss**: Performs sync before reconnecting to ensure no missed blocks
-
-## Database Schema
-
-The indexer creates 17 tables across 5 migrations:
-
-| Table | Description |
-|-------|-------------|
-| `momentums` | Block headers |
-| `account_blocks` | Transactions with decoded method calls |
-| `balances` | Current token balances per address |
-| `pillars` | Pillar nodes |
-| `pillar_updates` | Pillar configuration history |
-| `sentinels` | Sentinel registrations |
-| `stakes` | Staking entries with cancel_id |
-| `delegations` | Delegation records |
-| `fusions` | Plasma fusion entries with cancel_id |
-| `tokens` | ZTS token registry |
-| `projects` | Accelerator-Z projects |
-| `project_phases` | Project phases |
-| `votes` | Pillar votes on projects |
-| `rewards` | Reward distributions |
-| `plasma_events` | Plasma fuse/cancel events |
-| `token_events` | Token mint/burn events |
-| `wrap_token_requests` | Bridge wrap operations |
-| `unwrap_token_requests` | Bridge unwrap operations |
-
-## Bridge Sync Logic
-
-The bridge sync uses intelligent paging to minimize API calls:
-
-- **Wrap requests**: Sync from newest to oldest unfinalized TX (wraps finalize sequentially)
-- **Unwrap requests**: Sync from newest to oldest unfinalized TX (unwraps finalize out-of-order, user-initiated)
-
-This ensures new transactions are captured while avoiding re-fetching already-finalized data.
+Deep dive: [`docs/architecture/overview.md`](docs/architecture/overview.md).
 
 ## Development
 
-### Building Locally
-
 ```bash
-# Requires Go 1.24+ with CGO enabled
-GOWORK=off go build ./cmd/indexer
+# Build locally (CGO required for secp256k1).
+GOWORK=off go build ./...
+
+# Unit tests.
+GOWORK=off go test ./...
+
+# Integration tests (require a running test Postgres).
+TEST_DATABASE_URL='postgres://postgres:<pw>@localhost:5432/nom_indexer_test?sslmode=disable' \
+  GOWORK=off go test -tags integration ./...
 ```
 
-### Running Tests
-
-```bash
-go test ./...
-```
-
-### Rebuilding After Changes
-
-```bash
-docker-compose up -d --build
-```
-
-### Backup and Restore
-
-```bash
-# Create a compressed backup (saved to ./backups/)
-./scripts/backup.sh
-
-# Create a backup at a specific path
-./scripts/backup.sh /path/to/mybackup.sql.gz
-
-# Restore from a backup (will prompt for confirmation)
-./scripts/restore.sh ./backups/nom_indexer_20250606_120000.sql.gz
-```
-
-## Technical Notes
-
-- **Go 1.24** required (dependency requirement from znn-sdk-go v0.1.11)
-- **CGO enabled** for secp256k1 cryptographic operations
-- **Multi-stage Docker build** for minimal runtime image (~50MB)
-- Uses **pgx/v5** with connection pooling for database performance
-- Real-time indexing via WebSocket subscriptions after initial sync
-- **ABI encoding** for computing voting IDs, stake cancel IDs, and fusion cancel IDs
-
-## Dependencies
-
-| Package | Version | Purpose |
-|---------|---------|---------|
-| [znn-sdk-go](https://github.com/0x3639/znn-sdk-go) | v0.1.11 | Zenon SDK with ABI encoding |
-| [pgx/v5](https://github.com/jackc/pgx) | v5.7.6 | PostgreSQL driver |
-| [golang-migrate](https://github.com/golang-migrate/migrate) | v4.19.1 | Database migrations |
-| [viper](https://github.com/spf13/viper) | v1.21.0 | Configuration |
-| [zap](https://github.com/uber-go/zap) | v1.27.1 | Structured logging |
-
-## API Documentation
-
-For information about the Zenon Network RPC APIs used by this indexer:
-
-- [Ledger API](https://docs.0x3639.com/developer/rpc-api/core/dual-ledger)
-- [Subscribe API](https://docs.0x3639.com/developer/rpc-api/core/subscribe)
-- [Embedded Contracts](https://docs.0x3639.com/developer/rpc-api/embedded/)
-
-## License
-
-MIT License - see [LICENSE](LICENSE) for details.
+Recipes for adding contract handlers, tables, or cron jobs are in [`docs/development/`](docs/development/setup.md).
 
 ## Contributing
 
-Contributions are welcome! Please open an issue or submit a pull request.
+Open an issue or pull request. See [`CONTRIBUTING.md`](CONTRIBUTING.md) for PR conventions.
+
+## License
+
+MIT — see [`LICENSE`](LICENSE).

@@ -16,6 +16,9 @@ func (i *Indexer) indexLiquidityReward(batch *pgx.Batch, block *api.AccountBlock
 		return
 	}
 
+	amount := safeBigIntToInt64(block.PairedAccountBlock.Amount, i.logger,
+		"liquidity reward amount overflow",
+		zap.String("hash", block.Hash.String()))
 	rt := &models.RewardTransaction{
 		Hash:              block.Hash.String(),
 		Address:           block.Address.String(),
@@ -23,7 +26,7 @@ func (i *Indexer) indexLiquidityReward(batch *pgx.Batch, block *api.AccountBlock
 		MomentumTimestamp: int64(m.TimestampUnix),
 		MomentumHeight:    int64(m.Height),
 		AccountHeight:     int64(block.Height),
-		Amount:            block.PairedAccountBlock.Amount.Int64(),
+		Amount:            amount,
 		TokenStandard:     block.PairedAccountBlock.TokenStandard.String(),
 		SourceAddress:     block.PairedAccountBlock.Address.String(),
 	}
@@ -50,6 +53,10 @@ func (i *Indexer) indexReceivedReward(ctx context.Context, batch *pgx.Batch, blo
 		return
 	}
 
+	amount := safeBigIntToInt64(block.PairedAccountBlock.Amount, i.logger,
+		"reward amount overflow",
+		zap.String("hash", block.Hash.String()),
+		zap.String("source", sourceAddress))
 	rt := &models.RewardTransaction{
 		Hash:              block.Hash.String(),
 		Address:           receiverAddress,
@@ -57,7 +64,7 @@ func (i *Indexer) indexReceivedReward(ctx context.Context, batch *pgx.Batch, blo
 		MomentumTimestamp: int64(m.TimestampUnix),
 		MomentumHeight:    int64(m.Height),
 		AccountHeight:     int64(block.Height),
-		Amount:            block.PairedAccountBlock.Amount.Int64(),
+		Amount:            amount,
 		TokenStandard:     block.PairedAccountBlock.TokenStandard.String(),
 		SourceAddress:     sourceAddress,
 	}

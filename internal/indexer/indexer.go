@@ -329,6 +329,10 @@ func (i *Indexer) updateCachedData(ctx context.Context) error {
 	pillars := make([]*models.Pillar, 0, len(pillarList.List))
 	nameToOwner := make(map[string]string, len(pillarList.List))
 	for _, p := range pillarList.List {
+		weight := safeBigIntToInt64(p.Weight, i.logger,
+			"pillar weight overflow",
+			zap.String("name", p.Name),
+			zap.String("owner", p.OwnerAddress.String()))
 		pillar := &models.Pillar{
 			OwnerAddress:                 p.OwnerAddress.String(),
 			ProducerAddress:              p.ProducerAddress.String(),
@@ -340,7 +344,7 @@ func (i *Indexer) updateCachedData(ctx context.Context) error {
 			IsRevocable:                  p.IsRevocable,
 			RevokeCooldown:               int(p.RevokeCooldown),
 			RevokeTimestamp:              p.RevokeTimestamp,
-			Weight:                       p.Weight.Int64(),
+			Weight:                       weight,
 			EpochProducedMomentums:       int16(p.CurrentStats.ProducedMomentums),
 			EpochExpectedMomentums:       int16(p.CurrentStats.ExpectedMomentums),
 		}
@@ -428,6 +432,13 @@ func (i *Indexer) updateCachedData(ctx context.Context) error {
 				totalVotes = int16(p.Votes.Total)
 			}
 
+			znnFundsNeeded := safeBigIntToInt64(p.ZnnFundsNeeded, i.logger,
+				"project znn_funds_needed overflow",
+				zap.String("projectID", p.Id.String()))
+			qsrFundsNeeded := safeBigIntToInt64(p.QsrFundsNeeded, i.logger,
+				"project qsr_funds_needed overflow",
+				zap.String("projectID", p.Id.String()))
+
 			project := &models.Project{
 				ID:                  p.Id.String(),
 				VotingID:            votingID,
@@ -435,8 +446,8 @@ func (i *Indexer) updateCachedData(ctx context.Context) error {
 				Name:                p.Name,
 				Description:         p.Description,
 				URL:                 p.Url,
-				ZnnFundsNeeded:      p.ZnnFundsNeeded.Int64(),
-				QsrFundsNeeded:      p.QsrFundsNeeded.Int64(),
+				ZnnFundsNeeded:      znnFundsNeeded,
+				QsrFundsNeeded:      qsrFundsNeeded,
 				CreationTimestamp:   p.CreationTimestamp,
 				LastUpdateTimestamp: p.LastUpdateTimestamp,
 				Status:              int16(p.Status),
@@ -465,6 +476,13 @@ func (i *Indexer) updateCachedData(ctx context.Context) error {
 					phaseTotalVotes = int16(phase.Votes.Total)
 				}
 
+				phaseZnnFundsNeeded := safeBigIntToInt64(phase.Phase.ZnnFundsNeeded, i.logger,
+					"phase znn_funds_needed overflow",
+					zap.String("phaseID", phase.Phase.Id.String()))
+				phaseQsrFundsNeeded := safeBigIntToInt64(phase.Phase.QsrFundsNeeded, i.logger,
+					"phase qsr_funds_needed overflow",
+					zap.String("phaseID", phase.Phase.Id.String()))
+
 				projectPhase := &models.ProjectPhase{
 					ID:                phase.Phase.Id.String(),
 					ProjectID:         p.Id.String(),
@@ -472,8 +490,8 @@ func (i *Indexer) updateCachedData(ctx context.Context) error {
 					Name:              phase.Phase.Name,
 					Description:       phase.Phase.Description,
 					URL:               phase.Phase.Url,
-					ZnnFundsNeeded:    phase.Phase.ZnnFundsNeeded.Int64(),
-					QsrFundsNeeded:    phase.Phase.QsrFundsNeeded.Int64(),
+					ZnnFundsNeeded:    phaseZnnFundsNeeded,
+					QsrFundsNeeded:    phaseQsrFundsNeeded,
 					CreationTimestamp: phase.Phase.CreationTimestamp,
 					AcceptedTimestamp: phase.Phase.AcceptedTimestamp,
 					Status:            int16(phase.Phase.Status),
@@ -744,6 +762,12 @@ func (i *Indexer) updateBridgeWrapRequests(ctx context.Context) error {
 		reachedStopHeight := false
 
 		for _, w := range wrapList.List {
+			amount := safeBigIntToInt64(w.Amount, i.logger,
+				"wrap amount overflow",
+				zap.String("id", w.Id.String()))
+			fee := safeBigIntToInt64(w.Fee, i.logger,
+				"wrap fee overflow",
+				zap.String("id", w.Id.String()))
 			wrapRequest := &models.WrapTokenRequest{
 				ID:                      w.Id.String(),
 				NetworkClass:            int(w.NetworkClass),
@@ -751,8 +775,8 @@ func (i *Indexer) updateBridgeWrapRequests(ctx context.Context) error {
 				ToAddress:               w.ToAddress,
 				TokenStandard:           w.TokenStandard.String(),
 				TokenAddress:            w.TokenAddress,
-				Amount:                  w.Amount.Int64(),
-				Fee:                     w.Fee.Int64(),
+				Amount:                  amount,
+				Fee:                     fee,
 				Signature:               w.Signature,
 				CreationMomentumHeight:  int64(w.CreationMomentumHeight),
 				ConfirmationsToFinality: int(w.ConfirmationsToFinality),
@@ -812,6 +836,10 @@ func (i *Indexer) updateBridgeUnwrapRequests(ctx context.Context) error {
 		reachedStopHeight := false
 
 		for _, u := range unwrapList.List {
+			amount := safeBigIntToInt64(u.Amount, i.logger,
+				"unwrap amount overflow",
+				zap.String("txHash", u.TransactionHash.String()),
+				zap.Int64("logIndex", int64(u.LogIndex)))
 			unwrapRequest := &models.UnwrapTokenRequest{
 				TransactionHash:            u.TransactionHash.String(),
 				LogIndex:                   int64(u.LogIndex),
@@ -820,7 +848,7 @@ func (i *Indexer) updateBridgeUnwrapRequests(ctx context.Context) error {
 				ToAddress:                  u.ToAddress.String(),
 				TokenStandard:              u.TokenStandard.String(),
 				TokenAddress:               u.TokenAddress,
-				Amount:                     u.Amount.Int64(),
+				Amount:                     amount,
 				Signature:                  u.Signature,
 				RegistrationMomentumHeight: int64(u.RegistrationMomentumHeight),
 				Redeemed:                   u.Redeemed > 0,

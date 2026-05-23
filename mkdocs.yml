@@ -1,0 +1,193 @@
+site_name: nom-indexer-go
+site_description: Documentation for the nom-indexer-go Zenon Network indexer.
+site_url: https://0x3639.github.io/nom-indexer-go/
+repo_url: https://github.com/0x3639/nom-indexer-go
+repo_name: 0x3639/nom-indexer-go
+edit_uri: edit/main/docs/
+
+theme:
+  name: material
+  language: en
+  features:
+    - navigation.sections
+    - navigation.indexes
+    - navigation.top
+    - navigation.tracking
+    - search.suggest
+    - search.highlight
+    - content.code.copy
+    - content.code.annotate
+    - content.action.edit
+    - toc.follow
+  palette:
+    - media: "(prefers-color-scheme: light)"
+      scheme: default
+      primary: indigo
+      accent: indigo
+      toggle:
+        icon: material/weather-night
+        name: Switch to dark mode
+    - media: "(prefers-color-scheme: dark)"
+      scheme: slate
+      primary: indigo
+      accent: indigo
+      toggle:
+        icon: material/weather-sunny
+        name: Switch to light mode
+  icon:
+    repo: fontawesome/brands/github
+
+plugins:
+  - search
+  - mermaid2
+  - include-markdown
+  - swagger-ui-tag
+  # mkdocstrings-go is optional at scaffold time; commented out until doc.go
+  # files exist in every internal package. Re-enable once they're added.
+  # - mkdocstrings:
+  #     handlers:
+  #       go:
+  #         paths: [..]
+
+markdown_extensions:
+  - admonition
+  - attr_list
+  - md_in_html
+  - tables
+  - footnotes
+  - toc:
+      permalink: true
+  - pymdownx.highlight:
+      anchor_linenums: true
+      line_spans: __span
+      pygments_lang_class: true
+  - pymdownx.inlinehilite
+  - pymdownx.snippets
+  - pymdownx.superfences:
+      custom_fences:
+        - name: mermaid
+          class: mermaid
+          format: !!python/name:mermaid2.fence_mermaid_custom
+  - pymdownx.tabbed:
+      alternate_style: true
+  - pymdownx.details
+  - pymdownx.tasklist:
+      custom_checkbox: true
+
+extra:
+  social:
+    - icon: fontawesome/brands/github
+      link: https://github.com/0x3639/nom-indexer-go
+
+nav:
+  - Home: index.md
+  - Architecture:
+    - Overview: architecture/overview.md
+    - Data flow: architecture/data-flow.md
+    - Sync and recovery: architecture/sync-and-recovery.md
+    - Cron and snapshots: architecture/cron-and-snapshots.md
+    - Bridge sync: architecture/bridge-sync.md
+  - Schema:
+    - Overview: schema/index.md
+    - Conventions: schema/conventions.md
+    - ERD: schema/erd.md
+    - Generated reference: schema/_generated.md
+    - Core:
+      - momentums: schema/momentums.md
+      - accounts: schema/accounts.md
+      - balances: schema/balances.md
+      - account_blocks: schema/account_blocks.md
+      - tokens: schema/tokens.md
+      - token_mints: schema/token_mints.md
+      - token_burns: schema/token_burns.md
+    - Pillars and delegation:
+      - pillars: schema/pillars.md
+      - pillar_updates: schema/pillar_updates.md
+      - delegations: schema/delegations.md
+    - Sentinels, stakes, plasma:
+      - sentinels: schema/sentinels.md
+      - stakes: schema/stakes.md
+      - fusions: schema/fusions.md
+    - Accelerator-Z:
+      - projects: schema/projects.md
+      - project_phases: schema/project_phases.md
+      - votes: schema/votes.md
+    - Rewards:
+      - cumulative_rewards: schema/cumulative_rewards.md
+      - reward_transactions: schema/reward_transactions.md
+    - Bridge:
+      - wrap_token_requests: schema/wrap_token_requests.md
+      - unwrap_token_requests: schema/unwrap_token_requests.md
+      - bridge_networks: schema/bridge_networks.md
+      - bridge_network_tokens: schema/bridge_network_tokens.md
+      - bridge_admin: schema/bridge_admin.md
+      - bridge_guardians: schema/bridge_guardians.md
+      - bridge_orchestrator_info: schema/bridge_orchestrator_info.md
+      - bridge_security_info: schema/bridge_security_info.md
+    - Daily snapshots:
+      - network_stat_histories: schema/network_stat_histories.md
+      - token_stat_histories: schema/token_stat_histories.md
+      - pillar_stat_histories: schema/pillar_stat_histories.md
+      - bridge_stat_histories: schema/bridge_stat_histories.md
+  - Indexing:
+    - Overview: indexing/index.md
+    - Pillar contract: indexing/pillar-contract.md
+    - Sentinel contract: indexing/sentinel-contract.md
+    - Stake contract: indexing/stake-contract.md
+    - Plasma contract: indexing/plasma-contract.md
+    - Accelerator-Z contract: indexing/accelerator-contract.md
+    - Token contract: indexing/token-contract.md
+    - Liquidity contract: indexing/liquidity-contract.md
+    - Bridge contract: indexing/bridge-contract.md
+    - Rewards: indexing/rewards.md
+    - ABI decoding: indexing/abi-decoding.md
+  - Operations:
+    - Deploy: operations/deploy.md
+    - Monitoring: operations/monitoring.md
+    - Backfill: operations/backfill.md
+    - Backup and restore: operations/backup-restore.md
+    - Failure modes: operations/failure-modes.md
+    - Scaling: operations/scaling.md
+    - Runbook: operations/runbook.md
+  - Development:
+    - Setup: development/setup.md
+    - Project layout: development/project-layout.md
+    - Add a contract handler: development/add-contract-handler.md
+    - Add a table: development/add-table.md
+    - Add a cron job: development/add-cron-job.md
+    - Coding style: development/coding-style.md
+    - CI: development/ci.md
+    - Authoring docs: development/docs.md
+  - Testing:
+    - Strategy: testing/strategy.md
+    - Integration database: testing/integration-db.md
+    - Writing tests: testing/writing-tests.md
+  - Config:
+    - Reference: config/reference.md
+    - Cron intervals: config/cron-intervals.md
+    - Node selection: config/node-selection.md
+  - Migrations:
+    - Guide: migrations/guide.md
+    - Rollback: migrations/rollback.md
+    - History: migrations/history.md
+  - Code reference:
+    - Overview: code-reference/index.md
+    - internal/indexer: code-reference/indexer.md
+    - internal/repository: code-reference/repository.md
+    - internal/models: code-reference/models.md
+    - internal/config: code-reference/config.md
+    - internal/database: code-reference/database.md
+  - API:
+    - Overview: api/index.md
+    - Authentication: api/auth.md
+    - Pagination: api/pagination.md
+  - MCP:
+    - Overview: mcp/index.md
+    - Resources: mcp/resources.md
+    - Tools: mcp/tools.md
+  - Reference:
+    - Glossary: reference/glossary.md
+    - Addresses: reference/addresses.md
+    - FAQ: reference/faq.md
+    - Known issues: reference/known-issues.md
+    - External links: reference/external-links.md
