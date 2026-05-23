@@ -81,6 +81,15 @@ func New(d Deps) http.Handler {
 		r.Get("/pillars/{name}/delegators", handlers.PillarsDelegators(d.Repos.Pillar))
 
 		r.Get("/sentinels", handlers.SentinelsList(d.Repos.Sentinel))
+
+		r.Get("/stakes", handlers.StakesList(d.Repos.Stake))
+		r.Get("/accounts/{address}/stakes", handlers.StakesByAddress(d.Repos.Stake))
+
+		r.Get("/fusions", handlers.FusionsList(d.Repos.Fusion))
+		r.Get("/accounts/{address}/fusions", handlers.FusionsByAddress(d.Repos.Fusion))
+
+		r.Get("/accounts/{address}/rewards", handlers.RewardsHistory(d.Repos.Reward))
+		r.Get("/accounts/{address}/rewards/cumulative", handlers.RewardsCumulative(d.Repos.Reward))
 	})
 
 	return r

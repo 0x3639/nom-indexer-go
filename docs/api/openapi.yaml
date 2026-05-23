@@ -410,6 +410,97 @@ components:
         pagination:
           $ref: '#/components/schemas/Pagination'
 
+    Stake:
+      type: object
+      required: [id, address, start_timestamp, expiration_timestamp, znn_amount, duration_in_sec, is_active]
+      properties:
+        id: { type: string }
+        address: { type: string }
+        start_timestamp: { type: integer, format: int64 }
+        expiration_timestamp: { type: integer, format: int64 }
+        znn_amount: { $ref: '#/components/schemas/Amount' }
+        duration_in_sec: { type: integer }
+        is_active: { type: boolean }
+        cancel_id: { type: string }
+
+    StakeList:
+      type: object
+      required: [data, pagination]
+      properties:
+        data: { type: array, items: { $ref: '#/components/schemas/Stake' } }
+        pagination: { $ref: '#/components/schemas/Pagination' }
+
+    Fusion:
+      type: object
+      required:
+        - id
+        - address
+        - beneficiary
+        - momentum_hash
+        - momentum_timestamp
+        - momentum_height
+        - qsr_amount
+        - expiration_height
+        - is_active
+      properties:
+        id: { type: string }
+        address: { type: string }
+        beneficiary: { type: string }
+        momentum_hash: { type: string }
+        momentum_timestamp: { type: integer, format: int64 }
+        momentum_height: { type: integer, format: int64 }
+        qsr_amount: { $ref: '#/components/schemas/Amount' }
+        expiration_height: { type: integer, format: int64 }
+        is_active: { type: boolean }
+        cancel_id: { type: string }
+
+    FusionList:
+      type: object
+      required: [data, pagination]
+      properties:
+        data: { type: array, items: { $ref: '#/components/schemas/Fusion' } }
+        pagination: { $ref: '#/components/schemas/Pagination' }
+
+    CumulativeReward:
+      type: object
+      required: [address, reward_type, amount, token_standard]
+      properties:
+        address: { type: string }
+        reward_type:
+          type: string
+          enum: [Unknown, Stake, Delegation, Liquidity, Sentinel, Pillar]
+        amount: { $ref: '#/components/schemas/Amount' }
+        token_standard: { type: string }
+
+    CumulativeRewardList:
+      type: object
+      required: [data]
+      properties:
+        data: { type: array, items: { $ref: '#/components/schemas/CumulativeReward' } }
+
+    RewardTransaction:
+      type: object
+      required: [hash, address, reward_type, momentum_timestamp, momentum_height, account_height, amount, token_standard]
+      properties:
+        hash: { type: string }
+        address: { type: string }
+        reward_type:
+          type: string
+          enum: [Unknown, Stake, Delegation, Liquidity, Sentinel, Pillar]
+        momentum_timestamp: { type: integer, format: int64 }
+        momentum_height: { type: integer, format: int64 }
+        account_height: { type: integer, format: int64 }
+        amount: { $ref: '#/components/schemas/Amount' }
+        token_standard: { type: string }
+        source_address: { type: string }
+
+    RewardTransactionList:
+      type: object
+      required: [data, pagination]
+      properties:
+        data: { type: array, items: { $ref: '#/components/schemas/RewardTransaction' } }
+        pagination: { $ref: '#/components/schemas/Pagination' }
+
     AccountBlockList:
       type: object
       required: [data, pagination]
@@ -862,6 +953,149 @@ paths:
                 $ref: '#/components/schemas/Problem'
         '429':
           $ref: '#/components/responses/RateLimited'
+
+  /api/v1/stakes:
+    get:
+      operationId: listStakes
+      summary: List stake entries
+      tags: [stakes]
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: '#/components/parameters/PageParam'
+        - $ref: '#/components/parameters/PageSizeParam'
+        - name: include_inactive
+          in: query
+          schema: { type: boolean, default: false }
+      responses:
+        '200':
+          description: Paginated stake list.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/StakeList' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '429': { $ref: '#/components/responses/RateLimited' }
+
+  /api/v1/accounts/{address}/stakes:
+    get:
+      operationId: listAccountStakes
+      summary: List stakes owned by an address
+      tags: [accounts]
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: address
+          in: path
+          required: true
+          schema: { type: string }
+        - $ref: '#/components/parameters/PageParam'
+        - $ref: '#/components/parameters/PageSizeParam'
+        - name: include_inactive
+          in: query
+          schema: { type: boolean, default: false }
+      responses:
+        '200':
+          description: Paginated stake list.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/StakeList' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '429': { $ref: '#/components/responses/RateLimited' }
+
+  /api/v1/fusions:
+    get:
+      operationId: listFusions
+      summary: List plasma fusion entries
+      tags: [fusions]
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: '#/components/parameters/PageParam'
+        - $ref: '#/components/parameters/PageSizeParam'
+        - name: include_inactive
+          in: query
+          schema: { type: boolean, default: false }
+      responses:
+        '200':
+          description: Paginated fusion list.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/FusionList' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '429': { $ref: '#/components/responses/RateLimited' }
+
+  /api/v1/accounts/{address}/fusions:
+    get:
+      operationId: listAccountFusions
+      summary: List fusions for an address (funder or beneficiary)
+      tags: [accounts]
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: address
+          in: path
+          required: true
+          schema: { type: string }
+        - $ref: '#/components/parameters/PageParam'
+        - $ref: '#/components/parameters/PageSizeParam'
+        - name: include_inactive
+          in: query
+          schema: { type: boolean, default: false }
+      responses:
+        '200':
+          description: Paginated fusion list.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/FusionList' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '429': { $ref: '#/components/responses/RateLimited' }
+
+  /api/v1/accounts/{address}/rewards:
+    get:
+      operationId: listAccountRewards
+      summary: Per-event reward history for an address
+      tags: [accounts]
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: address
+          in: path
+          required: true
+          schema: { type: string }
+        - $ref: '#/components/parameters/PageParam'
+        - $ref: '#/components/parameters/PageSizeParam'
+      responses:
+        '200':
+          description: Paginated reward-transaction list.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/RewardTransactionList' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '429': { $ref: '#/components/responses/RateLimited' }
+
+  /api/v1/accounts/{address}/rewards/cumulative:
+    get:
+      operationId: getAccountCumulativeRewards
+      summary: Cumulative reward totals for an address
+      description: |
+        Returns one row per (reward_type, token_standard) tuple — the
+        lifetime sum the indexer has rolled up.
+      tags: [accounts]
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: address
+          in: path
+          required: true
+          schema: { type: string }
+      responses:
+        '200':
+          description: Cumulative reward totals.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/CumulativeRewardList' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '429': { $ref: '#/components/responses/RateLimited' }
 
   /api/v1/sentinels:
     get:
