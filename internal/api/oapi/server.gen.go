@@ -58,6 +58,42 @@ func (e SortParam) Valid() bool {
 	}
 }
 
+// Defines values for ListAccountBlocksParamsSort.
+const (
+	ListAccountBlocksParamsSortAsc  ListAccountBlocksParamsSort = "asc"
+	ListAccountBlocksParamsSortDesc ListAccountBlocksParamsSort = "desc"
+)
+
+// Valid indicates whether the value is a known member of the ListAccountBlocksParamsSort enum.
+func (e ListAccountBlocksParamsSort) Valid() bool {
+	switch e {
+	case ListAccountBlocksParamsSortAsc:
+		return true
+	case ListAccountBlocksParamsSortDesc:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for ListAccountTransactionsParamsSort.
+const (
+	ListAccountTransactionsParamsSortAsc  ListAccountTransactionsParamsSort = "asc"
+	ListAccountTransactionsParamsSortDesc ListAccountTransactionsParamsSort = "desc"
+)
+
+// Valid indicates whether the value is a known member of the ListAccountTransactionsParamsSort enum.
+func (e ListAccountTransactionsParamsSort) Valid() bool {
+	switch e {
+	case ListAccountTransactionsParamsSortAsc:
+		return true
+	case ListAccountTransactionsParamsSortDesc:
+		return true
+	default:
+		return false
+	}
+}
+
 // Defines values for ListMomentumsParamsSort.
 const (
 	ListMomentumsParamsSortAsc  ListMomentumsParamsSort = "asc"
@@ -115,6 +151,39 @@ type Account struct {
 	// JSON string. Strings avoid JavaScript Number precision loss for
 	// values above 2^53-1 — ZNN total supply already exceeds that.
 	ZnnSent Amount `json:"znn_sent"`
+}
+
+// AccountBlock A transaction (account-block in Zenon's dual-ledger model). One
+// block is either a send (block_type 1..4) or a receive (5..8); a
+// complete transaction is the matched (send, receive) pair.
+type AccountBlock struct {
+	Address string `json:"address"`
+
+	// Amount Raw int64 token amount (no decimals applied) serialized as a
+	// JSON string. Strings avoid JavaScript Number precision loss for
+	// values above 2^53-1 — ZNN total supply already exceeds that.
+	Amount       Amount  `json:"amount"`
+	BlockType    int     `json:"block_type"`
+	Data         *string `json:"data,omitempty"`
+	DescendantOf *string `json:"descendant_of,omitempty"`
+	Hash         string  `json:"hash"`
+	Height       int64   `json:"height"`
+
+	// Input Decoded contract inputs (JSON object) when the indexer recognized the method.
+	Input              *map[string]string `json:"input,omitempty"`
+	Method             *string            `json:"method,omitempty"`
+	MomentumHash       string             `json:"momentum_hash"`
+	MomentumHeight     int64              `json:"momentum_height"`
+	MomentumTimestamp  int64              `json:"momentum_timestamp"`
+	PairedAccountBlock *string            `json:"paired_account_block,omitempty"`
+	ToAddress          *string            `json:"to_address,omitempty"`
+	TokenStandard      *string            `json:"token_standard,omitempty"`
+}
+
+// AccountBlockList defines model for AccountBlockList.
+type AccountBlockList struct {
+	Data       []AccountBlock `json:"data"`
+	Pagination Pagination     `json:"pagination"`
 }
 
 // Amount Raw int64 token amount (no decimals applied) serialized as a
@@ -266,6 +335,36 @@ type Unauthorized = Problem
 // bearerAuthContextKey is the context key for bearerAuth security scheme
 type bearerAuthContextKey string
 
+// ListAccountBlocksParams defines parameters for ListAccountBlocks.
+type ListAccountBlocksParams struct {
+	// Page 1-based page number. Defaults to 1. Out-of-range clamped silently.
+	Page *PageParam `form:"page,omitempty" json:"page,omitempty"`
+
+	// PageSize Items per page. Default 50, maximum 200. Out-of-range clamped silently.
+	PageSize *PageSizeParam `form:"page_size,omitempty" json:"page_size,omitempty"`
+
+	// Sort Sort direction over the endpoint's documented sort column. Defaults vary per endpoint.
+	Sort *ListAccountBlocksParamsSort `form:"sort,omitempty" json:"sort,omitempty"`
+}
+
+// ListAccountBlocksParamsSort defines parameters for ListAccountBlocks.
+type ListAccountBlocksParamsSort string
+
+// ListAccountTransactionsParams defines parameters for ListAccountTransactions.
+type ListAccountTransactionsParams struct {
+	// Page 1-based page number. Defaults to 1. Out-of-range clamped silently.
+	Page *PageParam `form:"page,omitempty" json:"page,omitempty"`
+
+	// PageSize Items per page. Default 50, maximum 200. Out-of-range clamped silently.
+	PageSize *PageSizeParam `form:"page_size,omitempty" json:"page_size,omitempty"`
+
+	// Sort Sort direction over the endpoint's documented sort column. Defaults vary per endpoint.
+	Sort *ListAccountTransactionsParamsSort `form:"sort,omitempty" json:"sort,omitempty"`
+}
+
+// ListAccountTransactionsParamsSort defines parameters for ListAccountTransactions.
+type ListAccountTransactionsParamsSort string
+
 // ListMomentumsParams defines parameters for ListMomentums.
 type ListMomentumsParams struct {
 	// Page 1-based page number. Defaults to 1. Out-of-range clamped silently.
@@ -301,12 +400,21 @@ type ListTokenHoldersParams struct {
 
 // ServerInterface represents all server handlers.
 type ServerInterface interface {
+	// List account-blocks (transactions)
+	// (GET /api/v1/account_blocks)
+	ListAccountBlocks(w http.ResponseWriter, r *http.Request, params ListAccountBlocksParams)
+	// Get an account-block by hash
+	// (GET /api/v1/account_blocks/{hash})
+	GetAccountBlock(w http.ResponseWriter, r *http.Request, hash string)
 	// Get account info
 	// (GET /api/v1/accounts/{address})
 	GetAccount(w http.ResponseWriter, r *http.Request, address string)
 	// List balances for an account
 	// (GET /api/v1/accounts/{address}/balances)
 	GetAccountBalances(w http.ResponseWriter, r *http.Request, address string)
+	// List transactions involving an address
+	// (GET /api/v1/accounts/{address}/transactions)
+	ListAccountTransactions(w http.ResponseWriter, r *http.Request, address string, params ListAccountTransactionsParams)
 	// List momentums
 	// (GET /api/v1/momentums)
 	ListMomentums(w http.ResponseWriter, r *http.Request, params ListMomentumsParams)
@@ -341,6 +449,103 @@ type ServerInterfaceWrapper struct {
 }
 
 type MiddlewareFunc func(http.Handler) http.Handler
+
+// ListAccountBlocks operation middleware
+func (siw *ServerInterfaceWrapper) ListAccountBlocks(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+	_ = err
+
+	ctx := r.Context()
+
+	ctx = context.WithValue(ctx, BearerAuthScopes, []string{})
+
+	r = r.WithContext(ctx)
+
+	// Parameter object where we will unmarshal all parameters from the context
+	var params ListAccountBlocksParams
+
+	// ------------- Optional query parameter "page" -------------
+
+	err = runtime.BindQueryParameterWithOptions("form", true, false, "page", r.URL.Query(), &params.Page, runtime.BindQueryParameterOptions{Type: "integer", Format: ""})
+	if err != nil {
+		var requiredError *runtime.RequiredParameterError
+		if errors.As(err, &requiredError) {
+			siw.ErrorHandlerFunc(w, r, &RequiredParamError{ParamName: "page"})
+		} else {
+			siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "page", Err: err})
+		}
+		return
+	}
+
+	// ------------- Optional query parameter "page_size" -------------
+
+	err = runtime.BindQueryParameterWithOptions("form", true, false, "page_size", r.URL.Query(), &params.PageSize, runtime.BindQueryParameterOptions{Type: "integer", Format: ""})
+	if err != nil {
+		var requiredError *runtime.RequiredParameterError
+		if errors.As(err, &requiredError) {
+			siw.ErrorHandlerFunc(w, r, &RequiredParamError{ParamName: "page_size"})
+		} else {
+			siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "page_size", Err: err})
+		}
+		return
+	}
+
+	// ------------- Optional query parameter "sort" -------------
+
+	err = runtime.BindQueryParameterWithOptions("form", true, false, "sort", r.URL.Query(), &params.Sort, runtime.BindQueryParameterOptions{Type: "string", Format: ""})
+	if err != nil {
+		var requiredError *runtime.RequiredParameterError
+		if errors.As(err, &requiredError) {
+			siw.ErrorHandlerFunc(w, r, &RequiredParamError{ParamName: "sort"})
+		} else {
+			siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "sort", Err: err})
+		}
+		return
+	}
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.ListAccountBlocks(w, r, params)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// GetAccountBlock operation middleware
+func (siw *ServerInterfaceWrapper) GetAccountBlock(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+	_ = err
+
+	// ------------- Path parameter "hash" -------------
+	var hash string
+
+	err = runtime.BindStyledParameterWithOptions("simple", "hash", r.PathValue("hash"), &hash, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: ""})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "hash", Err: err})
+		return
+	}
+
+	ctx := r.Context()
+
+	ctx = context.WithValue(ctx, BearerAuthScopes, []string{})
+
+	r = r.WithContext(ctx)
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.GetAccountBlock(w, r, hash)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
 
 // GetAccount operation middleware
 func (siw *ServerInterfaceWrapper) GetAccount(w http.ResponseWriter, r *http.Request) {
@@ -397,6 +602,80 @@ func (siw *ServerInterfaceWrapper) GetAccountBalances(w http.ResponseWriter, r *
 
 	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		siw.Handler.GetAccountBalances(w, r, address)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// ListAccountTransactions operation middleware
+func (siw *ServerInterfaceWrapper) ListAccountTransactions(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+	_ = err
+
+	// ------------- Path parameter "address" -------------
+	var address string
+
+	err = runtime.BindStyledParameterWithOptions("simple", "address", r.PathValue("address"), &address, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: ""})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "address", Err: err})
+		return
+	}
+
+	ctx := r.Context()
+
+	ctx = context.WithValue(ctx, BearerAuthScopes, []string{})
+
+	r = r.WithContext(ctx)
+
+	// Parameter object where we will unmarshal all parameters from the context
+	var params ListAccountTransactionsParams
+
+	// ------------- Optional query parameter "page" -------------
+
+	err = runtime.BindQueryParameterWithOptions("form", true, false, "page", r.URL.Query(), &params.Page, runtime.BindQueryParameterOptions{Type: "integer", Format: ""})
+	if err != nil {
+		var requiredError *runtime.RequiredParameterError
+		if errors.As(err, &requiredError) {
+			siw.ErrorHandlerFunc(w, r, &RequiredParamError{ParamName: "page"})
+		} else {
+			siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "page", Err: err})
+		}
+		return
+	}
+
+	// ------------- Optional query parameter "page_size" -------------
+
+	err = runtime.BindQueryParameterWithOptions("form", true, false, "page_size", r.URL.Query(), &params.PageSize, runtime.BindQueryParameterOptions{Type: "integer", Format: ""})
+	if err != nil {
+		var requiredError *runtime.RequiredParameterError
+		if errors.As(err, &requiredError) {
+			siw.ErrorHandlerFunc(w, r, &RequiredParamError{ParamName: "page_size"})
+		} else {
+			siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "page_size", Err: err})
+		}
+		return
+	}
+
+	// ------------- Optional query parameter "sort" -------------
+
+	err = runtime.BindQueryParameterWithOptions("form", true, false, "sort", r.URL.Query(), &params.Sort, runtime.BindQueryParameterOptions{Type: "string", Format: ""})
+	if err != nil {
+		var requiredError *runtime.RequiredParameterError
+		if errors.As(err, &requiredError) {
+			siw.ErrorHandlerFunc(w, r, &RequiredParamError{ParamName: "sort"})
+		} else {
+			siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "sort", Err: err})
+		}
+		return
+	}
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.ListAccountTransactions(w, r, address, params)
 	}))
 
 	for _, middleware := range siw.HandlerMiddlewares {
@@ -822,8 +1101,11 @@ func HandlerWithOptions(si ServerInterface, options StdHTTPServerOptions) http.H
 		ErrorHandlerFunc:   options.ErrorHandlerFunc,
 	}
 
+	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/api/v1/account_blocks", wrapper.ListAccountBlocks)
+	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/api/v1/account_blocks/{hash}", wrapper.GetAccountBlock)
 	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/api/v1/accounts/{address}", wrapper.GetAccount)
 	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/api/v1/accounts/{address}/balances", wrapper.GetAccountBalances)
+	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/api/v1/accounts/{address}/transactions", wrapper.ListAccountTransactions)
 	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/api/v1/momentums", wrapper.ListMomentums)
 	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/api/v1/momentums/latest", wrapper.GetLatestMomentum)
 	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/api/v1/momentums/{height}", wrapper.GetMomentumByHeight)
@@ -841,63 +1123,71 @@ func HandlerWithOptions(si ServerInterface, options StdHTTPServerOptions) http.H
 // const string: with thousands of chunks the chained `+` fold is several
 // times slower for the Go compiler than parsing a slice literal.
 var swaggerSpec = []string{
-	"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",
+	"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",
+	"/w==",
 }
 
 // decodeSpec returns the embedded OpenAPI spec as raw JSON bytes,

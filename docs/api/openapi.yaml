@@ -293,6 +293,52 @@ components:
         holder_count: { type: integer, format: int64 }
         transaction_count: { type: integer, format: int64 }
 
+    AccountBlock:
+      type: object
+      description: |
+        A transaction (account-block in Zenon's dual-ledger model). One
+        block is either a send (block_type 1..4) or a receive (5..8); a
+        complete transaction is the matched (send, receive) pair.
+      required:
+        - hash
+        - momentum_hash
+        - momentum_timestamp
+        - momentum_height
+        - block_type
+        - height
+        - address
+        - amount
+      properties:
+        hash: { type: string }
+        momentum_hash: { type: string }
+        momentum_timestamp: { type: integer, format: int64 }
+        momentum_height: { type: integer, format: int64 }
+        block_type: { type: integer, examples: [2] }
+        height: { type: integer, format: int64 }
+        address: { type: string }
+        to_address: { type: string }
+        amount: { $ref: '#/components/schemas/Amount' }
+        token_standard: { type: string }
+        data: { type: string }
+        method: { type: string }
+        input:
+          description: Decoded contract inputs (JSON object) when the indexer recognized the method.
+          type: object
+          additionalProperties: { type: string }
+        paired_account_block: { type: string }
+        descendant_of: { type: string }
+
+    AccountBlockList:
+      type: object
+      required: [data, pagination]
+      properties:
+        data:
+          type: array
+          items:
+            $ref: '#/components/schemas/AccountBlock'
+        pagination:
+          $ref: '#/components/schemas/Pagination'
+
     TokenList:
       type: object
       required: [data, pagination]
@@ -472,6 +518,89 @@ paths:
                 $ref: '#/components/schemas/BalanceList'
         '401':
           $ref: '#/components/responses/Unauthorized'
+        '429':
+          $ref: '#/components/responses/RateLimited'
+
+  /api/v1/accounts/{address}/transactions:
+    get:
+      operationId: listAccountTransactions
+      summary: List transactions involving an address
+      description: |
+        Returns account-blocks where the address is either sender or
+        recipient. Sorted by momentum_height; default desc.
+      tags: [accounts]
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: address
+          in: path
+          required: true
+          schema: { type: string }
+        - $ref: '#/components/parameters/PageParam'
+        - $ref: '#/components/parameters/PageSizeParam'
+        - $ref: '#/components/parameters/SortParam'
+      responses:
+        '200':
+          description: Paginated list of account-blocks.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AccountBlockList'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '429':
+          $ref: '#/components/responses/RateLimited'
+
+  /api/v1/account_blocks:
+    get:
+      operationId: listAccountBlocks
+      summary: List account-blocks (transactions)
+      tags: [account_blocks]
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: '#/components/parameters/PageParam'
+        - $ref: '#/components/parameters/PageSizeParam'
+        - $ref: '#/components/parameters/SortParam'
+      responses:
+        '200':
+          description: Paginated list of account-blocks.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AccountBlockList'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '429':
+          $ref: '#/components/responses/RateLimited'
+
+  /api/v1/account_blocks/{hash}:
+    get:
+      operationId: getAccountBlock
+      summary: Get an account-block by hash
+      tags: [account_blocks]
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: hash
+          in: path
+          required: true
+          schema: { type: string }
+      responses:
+        '200':
+          description: The requested account-block.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AccountBlock'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          description: No account-block with that hash.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
         '429':
           $ref: '#/components/responses/RateLimited'
 

@@ -67,6 +67,10 @@ func New(d Deps) http.Handler {
 
 		r.Get("/accounts/{address}", handlers.AccountsGet(d.Repos.Account))
 		r.Get("/accounts/{address}/balances", handlers.AccountsBalances(d.Repos.Balance))
+		r.Get("/accounts/{address}/transactions", handlers.AccountBlocksByAddress(d.Repos.AccountBlock))
+
+		r.Get("/account_blocks", handlers.AccountBlocksList(d.Repos.AccountBlock))
+		r.Get("/account_blocks/{hash}", handlers.AccountBlocksGet(d.Repos.AccountBlock))
 
 		r.Get("/tokens", handlers.TokensList(d.Repos.Token))
 		r.Get("/tokens/{token_standard}", handlers.TokensGet(d.Repos.Token))
