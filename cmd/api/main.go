@@ -4,9 +4,8 @@
 // docs/api/ for the full specification, including authentication (HS256
 // JWT) and the per-endpoint contract in docs/api/openapi.yaml.
 //
-// This main is intentionally minimal at this milestone: it boots config,
-// the logger, and a chi router serving only /healthz. Subsequent milestones
-// add the DB pool, repositories, middleware stack, and per-domain handlers.
+// This main composes the middleware stack and a chi router; per-domain
+// handlers land in internal/api/handlers in subsequent milestones.
 package main
 
 import (
@@ -22,6 +21,9 @@ import (
 	"github.com/go-chi/chi/v5"
 	"go.uber.org/zap"
 
+	"github.com/0x3639/nom-indexer-go/internal/api/httpx"
+	apimw "github.com/0x3639/nom-indexer-go/internal/api/middleware"
+	"github.com/0x3639/nom-indexer-go/internal/auth"
 	"github.com/0x3639/nom-indexer-go/internal/config"
 )
 
@@ -29,6 +31,10 @@ func main() {
 	cfg, err := config.Load()
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "failed to load configuration: %v\n", err)
+		os.Exit(1)
+	}
+	if cfg.API.JWTSecret == "" {
+		fmt.Fprintln(os.Stderr, "error: api.jwt_secret (env API_JWT_SECRET) is required")
 		os.Exit(1)
 	}
 
@@ -39,11 +45,12 @@ func main() {
 	}
 	defer func() { _ = logger.Sync() }()
 
-	logger.Info("starting nom-indexer-go API",
-		zap.Int("port", cfg.API.Port))
+	signer, err := auth.NewSigner(cfg.API.JWTSecret)
+	if err != nil {
+		logger.Fatal("failed to initialize JWT signer", zap.Error(err))
+	}
 
-	r := chi.NewRouter()
-	r.Get("/healthz", healthz)
+	r := newRouter(cfg, logger, signer)
 
 	srv := &http.Server{
 		Addr:              fmt.Sprintf(":%d", cfg.API.Port),
@@ -80,8 +87,35 @@ func main() {
 	logger.Info("API stopped")
 }
 
+// newRouter builds the chi router with the middleware stack. Subsequent
+// milestones add domain handlers under /api/v1/.
+func newRouter(cfg *config.Config, logger *zap.Logger, signer *auth.Signer) http.Handler {
+	r := chi.NewRouter()
+
+	// Always-on middleware (every route, including /healthz).
+	r.Use(apimw.RequestID)
+	r.Use(apimw.Logger(logger))
+	r.Use(apimw.Recover(logger))
+	r.Use(apimw.CORS(cfg.API.CORSAllowedOriginsList()))
+
+	// Unauthenticated routes.
+	r.Get("/healthz", healthz)
+	// /readyz, /metrics, /api/v1/{...} land in later milestones.
+
+	// Authenticated /api/v1 subtree.
+	r.Route("/api/v1", func(r chi.Router) {
+		r.Use(apimw.Auth(signer))
+		r.Use(apimw.RateLimit(cfg.API.RateLimitPerMinute))
+
+		// Placeholder; real handlers land in M4+.
+		r.Get("/status", func(w http.ResponseWriter, _ *http.Request) {
+			httpx.WriteJSON(w, http.StatusOK, map[string]string{"version": "dev"})
+		})
+	})
+
+	return r
+}
+
 func healthz(w http.ResponseWriter, _ *http.Request) {
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(http.StatusOK)
-	_, _ = w.Write([]byte(`{"status":"ok"}`))
+	httpx.WriteJSON(w, http.StatusOK, map[string]string{"status": "ok"})
 }

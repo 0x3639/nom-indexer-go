@@ -1,19 +1,118 @@
 openapi: 3.1.0
+
 info:
   title: nom-indexer-go API
-  version: 0.0.0
+  version: 0.1.0
   description: |
-    Placeholder OpenAPI 3.1 contract. The API server has not been implemented
-    yet. See specs/API_SPECIFICATION.md for the draft implementation brief.
+    Read-only HTTP API over the nom-indexer-go database. Schema-as-contract:
+    every response mirrors the underlying Postgres table layout documented at
+    https://0x3639.github.io/nom-indexer-go/schema/.
 
-    When the API ships, this file is filled in and rendered as Swagger UI via
-    mkdocs-swagger-ui-tag.
+    ## Authentication
+
+    All endpoints under `/api/v1/` require a Bearer JWT in the `Authorization`
+    header. Tokens are HS256-signed by an admin via `cmd/jwt-issue`; there is
+    no token-mint endpoint. See https://0x3639.github.io/nom-indexer-go/api/auth/.
+
+    ## Pagination
+
+    Collection endpoints use offset/limit (`?page=1&page_size=50`, max 200) and
+    return an envelope `{data: [...], pagination: {page, page_size, total}}`.
+    Single-item endpoints return the object directly.
+
+    ## Errors
+
+    Errors are returned as `application/problem+json` (RFC 7807) with a
+    JSON object carrying `type`, `title`, `status`, `detail`, and a
+    custom `code` field.
   contact:
     name: nom-indexer-go
     url: https://github.com/0x3639/nom-indexer-go
+  license:
+    name: MIT
+    identifier: MIT
+
 servers:
   - url: http://localhost:8080
-    description: Local development server (not yet implemented)
-paths: {}
+    description: Local development
+
 components:
-  schemas: {}
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+      description: |
+        HS256-signed JWT minted via `cmd/jwt-issue`. Carries `sub`, `exp`, `iat`,
+        and an OAuth 2.0 space-separated `scope` claim.
+
+  schemas:
+    Problem:
+      type: object
+      description: RFC 7807 problem details.
+      required: [type, title, status]
+      properties:
+        type:
+          type: string
+          format: uri
+          description: A URI reference identifying the problem type.
+          examples: ["about:blank"]
+        title:
+          type: string
+          description: A short, human-readable summary.
+          examples: ["Unauthorized"]
+        status:
+          type: integer
+          format: int32
+          examples: [401]
+        detail:
+          type: string
+          description: A human-readable explanation specific to this occurrence.
+        instance:
+          type: string
+          format: uri
+          description: A URI reference identifying the specific occurrence.
+        code:
+          type: string
+          description: Stable application-level error code (extension).
+          examples: ["unauthorized"]
+
+    Health:
+      type: object
+      required: [status]
+      properties:
+        status:
+          type: string
+          enum: [ok]
+
+  responses:
+    Unauthorized:
+      description: Missing or invalid bearer token.
+      content:
+        application/problem+json:
+          schema:
+            $ref: '#/components/schemas/Problem'
+    RateLimited:
+      description: Too many requests for this subject.
+      content:
+        application/problem+json:
+          schema:
+            $ref: '#/components/schemas/Problem'
+
+paths:
+  /healthz:
+    get:
+      operationId: getHealthz
+      summary: Liveness probe
+      description: |
+        Always returns 200 with `{"status":"ok"}`. Does not check the
+        database — that's `/readyz`. Suitable for k8s liveness checks.
+      tags: [meta]
+      security: []
+      responses:
+        '200':
+          description: Service is alive.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Health'
