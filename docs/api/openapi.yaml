@@ -501,6 +501,110 @@ components:
         data: { type: array, items: { $ref: '#/components/schemas/RewardTransaction' } }
         pagination: { $ref: '#/components/schemas/Pagination' }
 
+    Project:
+      type: object
+      required:
+        - id
+        - voting_id
+        - owner
+        - name
+        - znn_funds_needed
+        - qsr_funds_needed
+        - creation_timestamp
+        - last_update_timestamp
+        - status
+        - yes_votes
+        - no_votes
+        - total_votes
+      properties:
+        id: { type: string }
+        voting_id: { type: string }
+        owner: { type: string }
+        name: { type: string }
+        description: { type: string }
+        url: { type: string }
+        znn_funds_needed: { $ref: '#/components/schemas/Amount' }
+        qsr_funds_needed: { $ref: '#/components/schemas/Amount' }
+        creation_timestamp: { type: integer, format: int64 }
+        last_update_timestamp: { type: integer, format: int64 }
+        status: { type: integer }
+        yes_votes: { type: integer }
+        no_votes: { type: integer }
+        total_votes: { type: integer }
+
+    ProjectList:
+      type: object
+      required: [data, pagination]
+      properties:
+        data: { type: array, items: { $ref: '#/components/schemas/Project' } }
+        pagination: { $ref: '#/components/schemas/Pagination' }
+
+    ProjectPhase:
+      type: object
+      required:
+        - id
+        - project_id
+        - voting_id
+        - name
+        - znn_funds_needed
+        - qsr_funds_needed
+        - creation_timestamp
+        - accepted_timestamp
+        - status
+        - yes_votes
+        - no_votes
+        - total_votes
+      properties:
+        id: { type: string }
+        project_id: { type: string }
+        voting_id: { type: string }
+        name: { type: string }
+        description: { type: string }
+        url: { type: string }
+        znn_funds_needed: { $ref: '#/components/schemas/Amount' }
+        qsr_funds_needed: { $ref: '#/components/schemas/Amount' }
+        creation_timestamp: { type: integer, format: int64 }
+        accepted_timestamp: { type: integer, format: int64 }
+        status: { type: integer }
+        yes_votes: { type: integer }
+        no_votes: { type: integer }
+        total_votes: { type: integer }
+
+    ProjectPhaseList:
+      type: object
+      required: [data]
+      properties:
+        data: { type: array, items: { $ref: '#/components/schemas/ProjectPhase' } }
+
+    Vote:
+      type: object
+      required:
+        - id
+        - momentum_hash
+        - momentum_timestamp
+        - momentum_height
+        - voter_address
+        - project_id
+        - voting_id
+        - vote
+      properties:
+        id: { type: integer }
+        momentum_hash: { type: string }
+        momentum_timestamp: { type: integer, format: int64 }
+        momentum_height: { type: integer, format: int64 }
+        voter_address: { type: string }
+        project_id: { type: string }
+        phase_id: { type: string }
+        voting_id: { type: string }
+        vote: { type: integer, description: "0=yes, 1=no, 2=abstain" }
+
+    VoteList:
+      type: object
+      required: [data, pagination]
+      properties:
+        data: { type: array, items: { $ref: '#/components/schemas/Vote' } }
+        pagination: { $ref: '#/components/schemas/Pagination' }
+
     AccountBlockList:
       type: object
       required: [data, pagination]
@@ -1094,6 +1198,95 @@ paths:
           content:
             application/json:
               schema: { $ref: '#/components/schemas/CumulativeRewardList' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '429': { $ref: '#/components/responses/RateLimited' }
+
+  /api/v1/projects:
+    get:
+      operationId: listProjects
+      summary: List Accelerator-Z projects
+      tags: [projects]
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: '#/components/parameters/PageParam'
+        - $ref: '#/components/parameters/PageSizeParam'
+      responses:
+        '200':
+          description: Paginated project list.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ProjectList' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '429': { $ref: '#/components/responses/RateLimited' }
+
+  /api/v1/projects/{id}:
+    get:
+      operationId: getProject
+      summary: Get a project by ID
+      tags: [projects]
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: string }
+      responses:
+        '200':
+          description: The requested project.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Project' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '404':
+          description: No project with that id.
+          content:
+            application/problem+json:
+              schema: { $ref: '#/components/schemas/Problem' }
+        '429': { $ref: '#/components/responses/RateLimited' }
+
+  /api/v1/projects/{id}/phases:
+    get:
+      operationId: listProjectPhases
+      summary: List phases of a project
+      tags: [projects]
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: string }
+      responses:
+        '200':
+          description: Phases in creation order.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ProjectPhaseList' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '429': { $ref: '#/components/responses/RateLimited' }
+
+  /api/v1/projects/{id}/votes:
+    get:
+      operationId: listProjectVotes
+      summary: List pillar votes targeting a project (or any of its phases)
+      tags: [projects]
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: string }
+        - $ref: '#/components/parameters/PageParam'
+        - $ref: '#/components/parameters/PageSizeParam'
+      responses:
+        '200':
+          description: Paginated vote list.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/VoteList' }
         '401': { $ref: '#/components/responses/Unauthorized' }
         '429': { $ref: '#/components/responses/RateLimited' }
 
