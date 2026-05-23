@@ -35,6 +35,28 @@ func (r *ProjectRepository) Upsert(ctx context.Context, p *models.Project) error
 	return err
 }
 
+// GetIDsCreatedAtOrAfter returns project IDs whose creation_timestamp is >=
+// the given timestamp. Used to compute the set of proposals a pillar was
+// eligible to vote on after it spawned.
+func (r *ProjectRepository) GetIDsCreatedAtOrAfter(ctx context.Context, timestamp int64) ([]string, error) {
+	rows, err := r.pool.Query(ctx, `
+		SELECT id FROM projects WHERE creation_timestamp >= $1`, timestamp)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var ids []string
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			return nil, err
+		}
+		ids = append(ids, id)
+	}
+	return ids, rows.Err()
+}
+
 // GetIDFromVotingID retrieves a project ID from its voting ID
 func (r *ProjectRepository) GetIDFromVotingID(ctx context.Context, votingID string) (string, error) {
 	var id string

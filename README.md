@@ -38,6 +38,10 @@ nom-indexer-go indexes blockchain data from the Network of Momentum (NoM) into P
 git clone https://github.com/0x3639/nom-indexer-go.git
 cd nom-indexer-go
 
+# Set local Postgres credentials (.env is gitignored)
+cp .env.example .env
+# Edit .env and set POSTGRES_PASSWORD to a real value before continuing.
+
 # Start the indexer (uses default public node)
 docker-compose up -d
 
@@ -45,7 +49,7 @@ docker-compose up -d
 docker logs nom-indexer -f
 
 # Check indexing progress
-docker exec nom-indexer-postgres psql -U postgres -d nom_indexer -c "SELECT MAX(height) FROM momentums;"
+docker exec nom-indexer-postgres psql -U "$POSTGRES_USER" -d "$POSTGRES_DB" -c "SELECT MAX(height) FROM momentums;"
 ```
 
 ### Using a Custom Node

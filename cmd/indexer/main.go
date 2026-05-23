@@ -6,6 +6,7 @@ import (
 	"os"
 	"os/signal"
 	"syscall"
+	"time"
 
 	"github.com/0x3639/znn-sdk-go/rpc_client"
 	"go.uber.org/zap"
@@ -16,19 +17,19 @@ import (
 )
 
 func main() {
-	// Initialize logger
-	logger, err := zap.NewProduction()
+	// Load configuration first so the logger reflects the user's choices.
+	cfg, err := config.Load()
 	if err != nil {
-		fmt.Printf("Failed to initialize logger: %v\n", err)
+		fmt.Fprintf(os.Stderr, "failed to load configuration: %v\n", err)
+		os.Exit(1)
+	}
+
+	logger, err := cfg.Logging.BuildLogger()
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "failed to initialize logger: %v\n", err)
 		os.Exit(1)
 	}
 	defer func() { _ = logger.Sync() }()
-
-	// Load configuration
-	cfg, err := config.Load()
-	if err != nil {
-		logger.Fatal("failed to load configuration", zap.Error(err))
-	}
 
 	logger.Info("starting nom-indexer",
 		zap.String("node_url", cfg.Node.WebSocketURL),
@@ -64,8 +65,19 @@ func main() {
 
 	logger.Info("connected to Zenon node")
 
-	// Create indexer
-	idx := indexer.NewIndexer(client, pool, logger)
+	votingInterval, err := indexer.ParseCronInterval(cfg.Cron.VotingActivityInterval, 10*time.Minute)
+	if err != nil {
+		logger.Fatal("invalid cron.voting_activity_interval", zap.Error(err))
+	}
+	tokenHoldersInterval, err := indexer.ParseCronInterval(cfg.Cron.TokenHoldersInterval, 10*time.Minute)
+	if err != nil {
+		logger.Fatal("invalid cron.token_holders_interval", zap.Error(err))
+	}
+
+	idx := indexer.NewIndexerWithCron(client, pool, logger, indexer.CronConfig{
+		VotingActivityInterval: votingInterval,
+		TokenHoldersInterval:   tokenHoldersInterval,
+	})
 
 	// Setup graceful shutdown
 	ctx, cancel := context.WithCancel(ctx)

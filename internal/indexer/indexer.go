@@ -23,6 +23,7 @@ type Indexer struct {
 	pool   *pgxpool.Pool
 	repos  *repository.Repositories
 	logger *zap.Logger
+	cron   CronConfig
 
 	// Cached data from node
 	pillars  []*models.Pillar
@@ -35,13 +36,28 @@ type Indexer struct {
 	restartSubCh chan struct{}
 }
 
-// NewIndexer creates a new indexer instance
+// CronConfig controls the periodic refresh of derived data (voting activity,
+// token holder counts). Zero-valued durations fall back to sensible defaults.
+type CronConfig struct {
+	VotingActivityInterval time.Duration
+	TokenHoldersInterval   time.Duration
+}
+
+// NewIndexer creates a new indexer instance with default cron intervals.
+// Use NewIndexerWithCron to override.
 func NewIndexer(client *rpc_client.RpcClient, pool *pgxpool.Pool, logger *zap.Logger) *Indexer {
+	return NewIndexerWithCron(client, pool, logger, CronConfig{})
+}
+
+// NewIndexerWithCron creates an indexer with explicit cron intervals.
+// Zero durations fall back to defaults inside the cron loop.
+func NewIndexerWithCron(client *rpc_client.RpcClient, pool *pgxpool.Pool, logger *zap.Logger, cron CronConfig) *Indexer {
 	return &Indexer{
 		client:            client,
 		pool:              pool,
 		repos:             repository.NewRepositories(pool),
 		logger:            logger,
+		cron:              cron,
 		pillarNameToOwner: make(map[string]string),
 		restartSubCh:      make(chan struct{}, 1),
 	}
@@ -57,7 +73,9 @@ func (i *Indexer) signalSubscriptionRestart() {
 	}
 }
 
-// Run starts the indexer main loop
+// Run starts the indexer main loop. Run blocks until ctx is cancelled, then
+// waits for the bridge/cached-data background goroutines to exit before
+// returning so callers can rely on a clean shutdown.
 func (i *Indexer) Run(ctx context.Context) error {
 	i.logger.Info("starting indexer")
 
@@ -72,11 +90,30 @@ func (i *Indexer) Run(ctx context.Context) error {
 		i.logger.Warn("SDK connection lost, will auto-reconnect", zap.Error(err))
 	})
 
-	// Start bridge sync in separate goroutine (runs every 1 minute)
-	go i.runBridgeSyncLoop(ctx, 1*time.Minute)
+	votingInterval := i.cron.VotingActivityInterval
+	if votingInterval <= 0 {
+		votingInterval = 10 * time.Minute
+	}
+	tokenHoldersInterval := i.cron.TokenHoldersInterval
+	if tokenHoldersInterval <= 0 {
+		tokenHoldersInterval = 10 * time.Minute
+	}
 
-	// Start cached data sync in separate goroutine (runs every 5 minutes)
-	go i.runCachedDataSyncLoop(ctx, 5*time.Minute)
+	var wg sync.WaitGroup
+	wg.Add(3)
+	go func() {
+		defer wg.Done()
+		i.runBridgeSyncLoop(ctx, 1*time.Minute)
+	}()
+	go func() {
+		defer wg.Done()
+		i.runCachedDataSyncLoop(ctx, 5*time.Minute)
+	}()
+	go func() {
+		defer wg.Done()
+		i.runCronLoop(ctx, votingInterval, tokenHoldersInterval)
+	}()
+	defer wg.Wait()
 
 	// Initial sync to catch up to current height
 	if err := i.sync(ctx); err != nil {
@@ -103,17 +140,31 @@ func (i *Indexer) sync(ctx context.Context) error {
 		default:
 		}
 
-		dbHeight, err := i.repos.Momentum.GetLatestHeight(ctx)
-		if err != nil {
+		var dbHeight uint64
+		if err := withRetry(ctx, i.logger, "GetLatestHeight", func() error {
+			h, err := i.repos.Momentum.GetLatestHeight(ctx)
+			if err != nil {
+				return err
+			}
+			dbHeight = h
+			return nil
+		}); err != nil {
 			return fmt.Errorf("failed to get latest height: %w", err)
 		}
 
-		frontier, err := i.client.LedgerApi.GetFrontierMomentum()
-		if err != nil {
+		var frontierHeight uint64
+		if err := withRetry(ctx, i.logger, "GetFrontierMomentum", func() error {
+			m, err := i.client.LedgerApi.GetFrontierMomentum()
+			if err != nil {
+				return err
+			}
+			frontierHeight = m.Height
+			return nil
+		}); err != nil {
 			return fmt.Errorf("failed to get frontier momentum: %w", err)
 		}
 
-		if dbHeight >= frontier.Height {
+		if dbHeight >= frontierHeight {
 			i.logger.Info("sync complete", zap.Uint64("height", dbHeight))
 			return nil
 		}
@@ -128,8 +179,15 @@ func (i *Indexer) sync(ctx context.Context) error {
 
 		// Fetch and process momentums in batches
 		batchSize := uint64(100)
-		momentums, err := i.client.LedgerApi.GetMomentumsByHeight(startHeight, batchSize)
-		if err != nil {
+		var momentums *api.MomentumList
+		if err := withRetry(ctx, i.logger, "GetMomentumsByHeight", func() error {
+			m, err := i.client.LedgerApi.GetMomentumsByHeight(startHeight, batchSize)
+			if err != nil {
+				return err
+			}
+			momentums = m
+			return nil
+		}); err != nil {
 			return fmt.Errorf("failed to get momentums at height %d: %w", startHeight, err)
 		}
 
@@ -266,10 +324,10 @@ func (i *Indexer) updateCachedData(ctx context.Context) error {
 		return fmt.Errorf("failed to get pillars: %w", err)
 	}
 
-	i.pillarMu.Lock()
-	i.pillars = make([]*models.Pillar, 0, len(pillarList.List))
-	i.pillarNameToOwner = make(map[string]string)
-
+	// Build pillar state and run DB upserts outside the lock; only hold the
+	// write lock briefly to publish the new snapshot.
+	pillars := make([]*models.Pillar, 0, len(pillarList.List))
+	nameToOwner := make(map[string]string, len(pillarList.List))
 	for _, p := range pillarList.List {
 		pillar := &models.Pillar{
 			OwnerAddress:                 p.OwnerAddress.String(),
@@ -286,14 +344,17 @@ func (i *Indexer) updateCachedData(ctx context.Context) error {
 			EpochProducedMomentums:       int16(p.CurrentStats.ProducedMomentums),
 			EpochExpectedMomentums:       int16(p.CurrentStats.ExpectedMomentums),
 		}
-		i.pillars = append(i.pillars, pillar)
-		i.pillarNameToOwner[p.Name] = p.OwnerAddress.String()
+		pillars = append(pillars, pillar)
+		nameToOwner[p.Name] = p.OwnerAddress.String()
 
-		// Save to database
 		if err := i.repos.Pillar.Upsert(ctx, pillar); err != nil {
 			i.logger.Warn("failed to upsert pillar", zap.String("name", p.Name), zap.Error(err))
 		}
 	}
+
+	i.pillarMu.Lock()
+	i.pillars = pillars
+	i.pillarNameToOwner = nameToOwner
 	i.pillarMu.Unlock()
 
 	i.logger.Info("updateCachedData: pillars done", zap.Int("count", len(pillarList.List)))

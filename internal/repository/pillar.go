@@ -60,7 +60,13 @@ func (r *PillarRepository) UpdateSpawnInfoBatch(batch *pgx.Batch, ownerAddress s
 		ownerAddress, spawnTimestamp, slotCostQsr)
 }
 
-// SetAsRevoked marks a pillar as revoked
+// SetAsRevoked marks an existing pillar as revoked. Historical fields are
+// preserved so queries against revoked pillars still have meaningful data;
+// only is_revoked and revoke_timestamp are touched.
+//
+// If the pillar row doesn't exist yet (rare — would mean we observed a Revoke
+// before a Register/cached-data sync), insert a minimal row so the revocation
+// isn't silently dropped.
 func (r *PillarRepository) SetAsRevoked(ctx context.Context, ownerAddress, name string, revokeTimestamp int64) error {
 	_, err := r.pool.Exec(ctx, `
 		INSERT INTO pillars (owner_address, producer_address, withdraw_address, name, rank,
@@ -69,24 +75,13 @@ func (r *PillarRepository) SetAsRevoked(ctx context.Context, ownerAddress, name 
 			slot_cost_qsr, spawn_timestamp, voting_activity, produced_momentum_count, is_revoked)
 		VALUES ($1, '', '', $2, 0, 0, 0, false, 0, $3, 0, 0, 0, 0, 0, 0, 0, true)
 		ON CONFLICT (owner_address) DO UPDATE SET
-			producer_address = '',
-			withdraw_address = '',
-			name = $2,
-			rank = 0,
-			give_momentum_reward_percentage = 0,
-			give_delegate_reward_percentage = 0,
-			is_revocable = false,
-			revoke_cooldown = 0,
-			revoke_timestamp = $3,
-			weight = 0,
-			epoch_produced_momentums = 0,
-			epoch_expected_momentums = 0,
+			revoke_timestamp = EXCLUDED.revoke_timestamp,
 			is_revoked = true`,
 		ownerAddress, name, revokeTimestamp)
 	return err
 }
 
-// SetAsRevokedBatch adds a revoke update to a batch
+// SetAsRevokedBatch adds a revoke update to a batch. See SetAsRevoked.
 func (r *PillarRepository) SetAsRevokedBatch(batch *pgx.Batch, ownerAddress, name string, revokeTimestamp int64) {
 	batch.Queue(`
 		INSERT INTO pillars (owner_address, producer_address, withdraw_address, name, rank,
@@ -95,18 +90,7 @@ func (r *PillarRepository) SetAsRevokedBatch(batch *pgx.Batch, ownerAddress, nam
 			slot_cost_qsr, spawn_timestamp, voting_activity, produced_momentum_count, is_revoked)
 		VALUES ($1, '', '', $2, 0, 0, 0, false, 0, $3, 0, 0, 0, 0, 0, 0, 0, true)
 		ON CONFLICT (owner_address) DO UPDATE SET
-			producer_address = '',
-			withdraw_address = '',
-			name = $2,
-			rank = 0,
-			give_momentum_reward_percentage = 0,
-			give_delegate_reward_percentage = 0,
-			is_revocable = false,
-			revoke_cooldown = 0,
-			revoke_timestamp = $3,
-			weight = 0,
-			epoch_produced_momentums = 0,
-			epoch_expected_momentums = 0,
+			revoke_timestamp = EXCLUDED.revoke_timestamp,
 			is_revoked = true`,
 		ownerAddress, name, revokeTimestamp)
 }

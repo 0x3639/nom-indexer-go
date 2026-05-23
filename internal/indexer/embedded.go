@@ -200,7 +200,7 @@ func (i *Indexer) indexPlasmaContract(ctx context.Context, batch *pgx.Batch, blo
 				MomentumTimestamp: int64(m.TimestampUnix),
 				MomentumHeight:    int64(m.Height),
 				MomentumHash:      m.Hash.String(),
-				ExpirationHeight:  int64(m.Height) + models.FusionExpirationTime/10, // Approximate blocks
+				ExpirationHeight:  int64(m.Height) + models.FusionExpirationBlocks,
 				IsActive:          true,
 				CancelID:          i.getFusionCancelID(fusionID),
 			}

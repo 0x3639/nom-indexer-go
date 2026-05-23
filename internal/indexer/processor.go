@@ -4,8 +4,11 @@ import (
 	"context"
 	"encoding/hex"
 	"fmt"
+	"math"
+	"math/big"
 	"time"
 
+	"github.com/0x3639/znn-sdk-go/utils"
 	"github.com/jackc/pgx/v5"
 	"github.com/zenon-network/go-zenon/common/types"
 	"github.com/zenon-network/go-zenon/rpc/api"
@@ -13,6 +16,28 @@ import (
 
 	"github.com/0x3639/nom-indexer-go/internal/models"
 )
+
+// genesisBalanceUpdateThreshold skips per-address balance fetching for
+// momentums with this many or more transactions. Genesis has tens of thousands
+// of txs and per-address GetAccountInfoByAddress calls would be prohibitive.
+const genesisBalanceUpdateThreshold = 1000
+
+// safeBigIntToInt64 converts a *big.Int to int64, capping at math.MaxInt64 if
+// the value overflows. Returns 0 if v is nil. Logs a warning on cap.
+//
+// Storage columns for amounts/balances/supplies are BIGINT, so out-of-range
+// values are silently truncated. Reconsider NUMERIC(78,0) if any token's
+// supply approaches 9.22e18 satoshi.
+func safeBigIntToInt64(v *big.Int, logger *zap.Logger, msg string, fields ...zap.Field) int64 {
+	if v == nil {
+		return 0
+	}
+	if v.IsInt64() {
+		return v.Int64()
+	}
+	logger.Warn(msg, fields...)
+	return math.MaxInt64
+}
 
 // processMomentum processes a single momentum and all its account blocks
 func (i *Indexer) processMomentum(ctx context.Context, m *api.Momentum) error {
@@ -27,9 +52,10 @@ func (i *Indexer) processMomentum(ctx context.Context, m *api.Momentum) error {
 			return fmt.Errorf("failed to process account blocks: %w", err)
 		}
 
-		// Update balances (skip for genesis due to large number of transactions)
-		// Balance updates are done per-block which can be slow for genesis
-		if m.Height > 1 && len(m.Content) < 1000 {
+		// Skip per-address balance fetching for momentums with too many txs:
+		// genesis has tens of thousands and per-address GetAccountInfoByAddress
+		// would be prohibitively slow.
+		if m.Height > 1 && len(m.Content) < genesisBalanceUpdateThreshold {
 			if err := i.updateBalances(ctx, batch, m.Content); err != nil {
 				i.logger.Warn("failed to update balances", zap.Error(err))
 			}
@@ -60,16 +86,40 @@ func (i *Indexer) processMomentum(ctx context.Context, m *api.Momentum) error {
 	}
 	i.repos.Momentum.InsertBatch(ctx, batch, momentum)
 
-	// Execute batch
-	results := i.pool.SendBatch(ctx, batch)
-	defer func() { _ = results.Close() }()
+	// Run the batch inside a transaction so partial failures roll back and the
+	// caller can retry the height instead of advancing past corrupted state.
+	tx, err := i.pool.Begin(ctx)
+	if err != nil {
+		return fmt.Errorf("begin tx for momentum %d: %w", m.Height, err)
+	}
+	committed := false
+	defer func() {
+		if !committed {
+			_ = tx.Rollback(ctx)
+		}
+	}()
 
-	// Check for errors in batch
+	results := tx.SendBatch(ctx, batch)
+	var batchErr error
 	for j := 0; j < batch.Len(); j++ {
 		if _, err := results.Exec(); err != nil {
+			if batchErr == nil {
+				batchErr = fmt.Errorf("batch op %d: %w", j, err)
+			}
 			i.logger.Warn("batch operation failed", zap.Int("index", j), zap.Error(err))
 		}
 	}
+	if closeErr := results.Close(); closeErr != nil && batchErr == nil {
+		batchErr = fmt.Errorf("close batch results: %w", closeErr)
+	}
+	if batchErr != nil {
+		return fmt.Errorf("momentum %d batch failed: %w", m.Height, batchErr)
+	}
+
+	if err := tx.Commit(ctx); err != nil {
+		return fmt.Errorf("commit momentum %d: %w", m.Height, err)
+	}
+	committed = true
 
 	i.logger.Debug("processed momentum",
 		zap.Uint64("height", m.Height),
@@ -92,16 +142,14 @@ func (i *Indexer) updateBalances(ctx context.Context, batch *pgx.Batch, headers 
 		if accountInfo.BalanceInfoMap != nil {
 			for tokenStandard, balanceInfo := range accountInfo.BalanceInfoMap {
 				if balanceInfo.Balance != nil && balanceInfo.Balance.Sign() >= 0 {
-					// Check for Int64 overflow before conversion
-					var balanceInt64 int64
-					if balanceInfo.Balance.IsInt64() {
-						balanceInt64 = balanceInfo.Balance.Int64()
-					} else {
-						i.logger.Warn("balance exceeds int64 max, capping value",
-							zap.String("address", header.Address.String()),
-							zap.String("token", tokenStandard.String()))
-						balanceInt64 = 9223372036854775807 // Max int64
-					}
+					// Check for Int64 overflow before conversion. Balance columns are BIGINT,
+					// so values >math.MaxInt64 are silently capped. ZNN/QSR amounts use 1e8
+					// satoshi scaling and are well below int64 max today; reconsider if any
+					// token's supply approaches 9.22e18 satoshi.
+					balanceInt64 := safeBigIntToInt64(balanceInfo.Balance, i.logger,
+						"balance overflow",
+						zap.String("address", header.Address.String()),
+						zap.String("token", tokenStandard.String()))
 					balance := &models.Balance{
 						Address:       header.Address.String(),
 						TokenStandard: tokenStandard.String(),
@@ -164,15 +212,9 @@ func (i *Indexer) processAccountBlocks(ctx context.Context, batch *pgx.Batch, m 
 			data = hex.EncodeToString(block.Data)
 		}
 
-		// Safe Int64 conversion for Amount
-		amountInt64 := int64(0)
-		if block.Amount != nil && block.Amount.IsInt64() {
-			amountInt64 = block.Amount.Int64()
-		} else if block.Amount != nil {
-			i.logger.Warn("amount exceeds int64 max, capping value",
-				zap.String("hash", block.Hash.String()))
-			amountInt64 = 9223372036854775807
-		}
+		amountInt64 := safeBigIntToInt64(block.Amount, i.logger,
+			"amount overflow",
+			zap.String("hash", block.Hash.String()))
 
 		accountBlock := &models.AccountBlock{
 			Hash:               block.Hash.String(),
@@ -201,8 +243,9 @@ func (i *Indexer) processAccountBlocks(ctx context.Context, batch *pgx.Batch, m 
 			i.repos.AccountBlock.UpdateDescendantOfBatch(batch, descendant.Hash.String(), block.Hash.String())
 		}
 
-		// Process embedded contract events
-		if block.BlockType == 5 && // ContractReceive
+		// Process embedded contract events: a contract-receive block paired
+		// with a user-send call into one of our tracked embedded contracts.
+		if block.BlockType == utils.BlockTypeContractReceive &&
 			block.PairedAccountBlock != nil &&
 			models.IsEmbeddedContract(block.Address.String()) {
 
@@ -212,11 +255,16 @@ func (i *Indexer) processAccountBlocks(ctx context.Context, batch *pgx.Batch, m 
 			}
 		}
 
-		// Process reward receive transactions
-		if block.PairedAccountBlock != nil && block.BlockType == 4 { // UserReceive
+		// Process reward receive transactions: a user-receive block paired
+		// with a contract-send from a reward source. (Note: prior to this fix,
+		// the literals here were wrong — BlockType 4 was used for "UserReceive"
+		// and 6 for "ContractSend", neither of which match the SDK constants.
+		// The branch never fired, so reward_transactions / cumulative_rewards
+		// stayed empty for non-liquidity rewards.)
+		if block.PairedAccountBlock != nil && block.BlockType == utils.BlockTypeUserReceive {
 			if block.PairedAccountBlock.Address.String() == models.LiquidityTreasuryAddress {
 				i.indexLiquidityReward(batch, block, m)
-			} else if block.PairedAccountBlock.BlockType == 6 && // ContractSend
+			} else if block.PairedAccountBlock.BlockType == utils.BlockTypeContractSend &&
 				block.ToAddress.String() == models.EmptyAddress &&
 				block.TokenStandard.String() == models.EmptyTokenStandard {
 				i.indexReceivedReward(ctx, batch, block, m)
@@ -225,19 +273,13 @@ func (i *Indexer) processAccountBlocks(ctx context.Context, batch *pgx.Batch, m 
 
 		// Update token info from TokenInfo field
 		if block.TokenInfo != nil {
-			// Safe Int64 conversions for supply values
-			totalSupply := int64(0)
-			if block.TokenInfo.TotalSupply != nil && block.TokenInfo.TotalSupply.IsInt64() {
-				totalSupply = block.TokenInfo.TotalSupply.Int64()
-			} else if block.TokenInfo.TotalSupply != nil {
-				totalSupply = 9223372036854775807
-			}
-			maxSupply := int64(0)
-			if block.TokenInfo.MaxSupply != nil && block.TokenInfo.MaxSupply.IsInt64() {
-				maxSupply = block.TokenInfo.MaxSupply.Int64()
-			} else if block.TokenInfo.MaxSupply != nil {
-				maxSupply = 9223372036854775807
-			}
+			tokenStdStr := block.TokenInfo.ZenonTokenStandard.String()
+			totalSupply := safeBigIntToInt64(block.TokenInfo.TotalSupply, i.logger,
+				"total_supply overflow",
+				zap.String("token", tokenStdStr))
+			maxSupply := safeBigIntToInt64(block.TokenInfo.MaxSupply, i.logger,
+				"max_supply overflow",
+				zap.String("token", tokenStdStr))
 
 			token := &models.Token{
 				TokenStandard: block.TokenInfo.ZenonTokenStandard.String(),

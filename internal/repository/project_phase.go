@@ -35,6 +35,27 @@ func (r *ProjectPhaseRepository) Upsert(ctx context.Context, p *models.ProjectPh
 	return err
 }
 
+// GetIDsCreatedAtOrAfter returns phase IDs whose creation_timestamp is >= the
+// given timestamp. Used for pillar voting-activity calculation.
+func (r *ProjectPhaseRepository) GetIDsCreatedAtOrAfter(ctx context.Context, timestamp int64) ([]string, error) {
+	rows, err := r.pool.Query(ctx, `
+		SELECT id FROM project_phases WHERE creation_timestamp >= $1`, timestamp)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var ids []string
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			return nil, err
+		}
+		ids = append(ids, id)
+	}
+	return ids, rows.Err()
+}
+
 // GetProjectAndPhaseIDFromVotingID retrieves project and phase IDs from voting ID
 func (r *ProjectPhaseRepository) GetProjectAndPhaseIDFromVotingID(ctx context.Context, votingID string) (string, string, error) {
 	var projectID, phaseID string

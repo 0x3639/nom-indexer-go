@@ -34,6 +34,14 @@ const GenesisMomentumTime = 1637755210
 // Fusion expiration time in seconds (1 hour)
 const FusionExpirationTime = 3600
 
+// MomentumBlockTimeSec is the target time between momentums on Zenon (10s).
+// Used to convert wall-clock durations into approximate block-height deltas.
+const MomentumBlockTimeSec = 10
+
+// FusionExpirationBlocks is FusionExpirationTime expressed as an approximate
+// number of momentums, given the chain's target block time.
+const FusionExpirationBlocks = FusionExpirationTime / MomentumBlockTimeSec
+
 // EmbeddedContractAddresses returns all embedded contract addresses
 func EmbeddedContractAddresses() []string {
 	return []string{

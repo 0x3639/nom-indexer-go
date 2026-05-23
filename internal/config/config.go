@@ -6,6 +6,8 @@ import (
 	"strings"
 
 	"github.com/spf13/viper"
+	"go.uber.org/zap"
+	"go.uber.org/zap/zapcore"
 )
 
 type Config struct {
@@ -104,6 +106,32 @@ func Load() (*Config, error) {
 	}
 
 	return &cfg, nil
+}
+
+// BuildLogger constructs a zap logger from the LoggingConfig. Unknown levels
+// fall back to info; unknown formats fall back to console.
+func (l *LoggingConfig) BuildLogger() (*zap.Logger, error) {
+	level := zapcore.InfoLevel
+	if l.Level != "" {
+		if err := level.UnmarshalText([]byte(strings.ToLower(l.Level))); err != nil {
+			return nil, fmt.Errorf("invalid logging.level %q: %w", l.Level, err)
+		}
+	}
+
+	zc := zap.NewProductionConfig()
+	zc.Level = zap.NewAtomicLevelAt(level)
+	switch strings.ToLower(l.Format) {
+	case "json":
+		zc.Encoding = "json"
+	case "", "console":
+		zc.Encoding = "console"
+		zc.EncoderConfig.EncodeTime = zapcore.ISO8601TimeEncoder
+		zc.EncoderConfig.EncodeLevel = zapcore.CapitalColorLevelEncoder
+	default:
+		return nil, fmt.Errorf("invalid logging.format %q (want json or console)", l.Format)
+	}
+
+	return zc.Build()
 }
 
 // Validate validates the configuration
