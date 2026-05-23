@@ -73,7 +73,7 @@ func (i *Indexer) signalSubscriptionRestart() {
 	}
 }
 
-// Run starts the indexer main loop. Run blocks until ctx is cancelled, then
+// Run starts the indexer main loop. Run blocks until ctx is canceled, then
 // waits for the bridge/cached-data background goroutines to exit before
 // returning so callers can rely on a clean shutdown.
 func (i *Indexer) Run(ctx context.Context) error {

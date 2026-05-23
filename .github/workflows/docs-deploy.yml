@@ -30,9 +30,7 @@ jobs:
           python -m pip install --upgrade pip
           pip install \
             mkdocs-material \
-            mkdocs-mermaid2-plugin \
             mkdocs-include-markdown-plugin \
-            mkdocs-swagger-ui-tag \
             pymdown-extensions
 
       - name: Regenerate llms.txt and llms-full.txt

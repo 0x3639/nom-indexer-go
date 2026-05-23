@@ -66,7 +66,7 @@ func (r *AccountRepository) AddSendBatch(batch *pgx.Batch, address, tokenStandar
 		address, amount, timestamp)
 }
 
-// AddReceiveBatch is the receive-side analogue of AddSendBatch.
+// AddReceiveBatch is the receive-side analog of AddSendBatch.
 func (r *AccountRepository) AddReceiveBatch(batch *pgx.Batch, address, tokenStandard string, amount, timestamp int64) {
 	col := flowColumn(tokenStandard, "received")
 	if col == "" {

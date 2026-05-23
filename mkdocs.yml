@@ -1,3 +1,5 @@
+# yaml-language-server: $schema=https://squidfunk.github.io/mkdocs-material/schema.json
+
 site_name: nom-indexer-go
 site_description: Documentation for the nom-indexer-go Zenon Network indexer.
 site_url: https://0x3639.github.io/nom-indexer-go/
@@ -39,11 +41,17 @@ theme:
 
 plugins:
   - search
-  - mermaid2
   - include-markdown
-  - swagger-ui-tag
-  # mkdocstrings-go is optional at scaffold time; commented out until doc.go
-  # files exist in every internal package. Re-enable once they're added.
+  # Mermaid is rendered via mkdocs-material's built-in support (pymdownx
+  # superfences + the standard fence_code_format resolver below). No
+  # separate mermaid2 plugin needed.
+  #
+  # Re-add `swagger-ui-tag` here once docs/api/openapi.yaml carries a real
+  # contract — today it's a placeholder skeleton.
+  #
+  # `mkdocstrings` (with the Go handler) is the eventual home for rendering
+  # internal/*/doc.go content into the site. Wire it up when the doc.go
+  # surface is large enough to justify the extra build step.
   # - mkdocstrings:
   #     handlers:
   #       go:
@@ -67,7 +75,7 @@ markdown_extensions:
       custom_fences:
         - name: mermaid
           class: mermaid
-          format: !!python/name:mermaid2.fence_mermaid_custom
+          format: !!python/name:pymdownx.superfences.fence_code_format
   - pymdownx.tabbed:
       alternate_style: true
   - pymdownx.details

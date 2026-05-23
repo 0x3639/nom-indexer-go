@@ -60,9 +60,6 @@ func TestWithRetry_GivesUpAfterMaxAttempts(t *testing.T) {
 	if !strings.Contains(err.Error(), "myop") || !strings.Contains(err.Error(), "after 3 attempts") {
 		t.Errorf("error should mention label and attempts, got %q", err.Error())
 	}
-	if !errors.Is(err, err) {
-		// Sanity: %w chain preserved.
-	}
 }
 
 func TestWithRetry_ContextCancelStopsRetries(t *testing.T) {

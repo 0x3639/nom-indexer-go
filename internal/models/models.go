@@ -346,16 +346,16 @@ type BridgeNetworkToken struct {
 // BridgeAdmin is a singleton row (row_id=1) describing the active administrator
 // and bridge-wide flags pulled from BridgeApi.GetBridgeInfo.
 type BridgeAdmin struct {
-	Administrator             string `db:"administrator"`
-	CompressedTssECDSAPubKey  string `db:"compressed_tss_ecdsa_pubkey"`
+	Administrator              string `db:"administrator"`
+	CompressedTssECDSAPubKey   string `db:"compressed_tss_ecdsa_pubkey"`
 	DecompressedTssECDSAPubKey string `db:"decompressed_tss_ecdsa_pubkey"`
-	AllowKeyGen               bool   `db:"allow_key_gen"`
-	Halted                    bool   `db:"halted"`
-	UnhaltedAt                int64  `db:"unhalted_at"`
-	UnhaltDurationInMomentums int64  `db:"unhalt_duration_in_momentums"`
-	TssNonce                  int64  `db:"tss_nonce"`
-	Metadata                  string `db:"metadata"`
-	LastUpdatedTimestamp      int64  `db:"last_updated_timestamp"`
+	AllowKeyGen                bool   `db:"allow_key_gen"`
+	Halted                     bool   `db:"halted"`
+	UnhaltedAt                 int64  `db:"unhalted_at"`
+	UnhaltDurationInMomentums  int64  `db:"unhalt_duration_in_momentums"`
+	TssNonce                   int64  `db:"tss_nonce"`
+	Metadata                   string `db:"metadata"`
+	LastUpdatedTimestamp       int64  `db:"last_updated_timestamp"`
 }
 
 // BridgeGuardian is one entry on the guardian set pulled from SecurityInfo.
@@ -385,20 +385,20 @@ type BridgeSecurityInfo struct {
 
 // NetworkStatHistory is a daily network-wide snapshot row.
 type NetworkStatHistory struct {
-	Date             string `db:"date"`
-	TotalTx          int64  `db:"total_tx"`
-	DailyTx          int64  `db:"daily_tx"`
-	TotalAddresses   int64  `db:"total_addresses"`
-	DailyAddresses   int64  `db:"daily_addresses"`
-	ActiveAddresses  int64  `db:"active_addresses"`
-	TotalTokens      int64  `db:"total_tokens"`
-	DailyTokens      int64  `db:"daily_tokens"`
-	TotalStakes      int64  `db:"total_stakes"`
-	DailyStakes      int64  `db:"daily_stakes"`
-	TotalFusions     int64  `db:"total_fusions"`
-	DailyFusions     int64  `db:"daily_fusions"`
-	TotalPillars     int64  `db:"total_pillars"`
-	TotalSentinels   int64  `db:"total_sentinels"`
+	Date            string `db:"date"`
+	TotalTx         int64  `db:"total_tx"`
+	DailyTx         int64  `db:"daily_tx"`
+	TotalAddresses  int64  `db:"total_addresses"`
+	DailyAddresses  int64  `db:"daily_addresses"`
+	ActiveAddresses int64  `db:"active_addresses"`
+	TotalTokens     int64  `db:"total_tokens"`
+	DailyTokens     int64  `db:"daily_tokens"`
+	TotalStakes     int64  `db:"total_stakes"`
+	DailyStakes     int64  `db:"daily_stakes"`
+	TotalFusions    int64  `db:"total_fusions"`
+	DailyFusions    int64  `db:"daily_fusions"`
+	TotalPillars    int64  `db:"total_pillars"`
+	TotalSentinels  int64  `db:"total_sentinels"`
 }
 
 // TokenStatHistory is a daily per-token snapshot row.
@@ -425,15 +425,15 @@ type PillarStatHistory struct {
 
 // BridgeStatHistory is a daily per-(network, token) bridge snapshot row.
 type BridgeStatHistory struct {
-	Date             string `db:"date"`
-	NetworkClass     int    `db:"network_class"`
-	ChainID          int    `db:"chain_id"`
-	TokenStandard    string `db:"token_standard"`
-	WrapTxCount      int64  `db:"wrap_tx_count"`
-	WrappedAmount    int64  `db:"wrapped_amount"`
-	UnwrapTxCount    int64  `db:"unwrap_tx_count"`
-	UnwrappedAmount  int64  `db:"unwrapped_amount"`
-	TotalVolume      int64  `db:"total_volume"`
+	Date            string `db:"date"`
+	NetworkClass    int    `db:"network_class"`
+	ChainID         int    `db:"chain_id"`
+	TokenStandard   string `db:"token_standard"`
+	WrapTxCount     int64  `db:"wrap_tx_count"`
+	WrappedAmount   int64  `db:"wrapped_amount"`
+	UnwrapTxCount   int64  `db:"unwrap_tx_count"`
+	UnwrappedAmount int64  `db:"unwrapped_amount"`
+	TotalVolume     int64  `db:"total_volume"`
 }
 
 // Delegation is one interval of an account delegating to a pillar.

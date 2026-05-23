@@ -7,11 +7,11 @@ import (
 
 func TestParseCronInterval(t *testing.T) {
 	tests := []struct {
-		name        string
-		input       string
-		def         time.Duration
-		want        time.Duration
-		wantErr     bool
+		name    string
+		input   string
+		def     time.Duration
+		want    time.Duration
+		wantErr bool
 	}{
 		{name: "empty returns default", input: "", def: 10 * time.Minute, want: 10 * time.Minute},
 		{name: "minutes", input: "5m", def: time.Minute, want: 5 * time.Minute},

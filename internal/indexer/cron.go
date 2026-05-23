@@ -194,10 +194,10 @@ func (i *Indexer) snapshotBridgeStats(ctx context.Context, date string, startTs,
 	stats := map[string]*models.BridgeStatHistory{}
 	for rows.Next() {
 		var s models.BridgeStatHistory
-		if err := rows.Scan(&s.NetworkClass, &s.ChainID, &s.TokenStandard,
-			&s.WrapTxCount, &s.WrappedAmount); err != nil {
+		if scanErr := rows.Scan(&s.NetworkClass, &s.ChainID, &s.TokenStandard,
+			&s.WrapTxCount, &s.WrappedAmount); scanErr != nil {
 			rows.Close()
-			return err
+			return scanErr
 		}
 		s.Date = date
 		s.TotalVolume = s.WrappedAmount
@@ -205,8 +205,8 @@ func (i *Indexer) snapshotBridgeStats(ctx context.Context, date string, startTs,
 		stats[key] = &s
 	}
 	rows.Close()
-	if err := rows.Err(); err != nil {
-		return err
+	if iterErr := rows.Err(); iterErr != nil {
+		return iterErr
 	}
 
 	// Unwrap side.
@@ -378,4 +378,3 @@ func ParseCronInterval(s string, defaultInterval time.Duration) (time.Duration, 
 	}
 	return d, nil
 }
-

@@ -25,7 +25,7 @@ func defaultRetry() retryConfig {
 }
 
 // withRetry runs fn with exponential backoff until it succeeds, ctx is
-// cancelled, or maxAttempts is reached. Transient RPC/DB errors should not
+// canceled, or maxAttempts is reached. Transient RPC/DB errors should not
 // kill the sync loop; persistent ones should bubble up after enough attempts.
 //
 // The label is included in retry log lines and in the final wrapped error so

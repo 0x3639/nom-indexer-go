@@ -11,10 +11,10 @@ import (
 
 func TestSafeBigIntToInt64(t *testing.T) {
 	tests := []struct {
-		name      string
-		input     *big.Int
-		want      int64
-		wantWarn  bool
+		name     string
+		input    *big.Int
+		want     int64
+		wantWarn bool
 	}{
 		{"nil", nil, 0, false},
 		{"zero", big.NewInt(0), 0, false},
