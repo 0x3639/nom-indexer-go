@@ -108,6 +108,13 @@ func (r *MomentumRepository) List(ctx context.Context, opts ListOpts) ([]*models
 	if err := rows.Err(); err != nil {
 		return nil, 0, err
 	}
+	if len(out) == 0 && opts.Offset > 0 {
+		var err error
+		total, err = fallbackCount(ctx, r.pool, `SELECT COUNT(*) FROM momentums`)
+		if err != nil {
+			return nil, 0, err
+		}
+	}
 	return out, total, nil
 }
 
@@ -144,6 +151,13 @@ func (r *MomentumRepository) ListByProducer(ctx context.Context, producer string
 	}
 	if err := rows.Err(); err != nil {
 		return nil, 0, err
+	}
+	if len(out) == 0 && opts.Offset > 0 {
+		var err error
+		total, err = fallbackCount(ctx, r.pool, `SELECT COUNT(*) FROM momentums WHERE producer = $1`, producer)
+		if err != nil {
+			return nil, 0, err
+		}
 	}
 	return out, total, nil
 }

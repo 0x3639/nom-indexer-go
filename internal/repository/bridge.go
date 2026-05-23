@@ -140,7 +140,17 @@ func (r *BridgeRepository) ListWraps(ctx context.Context, opts ListOpts) ([]*mod
 		}
 		out = append(out, &w)
 	}
-	return out, total, rows.Err()
+	if err := rows.Err(); err != nil {
+		return nil, 0, err
+	}
+	if len(out) == 0 && opts.Offset > 0 {
+		var err error
+		total, err = fallbackCount(ctx, r.pool, `SELECT COUNT(*) FROM wrap_token_requests`)
+		if err != nil {
+			return nil, 0, err
+		}
+	}
+	return out, total, nil
 }
 
 // ListWrapsByAddress returns wraps where to_address matches.
@@ -172,7 +182,18 @@ func (r *BridgeRepository) ListWrapsByAddress(ctx context.Context, address strin
 		}
 		out = append(out, &w)
 	}
-	return out, total, rows.Err()
+	if err := rows.Err(); err != nil {
+		return nil, 0, err
+	}
+	if len(out) == 0 && opts.Offset > 0 {
+		var err error
+		total, err = fallbackCount(ctx, r.pool,
+			`SELECT COUNT(*) FROM wrap_token_requests WHERE to_address = $1`, address)
+		if err != nil {
+			return nil, 0, err
+		}
+	}
+	return out, total, nil
 }
 
 // ListUnwraps returns unwrap_token_requests ordered by
@@ -203,7 +224,17 @@ func (r *BridgeRepository) ListUnwraps(ctx context.Context, opts ListOpts) ([]*m
 		}
 		out = append(out, &u)
 	}
-	return out, total, rows.Err()
+	if err := rows.Err(); err != nil {
+		return nil, 0, err
+	}
+	if len(out) == 0 && opts.Offset > 0 {
+		var err error
+		total, err = fallbackCount(ctx, r.pool, `SELECT COUNT(*) FROM unwrap_token_requests`)
+		if err != nil {
+			return nil, 0, err
+		}
+	}
+	return out, total, nil
 }
 
 // ListUnwrapsByAddress returns unwraps where to_address matches.
@@ -237,7 +268,18 @@ func (r *BridgeRepository) ListUnwrapsByAddress(ctx context.Context, address str
 		}
 		out = append(out, &u)
 	}
-	return out, total, rows.Err()
+	if err := rows.Err(); err != nil {
+		return nil, 0, err
+	}
+	if len(out) == 0 && opts.Offset > 0 {
+		var err error
+		total, err = fallbackCount(ctx, r.pool,
+			`SELECT COUNT(*) FROM unwrap_token_requests WHERE to_address = $1`, address)
+		if err != nil {
+			return nil, 0, err
+		}
+	}
+	return out, total, nil
 }
 
 // GetWrapSyncStopHeight returns the height we should sync back to for wrap requests.

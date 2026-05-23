@@ -72,6 +72,14 @@ behind a load balancer and bleed traffic over as you re-issue tokens.
 All failures are returned as `application/problem+json` per
 [RFC 7807](https://www.rfc-editor.org/rfc/rfc7807).
 
+### Rate limiting and unauthenticated requests
+
+Rate limiting only applies after Auth — the middleware chain runs
+`Auth → RateLimit`, so a request with no token never reaches the
+rate limiter. The bucket is keyed by JWT `sub`. (`/healthz`,
+`/readyz`, and `/metrics` are outside `/api/v1` entirely, so they
+are unauthenticated and unrate-limited by design.)
+
 ## Local development
 
 ```bash

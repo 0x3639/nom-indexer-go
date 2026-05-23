@@ -14,12 +14,20 @@ curl -s http://localhost:8080/healthz
 
 ## Readiness — `GET /readyz`
 
-Pings the Postgres pool. Returns `200` `{"status":"ready"}` when
-the DB is reachable, `503` with a problem+json body when it is not.
+Two checks: pings the Postgres pool **and** verifies the indexer
+schema is present (looks for the `momentums` table). Returns
+`200 {"status":"ready"}` when both pass, `503` with a problem+json
+body when either fails. Safe for k8s readiness probes — it returns
+not-ready until migrations have run on a fresh cluster.
 
 ```bash
 curl -s http://localhost:8080/readyz
 # {"status":"ready"}
+
+# On a fresh DB before the indexer has migrated:
+# {"type":"about:blank","title":"Service Unavailable","status":503,
+#  "detail":"momentums table missing — start the indexer container so migrations run",
+#  "code":"schema_not_migrated"}
 ```
 
 ## Indexer sync state — `GET /api/v1/status`

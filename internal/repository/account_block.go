@@ -204,6 +204,13 @@ func (r *AccountBlockRepository) List(ctx context.Context, opts ListOpts) ([]*mo
 	if err := rows.Err(); err != nil {
 		return nil, 0, err
 	}
+	if len(out) == 0 && opts.Offset > 0 {
+		var err error
+		total, err = fallbackCount(ctx, r.pool, `SELECT COUNT(*) FROM account_blocks`)
+		if err != nil {
+			return nil, 0, err
+		}
+	}
 	return out, total, nil
 }
 
@@ -238,6 +245,14 @@ func (r *AccountBlockRepository) ListByAddress(ctx context.Context, address stri
 	}
 	if err := rows.Err(); err != nil {
 		return nil, 0, err
+	}
+	if len(out) == 0 && opts.Offset > 0 {
+		var err error
+		total, err = fallbackCount(ctx, r.pool,
+			`SELECT COUNT(*) FROM account_blocks WHERE address = $1 OR to_address = $1`, address)
+		if err != nil {
+			return nil, 0, err
+		}
 	}
 	return out, total, nil
 }

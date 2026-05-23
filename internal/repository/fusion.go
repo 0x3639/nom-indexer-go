@@ -89,7 +89,17 @@ func (r *FusionRepository) List(ctx context.Context, activeOnly bool, opts ListO
 		}
 		out = append(out, &f)
 	}
-	return out, total, rows.Err()
+	if err := rows.Err(); err != nil {
+		return nil, 0, err
+	}
+	if len(out) == 0 && opts.Offset > 0 {
+		var err error
+		total, err = fallbackCount(ctx, r.pool, `SELECT COUNT(*) FROM fusions `+where)
+		if err != nil {
+			return nil, 0, err
+		}
+	}
+	return out, total, nil
 }
 
 // ListByAddress returns fusions where the address is either the funder
@@ -126,7 +136,17 @@ func (r *FusionRepository) ListByAddress(ctx context.Context, address string, ac
 		}
 		out = append(out, &f)
 	}
-	return out, total, rows.Err()
+	if err := rows.Err(); err != nil {
+		return nil, 0, err
+	}
+	if len(out) == 0 && opts.Offset > 0 {
+		var err error
+		total, err = fallbackCount(ctx, r.pool, `SELECT COUNT(*) FROM fusions `+where, address)
+		if err != nil {
+			return nil, 0, err
+		}
+	}
+	return out, total, nil
 }
 
 // GetByID retrieves a fusion by ID

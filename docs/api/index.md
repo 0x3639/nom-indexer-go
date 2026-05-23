@@ -8,14 +8,19 @@ documents the conventions that wrap it.
 ## Quick start
 
 ```bash
-# 1. Start the API + Postgres (requires .env with API_JWT_SECRET set)
-docker compose up -d api
+# 1. Start the full stack. The indexer container runs schema
+#    migrations on startup; until those finish, /readyz returns 503
+#    schema_not_migrated, so don't start `api` in isolation against
+#    an empty database.
+docker compose up -d
+# (Requires POSTGRES_PASSWORD and API_JWT_SECRET in .env.)
 
-# 2. Mint a token (admin runs this — there is no token endpoint)
+# 2. Wait for migrations + initial sync, then mint a token (admin
+#    runs this — there is no token endpoint).
 docker compose exec api /app/jwt-issue \
     --sub frontend-dev --ttl 24h --scope read
 
-# 3. Call any endpoint
+# 3. Call any endpoint.
 TOKEN="paste the token here"
 curl -s -H "Authorization: Bearer $TOKEN" \
      http://localhost:8080/api/v1/status | jq
@@ -25,7 +30,9 @@ curl -s -H "Authorization: Bearer $TOKEN" \
 ```
 
 `/healthz` and `/readyz` do not require a token; everything under
-`/api/v1/` does.
+`/api/v1/` does. `/readyz` returns 503 until the database is
+reachable **and** the indexer schema has been applied — so it is
+safe to use as a Kubernetes readiness probe even on a cold cluster.
 
 ## Interactive Swagger UI
 

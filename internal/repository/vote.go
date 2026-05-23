@@ -88,7 +88,18 @@ func (r *VoteRepository) ListByProject(ctx context.Context, projectID string, op
 		}
 		out = append(out, &v)
 	}
-	return out, total, rows.Err()
+	if err := rows.Err(); err != nil {
+		return nil, 0, err
+	}
+	if len(out) == 0 && opts.Offset > 0 {
+		var err error
+		total, err = fallbackCount(ctx, r.pool,
+			`SELECT COUNT(*) FROM votes WHERE project_id = $1`, projectID)
+		if err != nil {
+			return nil, 0, err
+		}
+	}
+	return out, total, nil
 }
 
 // GetVoteCountForPhases counts distinct phases voted on by a voter

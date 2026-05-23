@@ -32,10 +32,15 @@ Prerequisites: Docker, Docker Compose. (Optional: a private Zenon node WS URL.)
 git clone https://github.com/0x3639/nom-indexer-go.git
 cd nom-indexer-go
 
-# Local Postgres credentials (.env is gitignored).
+# Local credentials (.env is gitignored).
 cp .env.example .env
-# Edit .env and set POSTGRES_PASSWORD before continuing.
+# Edit .env: set POSTGRES_PASSWORD (always required). If you also want to
+# run the HTTP API container, set API_JWT_SECRET — e.g. openssl rand -base64 48.
 
+# Indexer + Postgres only (the default; no API):
+docker compose up -d postgres indexer
+
+# Or include the API container (requires API_JWT_SECRET set above):
 docker compose up -d
 
 # Follow the indexer.

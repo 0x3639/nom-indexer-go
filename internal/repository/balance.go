@@ -125,5 +125,13 @@ func (r *BalanceRepository) ListByToken(ctx context.Context, tokenStandard strin
 	if err := rows.Err(); err != nil {
 		return nil, 0, err
 	}
+	if len(out) == 0 && opts.Offset > 0 {
+		var err error
+		total, err = fallbackCount(ctx, r.pool,
+			`SELECT COUNT(*) FROM balances WHERE token_standard = $1 AND balance > 0`, tokenStandard)
+		if err != nil {
+			return nil, 0, err
+		}
+	}
 	return out, total, nil
 }

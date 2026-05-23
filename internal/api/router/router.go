@@ -122,8 +122,13 @@ func healthz(w http.ResponseWriter, _ *http.Request) {
 	httpx.WriteJSON(w, http.StatusOK, map[string]string{"status": "ok"})
 }
 
-// readyz pings the database and reports ready/not_ready. A nil pool
-// (test mode) is treated as "ready" — there's nothing to verify.
+// readyz verifies the database is reachable AND that the indexer
+// schema has been applied. A bare Ping is insufficient because a fresh
+// Postgres container without migrations would report healthy while
+// every /api/v1/* call 500s on missing relations. We probe the
+// information_schema for one of the oldest indexer tables (momentums)
+// — its presence implies migrations 001+ have run. A nil pool (test
+// mode) is treated as ready since there's nothing to verify.
 func readyz(pool *pgxpool.Pool) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		if pool == nil {
@@ -134,6 +139,20 @@ func readyz(pool *pgxpool.Pool) http.HandlerFunc {
 		defer cancel()
 		if err := pool.Ping(ctx); err != nil {
 			httpx.WriteProblem(w, http.StatusServiceUnavailable, "db_unavailable", err.Error())
+			return
+		}
+		var exists bool
+		if err := pool.QueryRow(ctx, `
+			SELECT EXISTS (
+				SELECT 1 FROM information_schema.tables
+				WHERE table_schema = 'public' AND table_name = 'momentums'
+			)`).Scan(&exists); err != nil {
+			httpx.WriteProblem(w, http.StatusServiceUnavailable, "db_unavailable", err.Error())
+			return
+		}
+		if !exists {
+			httpx.WriteProblem(w, http.StatusServiceUnavailable, "schema_not_migrated",
+				"momentums table missing — start the indexer container so migrations run")
 			return
 		}
 		httpx.WriteJSON(w, http.StatusOK, map[string]string{"status": "ready"})

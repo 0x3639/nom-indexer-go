@@ -384,3 +384,44 @@ func TestIntegration_BridgeRepo_List(t *testing.T) {
 		t.Errorf("ListUnwrapsByAddress got %d", len(unwrapsByAddr))
 	}
 }
+
+// TestIntegration_Pagination_TotalBeyondLastPage confirms the fallback
+// COUNT(*) path: when OFFSET skips past every row, the COUNT(*) OVER ()
+// in the paged SELECT returns no rows, so total used to come back as 0
+// for a non-empty table. The fallback runs an explicit COUNT(*) in
+// that case.
+func TestIntegration_Pagination_TotalBeyondLastPage(t *testing.T) {
+	pool := newTestDB(t)
+	ctx := context.Background()
+	repo := NewMomentumRepository(pool)
+
+	for h := uint64(1); h <= 3; h++ {
+		if err := repo.Insert(ctx, &models.Momentum{
+			Height: h, Hash: fmt.Sprintf("h-%d", h), Producer: "z1qp",
+		}); err != nil {
+			t.Fatalf("seed: %v", err)
+		}
+	}
+
+	// Asking for page 100 (offset 99) of a 3-row table returns zero
+	// rows but must still report total=3.
+	rows, total, err := repo.List(ctx, ListOpts{Limit: 1, Offset: 99})
+	if err != nil {
+		t.Fatalf("List: %v", err)
+	}
+	if len(rows) != 0 {
+		t.Errorf("got %d rows, want 0", len(rows))
+	}
+	if total != 3 {
+		t.Errorf("total = %d, want 3 (fallback count missed)", total)
+	}
+
+	// Same edge case via the filtered variant.
+	rows, total, err = repo.ListByProducer(ctx, "z1qp", ListOpts{Limit: 1, Offset: 99})
+	if err != nil {
+		t.Fatalf("ListByProducer: %v", err)
+	}
+	if len(rows) != 0 || total != 3 {
+		t.Errorf("ListByProducer fallback: rows=%d total=%d, want 0/3", len(rows), total)
+	}
+}

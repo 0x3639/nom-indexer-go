@@ -73,7 +73,17 @@ func (r *SentinelRepository) List(ctx context.Context, activeOnly bool, opts Lis
 		}
 		out = append(out, &s)
 	}
-	return out, total, rows.Err()
+	if err := rows.Err(); err != nil {
+		return nil, 0, err
+	}
+	if len(out) == 0 && opts.Offset > 0 {
+		var err error
+		total, err = fallbackCount(ctx, r.pool, `SELECT COUNT(*) FROM sentinels `+where)
+		if err != nil {
+			return nil, 0, err
+		}
+	}
+	return out, total, nil
 }
 
 // GetByOwner retrieves a sentinel by owner

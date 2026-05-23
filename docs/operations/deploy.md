@@ -23,8 +23,14 @@ cd nom-indexer-go
 
 # Local credentials. .env is gitignored.
 cp .env.example .env
-# Edit .env and set POSTGRES_PASSWORD (and other overrides if needed).
+# Edit .env. Required: POSTGRES_PASSWORD.
+# Required only if you bring up the api service: API_JWT_SECRET (any
+# strong random string; openssl rand -base64 48).
 
+# Indexer + Postgres only (most common — read directly from the DB):
+docker compose up -d postgres indexer
+
+# Or the full stack including the read-only HTTP API container:
 docker compose up -d
 ```
 
@@ -34,13 +40,18 @@ The compose file:
 - Wires the indexer to talk to the `postgres` service via the
   `nom-indexer` user network.
 - Exposes Postgres on host port 5432 for local introspection.
+- Defines an optional `api` service (built from `Dockerfile.api`) that
+  exposes the read-only HTTP API on `${API_PORT:-8080}` and
+  Prometheus `/metrics` on `${API_METRICS_PORT:-9090}`. The api
+  container refuses to start without `API_JWT_SECRET` in `.env`.
 
 ## Environment variables
 
 See [`config/reference.md`](../config/reference.md) for the full table.
 The compose-specific ones are `POSTGRES_USER`, `POSTGRES_PASSWORD`,
-`POSTGRES_DB`. The indexer service forwards them as
-`DATABASE_USERNAME`, `DATABASE_PASSWORD`, `DATABASE_NAME`.
+`POSTGRES_DB` (Postgres + indexer + API) plus `API_JWT_SECRET`,
+`API_PORT`, `API_METRICS_PORT`, `API_CORS_ALLOWED_ORIGINS`, and
+`API_RATE_LIMIT_PER_MINUTE` (API only).
 
 ## Image build
 

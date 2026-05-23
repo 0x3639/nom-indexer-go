@@ -83,10 +83,16 @@ func (m *NomIndexer) CI(ctx context.Context, source *dagger.Directory) (string, 
 		return "", err
 	}
 
-	// Build container to validate Dockerfile
-	_ = m.Build(source)
-	// Validate the API Dockerfile too (CGO-disabled build).
-	_ = m.BuildAPI(source)
+	// Build both container images. Dagger graph nodes are lazy —
+	// assigning to _ never materializes the build, so Dockerfile
+	// regressions used to pass CI silently. Sync(ctx) forces the
+	// container to actually build.
+	if _, err := m.Build(source).Sync(ctx); err != nil {
+		return "", err
+	}
+	if _, err := m.BuildAPI(source).Sync(ctx); err != nil {
+		return "", err
+	}
 
 	return "CI passed: lint, test, and build succeeded!", nil
 }

@@ -121,7 +121,18 @@ func (r *RewardRepository) HistoryByAddress(ctx context.Context, address string,
 		rt.RewardType = models.RewardType(rtype)
 		out = append(out, &rt)
 	}
-	return out, total, rows.Err()
+	if err := rows.Err(); err != nil {
+		return nil, 0, err
+	}
+	if len(out) == 0 && opts.Offset > 0 {
+		var err error
+		total, err = fallbackCount(ctx, r.pool,
+			`SELECT COUNT(*) FROM reward_transactions WHERE address = $1`, address)
+		if err != nil {
+			return nil, 0, err
+		}
+	}
+	return out, total, nil
 }
 
 // GetByAddress retrieves reward transactions for an address

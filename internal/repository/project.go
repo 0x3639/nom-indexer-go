@@ -116,7 +116,17 @@ func (r *ProjectRepository) List(ctx context.Context, opts ListOpts) ([]*models.
 		}
 		out = append(out, &p)
 	}
-	return out, total, rows.Err()
+	if err := rows.Err(); err != nil {
+		return nil, 0, err
+	}
+	if len(out) == 0 && opts.Offset > 0 {
+		var err error
+		total, err = fallbackCount(ctx, r.pool, `SELECT COUNT(*) FROM projects`)
+		if err != nil {
+			return nil, 0, err
+		}
+	}
+	return out, total, nil
 }
 
 // GetAll retrieves all projects

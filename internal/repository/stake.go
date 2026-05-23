@@ -88,7 +88,17 @@ func (r *StakeRepository) List(ctx context.Context, activeOnly bool, opts ListOp
 		}
 		out = append(out, &s)
 	}
-	return out, total, rows.Err()
+	if err := rows.Err(); err != nil {
+		return nil, 0, err
+	}
+	if len(out) == 0 && opts.Offset > 0 {
+		var err error
+		total, err = fallbackCount(ctx, r.pool, `SELECT COUNT(*) FROM stakes `+where)
+		if err != nil {
+			return nil, 0, err
+		}
+	}
+	return out, total, nil
 }
 
 // ListByAddress returns stakes owned by the given address.
@@ -123,7 +133,17 @@ func (r *StakeRepository) ListByAddress(ctx context.Context, address string, act
 		}
 		out = append(out, &s)
 	}
-	return out, total, rows.Err()
+	if err := rows.Err(); err != nil {
+		return nil, 0, err
+	}
+	if len(out) == 0 && opts.Offset > 0 {
+		var err error
+		total, err = fallbackCount(ctx, r.pool, `SELECT COUNT(*) FROM stakes `+where, address)
+		if err != nil {
+			return nil, 0, err
+		}
+	}
+	return out, total, nil
 }
 
 // GetByID retrieves a stake by ID
