@@ -799,6 +799,95 @@ paths:
         '429':
           $ref: '#/components/responses/RateLimited'
 
+  /api/v1/momentums/stream:
+    get:
+      operationId: streamMomentums
+      summary: WebSocket stream of new momentums
+      description: |
+        Upgrades the connection to a WebSocket and pushes one JSON
+        frame per newly-indexed momentum. Frame shape matches the
+        `Momentum` schema this spec defines for the REST endpoints.
+
+        ## Auth
+
+        Either of:
+
+        - `Authorization: Bearer <token>` header (CLI, server-side).
+        - `?token=<jwt>` query parameter (browsers — the WebSocket
+          API cannot send custom headers on the upgrade request).
+          Tokens passed this way may end up in HTTP proxy logs;
+          prefer short TTLs for stream consumers.
+
+        ## Replay
+
+        Pass `?from_height=N` to backfill momentums starting at
+        height `N` before switching to live streaming. The catch-up
+        scan is capped at 10,000 rows — beyond that, fall back to
+        the REST `/api/v1/momentums` endpoint for the historical
+        gap and reconnect for live.
+
+        ## Close codes
+
+        | Code | Meaning |
+        |---|---|
+        | 1000 | Normal: client disconnected or server shutdown. |
+        | 1011 | Internal: replay or dispatch error. |
+        | 4000 | `slow_consumer`: the hub dropped frames; reconnect with `from_height` of the last height you saw. |
+
+        Auth failures during the HTTP upgrade come back as
+        `401 application/problem+json`, not as a close code.
+      tags: [momentums]
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: from_height
+          in: query
+          required: false
+          schema:
+            type: integer
+            format: int64
+            minimum: 0
+            examples: [12345000]
+        - name: token
+          in: query
+          required: false
+          description: |
+            JWT fallback for browser clients. Identical semantics to
+            the Authorization header — use one OR the other.
+          schema:
+            type: string
+      responses:
+        '101':
+          description: Switching Protocols — WebSocket connection established.
+        '400':
+          description: Invalid `from_height` value.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '429':
+          description: |
+            Per-subject connection cap reached. The hub limits concurrent
+            stream connections per JWT subject (default 8) so a single
+            token cannot monopolize the stream — long-lived WebSockets
+            bypass the standard per-request rate limiter. Reconnect once
+            an existing connection from this subject closes.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
+        '503':
+          description: |
+            Stream is unavailable. Either the hub is not configured on
+            this API instance (`code: stream_disabled`) or the LISTEN
+            loop has exited / not yet started (`code: stream_unavailable`).
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
+
   /api/v1/momentums/latest:
     get:
       operationId: getLatestMomentum

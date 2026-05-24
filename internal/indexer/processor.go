@@ -3,6 +3,7 @@ package indexer
 import (
 	"context"
 	"encoding/hex"
+	"encoding/json"
 	"fmt"
 	"math"
 	"math/big"
@@ -82,6 +83,14 @@ func (i *Indexer) processMomentum(ctx context.Context, m *api.Momentum) error {
 	}
 	i.repos.Momentum.InsertBatch(ctx, batch, momentum)
 
+	// Queue NOTIFY in the same transaction as the row writes. Postgres
+	// delivers NOTIFY only when the transaction commits, so live stream
+	// clients cannot see an event for rolled-back data, and a pg_notify
+	// failure rolls the whole momentum back for the normal retry path.
+	if err := queueMomentumNotify(batch, momentum); err != nil {
+		return fmt.Errorf("queue momentum %d notify: %w", m.Height, err)
+	}
+
 	// Run the batch inside a transaction so partial failures roll back and the
 	// caller can retry the height instead of advancing past corrupted state.
 	tx, err := i.pool.Begin(ctx)
@@ -121,6 +130,35 @@ func (i *Indexer) processMomentum(ctx context.Context, m *api.Momentum) error {
 		zap.Uint64("height", m.Height),
 		zap.Duration("duration", time.Since(start)))
 
+	return nil
+}
+
+// queueMomentumNotify appends a NOTIFY momentum_new statement with a snake_case JSON
+// payload — same field names as the API's dto.Momentum wire shape, so
+// the stream hub can unmarshal directly into the type it ships to
+// WebSocket clients. (models.Momentum lacks json tags by design — the
+// indexer-side schema is decoupled from the API wire format.)
+//
+// This must be queued inside processMomentum's transaction. Postgres
+// emits NOTIFY messages only after commit, so subscribers are woken
+// exactly when the committed row is visible; rollback suppresses the
+// notification automatically.
+func queueMomentumNotify(batch *pgx.Batch, m *models.Momentum) error {
+	payload, err := json.Marshal(map[string]interface{}{
+		"height":         m.Height,
+		"hash":           m.Hash,
+		"timestamp":      m.Timestamp,
+		"tx_count":       m.TxCount,
+		"producer":       m.Producer,
+		"producer_owner": m.ProducerOwner,
+		"producer_name":  m.ProducerName,
+	})
+	if err != nil {
+		return fmt.Errorf("marshal notify payload: %w", err)
+	}
+	// pg_notify is the function form; takes payload as a parameter so
+	// we don't have to escape JSON manually.
+	batch.Queue(`SELECT pg_notify('momentum_new', $1::text)`, string(payload))
 	return nil
 }
 

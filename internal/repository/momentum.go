@@ -172,3 +172,42 @@ func (r *MomentumRepository) ListByProducer(ctx context.Context, producer string
 	}
 	return out, total, nil
 }
+
+// ListByHeightRange returns momentums whose height is in [from, to]
+// inclusive, ordered by height ascending. Powers the WS stream's
+// replay/catch-up path — a single range scan against the PK index
+// instead of `to-from+1` point lookups.
+//
+// The caller is responsible for sizing the range. Internally we cap
+// at the limit argument (0 means no cap, callers should always pass
+// a sensible bound — the stream handler uses 10,000).
+func (r *MomentumRepository) ListByHeightRange(ctx context.Context, from, to uint64, limit int) ([]*models.Momentum, error) {
+	if from > to {
+		return nil, nil
+	}
+	q := `
+		SELECT height, hash, timestamp, tx_count, producer, producer_owner, producer_name
+		FROM momentums
+		WHERE height >= $1 AND height <= $2
+		ORDER BY height ASC`
+	args := []interface{}{from, to}
+	if limit > 0 {
+		q += ` LIMIT $3`
+		args = append(args, limit)
+	}
+	rows, err := r.pool.Query(ctx, q, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []*models.Momentum
+	for rows.Next() {
+		var m models.Momentum
+		if err := rows.Scan(&m.Height, &m.Hash, &m.Timestamp, &m.TxCount,
+			&m.Producer, &m.ProducerOwner, &m.ProducerName); err != nil {
+			return nil, err
+		}
+		out = append(out, &m)
+	}
+	return out, rows.Err()
+}

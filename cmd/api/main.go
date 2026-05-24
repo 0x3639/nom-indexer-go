@@ -23,10 +23,12 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/jackc/pgx/v5"
 	"go.uber.org/zap"
 
 	"github.com/0x3639/nom-indexer-go/internal/api/metrics"
 	"github.com/0x3639/nom-indexer-go/internal/api/router"
+	"github.com/0x3639/nom-indexer-go/internal/api/stream"
 	"github.com/0x3639/nom-indexer-go/internal/auth"
 	"github.com/0x3639/nom-indexer-go/internal/config"
 	"github.com/0x3639/nom-indexer-go/internal/database"
@@ -70,11 +72,24 @@ func main() {
 	repos := repository.NewRepositories(pool)
 	m := metrics.New()
 
+	// Stream hub: dedicated pgx.Conn (NOT from the pool) holds a single
+	// LISTEN momentum_new for the process lifetime. Constructed here so
+	// the router can route /api/v1/momentums/stream to it; the
+	// goroutine that actually runs it is started after the router is
+	// built so a hub failure can't race the HTTP listener.
+	hub := stream.New(stream.Config{
+		ConnectFn: func(ctx context.Context) (*pgx.Conn, error) {
+			return pgx.Connect(ctx, cfg.Database.ConnectionString())
+		},
+		Logger: logger,
+	})
+
 	r := router.New(router.Deps{
 		Repos:              repos,
 		Signer:             signer,
 		Logger:             logger,
 		Pool:               pool,
+		Hub:                hub,
 		Metrics:            m.Middleware,
 		CORSAllowedOrigins: cfg.API.CORSAllowedOriginsList(),
 		RateLimitPerMinute: cfg.API.RateLimitPerMinute,
@@ -112,6 +127,16 @@ func main() {
 		logger.Info("metrics listening", zap.String("addr", metricsSrv.Addr))
 		if err := metricsSrv.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
 			errCh <- fmt.Errorf("metrics server: %w", err)
+		}
+	}()
+	// Stream hub runs alongside the HTTP listeners. A hub failure
+	// (connection drop, LISTEN error) downgrades the streaming
+	// endpoint to 5xx for new subscribers but does NOT bring down the
+	// REST API — log and continue.
+	go func() {
+		if err := hub.Run(ctx); err != nil {
+			logger.Error("stream hub exited; /api/v1/momentums/stream is degraded",
+				zap.Error(err))
 		}
 	}()
 

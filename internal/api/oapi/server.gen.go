@@ -6,18 +6,11 @@
 package oapi
 
 import (
-	"bytes"
-	"compress/flate"
 	"context"
-	"encoding/base64"
 	"errors"
 	"fmt"
 	"net/http"
-	"net/url"
-	"path"
-	"strings"
 
-	"github.com/getkin/kin-openapi/openapi3"
 	"github.com/oapi-codegen/runtime"
 )
 
@@ -823,6 +816,15 @@ type ListMomentumsParams struct {
 // ListMomentumsParamsSort defines parameters for ListMomentums.
 type ListMomentumsParamsSort string
 
+// StreamMomentumsParams defines parameters for StreamMomentums.
+type StreamMomentumsParams struct {
+	FromHeight *int64 `form:"from_height,omitempty" json:"from_height,omitempty"`
+
+	// Token JWT fallback for browser clients. Identical semantics to
+	// the Authorization header — use one OR the other.
+	Token *string `form:"token,omitempty" json:"token,omitempty"`
+}
+
 // ListPillarsParams defines parameters for ListPillars.
 type ListPillarsParams struct {
 	// Page 1-based page number. Defaults to 1. Out-of-range clamped silently.
@@ -951,6 +953,9 @@ type ServerInterface interface {
 	// Get the most-recently-indexed momentum
 	// (GET /api/v1/momentums/latest)
 	GetLatestMomentum(w http.ResponseWriter, r *http.Request)
+	// WebSocket stream of new momentums
+	// (GET /api/v1/momentums/stream)
+	StreamMomentums(w http.ResponseWriter, r *http.Request, params StreamMomentumsParams)
 	// Get a momentum by height
 	// (GET /api/v1/momentums/{height})
 	GetMomentumByHeight(w http.ResponseWriter, r *http.Request, height int64)
@@ -1862,6 +1867,58 @@ func (siw *ServerInterfaceWrapper) GetLatestMomentum(w http.ResponseWriter, r *h
 	handler.ServeHTTP(w, r)
 }
 
+// StreamMomentums operation middleware
+func (siw *ServerInterfaceWrapper) StreamMomentums(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+	_ = err
+
+	ctx := r.Context()
+
+	ctx = context.WithValue(ctx, BearerAuthScopes, []string{})
+
+	r = r.WithContext(ctx)
+
+	// Parameter object where we will unmarshal all parameters from the context
+	var params StreamMomentumsParams
+
+	// ------------- Optional query parameter "from_height" -------------
+
+	err = runtime.BindQueryParameterWithOptions("form", true, false, "from_height", r.URL.Query(), &params.FromHeight, runtime.BindQueryParameterOptions{Type: "integer", Format: "int64"})
+	if err != nil {
+		var requiredError *runtime.RequiredParameterError
+		if errors.As(err, &requiredError) {
+			siw.ErrorHandlerFunc(w, r, &RequiredParamError{ParamName: "from_height"})
+		} else {
+			siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "from_height", Err: err})
+		}
+		return
+	}
+
+	// ------------- Optional query parameter "token" -------------
+
+	err = runtime.BindQueryParameterWithOptions("form", true, false, "token", r.URL.Query(), &params.Token, runtime.BindQueryParameterOptions{Type: "string", Format: ""})
+	if err != nil {
+		var requiredError *runtime.RequiredParameterError
+		if errors.As(err, &requiredError) {
+			siw.ErrorHandlerFunc(w, r, &RequiredParamError{ParamName: "token"})
+		} else {
+			siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "token", Err: err})
+		}
+		return
+	}
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.StreamMomentums(w, r, params)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
 // GetMomentumByHeight operation middleware
 func (siw *ServerInterfaceWrapper) GetMomentumByHeight(w http.ResponseWriter, r *http.Request) {
 
@@ -2688,6 +2745,7 @@ func HandlerWithOptions(si ServerInterface, options StdHTTPServerOptions) http.H
 	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/api/v1/fusions", wrapper.ListFusions)
 	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/api/v1/momentums", wrapper.ListMomentums)
 	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/api/v1/momentums/latest", wrapper.GetLatestMomentum)
+	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/api/v1/momentums/stream", wrapper.StreamMomentums)
 	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/api/v1/momentums/{height}", wrapper.GetMomentumByHeight)
 	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/api/v1/pillars", wrapper.ListPillars)
 	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/api/v1/pillars/{name}", wrapper.GetPillar)
@@ -2706,206 +2764,4 @@ func HandlerWithOptions(si ServerInterface, options StdHTTPServerOptions) http.H
 	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/readyz", wrapper.GetReadyz)
 
 	return m
-}
-
-// Base64 encoded, compressed with deflate, json marshaled OpenAPI spec.
-// Stored as a slice of fixed-width chunks rather than one concatenated
-// const string: with thousands of chunks the chained `+` fold is several
-// times slower for the Go compiler than parsing a slice literal.
-var swaggerSpec = []string{
-	"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",
-}
-
-// decodeSpec returns the embedded OpenAPI spec as raw JSON bytes,
-// after base64-decoding and flate-decompressing the embedded blob.
-func decodeSpec() ([]byte, error) {
-	encoded := strings.Join(swaggerSpec, "")
-	compressed, err := base64.StdEncoding.DecodeString(encoded)
-	if err != nil {
-		return nil, fmt.Errorf("error base64 decoding spec: %w", err)
-	}
-	zr := flate.NewReader(bytes.NewReader(compressed))
-	var buf bytes.Buffer
-	if _, err := buf.ReadFrom(zr); err != nil {
-		return nil, fmt.Errorf("read flate: %w", err)
-	}
-	if err := zr.Close(); err != nil {
-		return nil, fmt.Errorf("close flate reader: %w", err)
-	}
-
-	return buf.Bytes(), nil
-}
-
-var rawSpec = decodeSpecCached()
-
-// a naive cache of the decoded OpenAPI spec
-func decodeSpecCached() func() ([]byte, error) {
-	data, err := decodeSpec()
-	return func() ([]byte, error) {
-		return data, err
-	}
-}
-
-// Constructs a synthetic filesystem for resolving external references when loading openapi specifications.
-func PathToRawSpec(pathToFile string) map[string]func() ([]byte, error) {
-	res := make(map[string]func() ([]byte, error))
-	if len(pathToFile) > 0 {
-		res[pathToFile] = rawSpec
-	}
-
-	return res
-}
-
-// GetSpec returns the OpenAPI specification corresponding to the generated
-// code in this file. External references in the spec are resolved through
-// PathToRawSpec; externally-referenced files must be embedded in their
-// corresponding Go packages (via the import-mapping feature). URL-based
-// external refs are not supported.
-func GetSpec() (swagger *openapi3.T, err error) {
-	resolvePath := PathToRawSpec("")
-
-	loader := openapi3.NewLoader()
-	loader.IsExternalRefsAllowed = true
-	loader.ReadFromURIFunc = func(loader *openapi3.Loader, url *url.URL) ([]byte, error) {
-		pathToFile := url.String()
-		pathToFile = path.Clean(pathToFile)
-		getSpec, ok := resolvePath[pathToFile]
-		if !ok {
-			err1 := fmt.Errorf("path not found: %s", pathToFile)
-			return nil, err1
-		}
-		return getSpec()
-	}
-	var specData []byte
-	specData, err = rawSpec()
-	if err != nil {
-		return
-	}
-	swagger, err = loader.LoadFromData(specData)
-	if err != nil {
-		return
-	}
-	return
-}
-
-// GetSpecJSON returns the raw JSON bytes of the embedded OpenAPI
-// specification: decompressed but not unmarshaled. External references
-// are not resolved here; the bytes are the spec exactly as embedded by
-// codegen. The result is cached at package init time, so repeated calls
-// are cheap.
-func GetSpecJSON() ([]byte, error) {
-	return rawSpec()
-}
-
-// GetSwagger returns the OpenAPI specification corresponding to the
-// generated code in this file.
-//
-// Deprecated: GetSwagger predates kin-openapi renaming openapi3.Swagger
-// to openapi3.T. Use [GetSpec] instead. This wrapper is retained for
-// backwards compatibility.
-func GetSwagger() (*openapi3.T, error) {
-	return GetSpec()
 }

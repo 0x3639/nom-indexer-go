@@ -30,6 +30,14 @@ func (s *statusRecorder) Write(b []byte) (int, error) {
 	return n, err
 }
 
+// Unwrap exposes the underlying ResponseWriter to http.ResponseController
+// (Go 1.20+). Without this, callers that need Hijacker (e.g. the
+// WebSocket library at /api/v1/momentums/stream) get the wrapper here
+// and fail with 501 Not Implemented.
+func (s *statusRecorder) Unwrap() http.ResponseWriter {
+	return s.ResponseWriter
+}
+
 // subHolder is the per-request mutable cell the Auth middleware writes
 // the JWT subject into. The Logger middleware allocates one and seeds
 // the request context with a pointer to it BEFORE calling

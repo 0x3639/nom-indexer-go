@@ -4,6 +4,7 @@ go 1.25
 
 require (
 	github.com/0x3639/znn-sdk-go v0.1.12
+	github.com/coder/websocket v1.8.14
 	github.com/getkin/kin-openapi v0.139.0
 	github.com/go-chi/chi/v5 v5.3.0
 	github.com/go-chi/cors v1.2.2
