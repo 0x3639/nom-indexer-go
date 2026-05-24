@@ -1,12 +1,14 @@
 package stream
 
 import (
+	"context"
 	"errors"
 	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
 
+	"github.com/jackc/pgx/v5"
 	"go.uber.org/zap"
 
 	"github.com/0x3639/nom-indexer-go/internal/api/dto"
@@ -205,6 +207,82 @@ func TestHub_StatePending_RejectsSubscribe(t *testing.T) {
 	}
 	if h.Running() {
 		t.Error("Running() = true on a pending hub")
+	}
+}
+
+// TestHub_RunReconnectsOnConnectFailure forces the connectFn to fail
+// every call. The hub should retry with backoff rather than giving up
+// after the first failure (which was the pre-fix behavior — Run
+// returned permanently on any connect error).
+//
+// We let Run iterate for ~3 seconds then cancel; the initial backoff
+// is 1s (initialBackoff const), so we expect 3+ connectFn calls.
+func TestHub_RunReconnectsOnConnectFailure(t *testing.T) {
+	var calls atomic.Int32
+	connectErr := errors.New("simulated DB outage")
+	h := New(Config{
+		Logger:    zap.NewNop(),
+		ClientBuf: 4,
+		ConnectFn: func(_ context.Context) (*pgx.Conn, error) {
+			calls.Add(1)
+			return nil, connectErr
+		},
+	})
+
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+
+	runErr := make(chan error, 1)
+	go func() { runErr <- h.Run(ctx) }()
+
+	select {
+	case err := <-runErr:
+		if err != nil {
+			t.Errorf("Run returned %v, want nil on ctx-canceled exit", err)
+		}
+	case <-time.After(4 * time.Second):
+		t.Fatal("Run did not exit within timeout")
+	}
+
+	if got := calls.Load(); got < 2 {
+		t.Errorf("connectFn called %d times, want >= 2 (proves retry loop)", got)
+	}
+	if h.Running() {
+		t.Error("Running() = true after ctx canceled — should be stopped")
+	}
+}
+
+// TestHub_CloseAllSubsKeepsStateRunning verifies the split between
+// closeAllSubs (for reconnect — closes channels, leaves state alone)
+// and drainAll (for terminal shutdown — both). The reconnect path
+// closes existing subs so client handlers exit; new clients can then
+// subscribe and start receiving frames once the connection is back.
+func TestHub_CloseAllSubsKeepsStateRunning(t *testing.T) {
+	h := newTestHub()
+	a := mustSubscribe(t, h, "alice")
+	b := mustSubscribe(t, h, "bob")
+
+	h.closeAllSubs()
+
+	for i, s := range []*Subscriber{a, b} {
+		select {
+		case _, ok := <-s.Recv():
+			if ok {
+				t.Errorf("sub %d: expected closed channel, got value", i)
+			}
+		case <-time.After(100 * time.Millisecond):
+			t.Errorf("sub %d: Recv() did not unblock after closeAllSubs", i)
+		}
+	}
+
+	if !h.Running() {
+		t.Error("closeAllSubs flipped state; should only happen on drainAll")
+	}
+	c, err := h.Subscribe("carol")
+	if err != nil {
+		t.Errorf("Subscribe after closeAllSubs: %v", err)
+	} else {
+		c.Close()
 	}
 }
 

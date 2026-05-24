@@ -3,6 +3,12 @@ output: server.gen.go
 generate:
   std-http-server: true
   models: true
-  embedded-spec: true
+  # embedded-spec rewrites a gzip+base64 blob on every generator run
+  # because oapi-codegen's compression isn't deterministic. We don't
+  # consume oapi.GetSwagger() anywhere — docs/api/openapi.yaml is the
+  # source of truth and the docs site serves it raw — so disabling
+  # the embed keeps `go generate` idempotent and shrinks the
+  # committed file by ~6 KB.
+  embedded-spec: false
 output-options:
   skip-prune: true

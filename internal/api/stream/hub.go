@@ -31,11 +31,29 @@ const defaultClientBuffer = 32
 // connections.
 const defaultPerSubjectMax = 8
 
-// Hub state transitions. Once stopped, the hub is terminal — a new Run
-// goroutine on the same Hub is not supported (rebuild via New).
+// Reconnect backoff bounds for the LISTEN loop. A transient DB blip
+// (failover, network glitch) should self-heal without a process
+// restart; cap matches typical k8s service-mesh retry budgets.
+const (
+	initialBackoff = time.Second
+	maxBackoff     = 30 * time.Second
+)
+
+// Hub state transitions:
+//
+//	pending → running   (LISTEN succeeded; Subscribe accepts)
+//	running → degraded  (notification error; Subscribe rejects, will retry)
+//	degraded → running  (reconnect succeeded)
+//	any → stopped       (ctx canceled; Run exiting permanently)
+//
+// Subscribe accepts only in state running. Degraded and stopped both
+// reject with ErrHubNotRunning — callers don't need to distinguish
+// "transient down" from "terminal down"; reconnect with backoff is the
+// same client-side strategy either way.
 const (
 	statePending int32 = iota
 	stateRunning
+	stateDegraded
 	stateStopped
 )
 
@@ -206,14 +224,15 @@ func (h *Hub) unsubscribe(s *Subscriber) {
 	}
 }
 
-// drainAll flips state to stopped and closes every current subscriber.
-// Called when Run returns (clean shutdown or unrecoverable failure) so
-// existing WS handlers unblock their <-sub.Recv() loops promptly
-// instead of waiting forever on a dead hub.
-func (h *Hub) drainAll() {
+// closeAllSubs closes every current subscriber's channel and clears
+// the maps WITHOUT changing hub state. Called both between reconnect
+// attempts (so existing WS clients drop their stalled connections and
+// reconnect once the hub is healthy) and on terminal shutdown (via
+// drainAll). After this, every Subscriber the caller previously held
+// will see a closed channel.
+func (h *Hub) closeAllSubs() {
 	h.mu.Lock()
 	defer h.mu.Unlock()
-	h.state.Store(stateStopped)
 	for s := range h.subs {
 		if !s.closed.Swap(true) {
 			close(s.ch)
@@ -223,35 +242,112 @@ func (h *Hub) drainAll() {
 	h.perSubject = make(map[string]int)
 }
 
-// Run owns a single dedicated pgx.Conn, issues LISTEN momentum_new, and
-// loops on WaitForNotification until ctx is canceled. Returns nil on
-// clean shutdown, error on unrecoverable connection failure. Callers
-// should run this in a goroutine and treat a returned error as fatal
-// for the streaming subsystem (the API itself keeps serving REST).
+// drainAll flips state to stopped (terminal) and closes every current
+// subscriber. Called when Run is about to return permanently — ctx
+// canceled — so callers' <-sub.Recv() loops unblock promptly and new
+// Subscribe calls fail with ErrHubNotRunning.
+func (h *Hub) drainAll() {
+	h.state.Store(stateStopped)
+	h.closeAllSubs()
+}
+
+// sleep waits for d or ctx cancellation. Returns true if the duration
+// elapsed normally, false if ctx was canceled (caller should exit).
+func sleep(ctx context.Context, d time.Duration) bool {
+	t := time.NewTimer(d)
+	defer t.Stop()
+	select {
+	case <-ctx.Done():
+		return false
+	case <-t.C:
+		return true
+	}
+}
+
+func nextBackoff(d time.Duration) time.Duration {
+	next := d * 2
+	if next > maxBackoff {
+		return maxBackoff
+	}
+	return next
+}
+
+// Run owns the LISTEN lifecycle for the process. The outer loop wraps
+// connect + LISTEN + WaitForNotification in a reconnect-with-backoff
+// retry so a transient DB blip or LISTEN connection drop self-heals
+// without a process restart. Returns nil only when ctx is canceled
+// (clean shutdown); any other failure path is treated as transient
+// and retried up to maxBackoff cadence.
 //
-// On exit (clean or error), all existing subscribers are closed and
-// the hub state flips to stopped so new Subscribe calls return
-// ErrHubNotRunning. The hub is not restartable — rebuild via New.
+// Subscriber semantics across reconnects:
 //
-//nolint:contextcheck // shutdown-close uses a detached ctx by design
+//   - Active subscribers are closed every time the underlying
+//     connection drops (closeAllSubs). WS handlers observe the
+//     channel close and tear down their client connections; clients
+//     reconnect with from_height of their last seen momentum to fill
+//     the gap.
+//   - During reconnect attempts the hub sits in stateDegraded and
+//     Subscribe rejects with ErrHubNotRunning. Clients retry until
+//     the hub flips back to stateRunning (typically within seconds).
+//
+//nolint:contextcheck // detached ctx used only on shutdown / pgx close
 func (h *Hub) Run(ctx context.Context) error {
 	defer h.drainAll()
+	backoff := initialBackoff
 
+	for {
+		if err := h.connectAndListen(ctx); err != nil {
+			if ctx.Err() != nil {
+				return nil
+			}
+			h.logger.Warn("stream hub connect/listen failed; will retry",
+				zap.Error(err), zap.Duration("backoff", backoff))
+			h.state.Store(stateDegraded)
+			if !sleep(ctx, backoff) {
+				return nil
+			}
+			backoff = nextBackoff(backoff)
+			continue
+		}
+
+		// connectAndListen succeeded and returned (either ctx canceled
+		// or notification error). closeAllSubs has already run so
+		// stale subscribers don't outlive the connection drop.
+		if ctx.Err() != nil {
+			return nil
+		}
+		// Notification error case — keep retrying. Reset backoff after
+		// a successful session so a long-lived hub that drops once
+		// doesn't start at the maxBackoff cap.
+		h.state.Store(stateDegraded)
+		if !sleep(ctx, backoff) {
+			return nil
+		}
+		backoff = nextBackoff(backoff)
+	}
+}
+
+// connectAndListen runs one connect→LISTEN→waitLoop cycle. Returns
+// nil on a clean exit (ctx canceled), an error on either a connect
+// failure or a notification wait failure. The caller (Run) decides
+// whether to retry. closeAllSubs runs on every exit path so a stale
+// connection never has lingering subscribers.
+//
+//nolint:contextcheck // pgx.Close on a detached ctx is the standard cleanup pattern
+func (h *Hub) connectAndListen(ctx context.Context) error {
 	conn, err := h.connectFn(ctx)
 	if err != nil {
-		return fmt.Errorf("stream hub connect: %w", err)
+		return fmt.Errorf("connect: %w", err)
 	}
 	defer func() {
-		// Best-effort close on shutdown. Detached context with a short
-		// deadline because the outer ctx is by definition canceled
-		// here (that's what triggered Run to return).
 		closeCtx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 		defer cancel()
-		_ = conn.Close(closeCtx) //nolint:contextcheck // shutdown path; outer ctx is canceled
+		_ = conn.Close(closeCtx)
 	}()
+	defer h.closeAllSubs()
 
 	if _, err := conn.Exec(ctx, "LISTEN "+channelName); err != nil {
-		return fmt.Errorf("stream hub LISTEN: %w", err)
+		return fmt.Errorf("LISTEN: %w", err)
 	}
 	h.state.Store(stateRunning)
 	h.logger.Info("stream hub listening", zap.String("channel", channelName))
@@ -263,7 +359,7 @@ func (h *Hub) Run(ctx context.Context) error {
 				h.logger.Info("stream hub shutting down")
 				return nil
 			}
-			return fmt.Errorf("stream hub wait: %w", err)
+			return fmt.Errorf("wait: %w", err)
 		}
 		var m dto.Momentum
 		if err := json.Unmarshal([]byte(notif.Payload), &m); err != nil {
