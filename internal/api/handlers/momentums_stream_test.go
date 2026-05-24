@@ -46,13 +46,17 @@ func (f *fakeStreamRepo) ListByHeightRange(_ context.Context, from, to uint64, l
 	return out, nil
 }
 
-func newStreamHarness(t *testing.T, repo *fakeStreamRepo) (string, *auth.Signer, *stream.Hub, func()) {
+func newStreamHarness(t *testing.T, repo *fakeStreamRepo) (string, *auth.Signer, *stream.Hub[*dto.Momentum], func()) {
 	t.Helper()
 	signer, err := auth.NewSigner("test-secret-32-bytes-or-longer-okok")
 	if err != nil {
 		t.Fatalf("signer: %v", err)
 	}
-	hub := stream.New(stream.Config{Logger: zap.NewNop()})
+	hub := stream.New(stream.Config[*dto.Momentum]{
+		Logger:      zap.NewNop(),
+		ChannelName: "momentum_new",
+		Unmarshal:   stream.UnmarshalJSON[dto.Momentum](),
+	})
 	stream.MarkRunningForTest(hub) // bypass the LISTEN loop for handler tests
 
 	mux := http.NewServeMux()
@@ -241,7 +245,11 @@ func TestStream_ServerShutdownClosesClients(t *testing.T) {
 // upgrade that hangs forever.
 func TestStream_HubNotRunningReturns503(t *testing.T) {
 	signer, _ := auth.NewSigner("test-secret-32-bytes-or-longer-okok")
-	hub := stream.New(stream.Config{Logger: zap.NewNop()})
+	hub := stream.New(stream.Config[*dto.Momentum]{
+		Logger:      zap.NewNop(),
+		ChannelName: "momentum_new",
+		Unmarshal:   stream.UnmarshalJSON[dto.Momentum](),
+	})
 	// Deliberately do NOT call MarkRunningForTest — hub is pending.
 
 	mux := http.NewServeMux()
@@ -262,7 +270,12 @@ func TestStream_HubNotRunningReturns503(t *testing.T) {
 // are rejected with 429 instead of being accepted.
 func TestStream_PerSubjectLimitReturns429(t *testing.T) {
 	signer, _ := auth.NewSigner("test-secret-32-bytes-or-longer-okok")
-	hub := stream.New(stream.Config{Logger: zap.NewNop(), PerSubjectMax: 2})
+	hub := stream.New(stream.Config[*dto.Momentum]{
+		Logger:        zap.NewNop(),
+		ChannelName:   "momentum_new",
+		Unmarshal:     stream.UnmarshalJSON[dto.Momentum](),
+		PerSubjectMax: 2,
+	})
 	stream.MarkRunningForTest(hub)
 
 	mux := http.NewServeMux()
@@ -301,6 +314,6 @@ func TestStream_PerSubjectLimitReturns429(t *testing.T) {
 // hubDispatch synthesizes a NOTIFY without the postgres round-trip.
 // The stream package exposes DispatchForTest as the only way to inject
 // a momentum into the in-process fan-out from outside the package.
-func hubDispatch(h *stream.Hub, m *dto.Momentum) {
+func hubDispatch(h *stream.Hub[*dto.Momentum], m *dto.Momentum) {
 	stream.DispatchForTest(h, m)
 }

@@ -900,6 +900,16 @@ type ListTokenHoldersParams struct {
 	PageSize *PageSizeParam `form:"page_size,omitempty" json:"page_size,omitempty"`
 }
 
+// StreamTransactionsParams defines parameters for StreamTransactions.
+type StreamTransactionsParams struct {
+	// Address Server-side filter. Empty = firehose.
+	Address    *string `form:"address,omitempty" json:"address,omitempty"`
+	FromHeight *int64  `form:"from_height,omitempty" json:"from_height,omitempty"`
+
+	// Token JWT fallback for browser clients.
+	Token *string `form:"token,omitempty" json:"token,omitempty"`
+}
+
 // GetReadyz200JSONResponseBodyStatus defines parameters for GetReadyz.
 type GetReadyz200JSONResponseBodyStatus string
 
@@ -998,6 +1008,9 @@ type ServerInterface interface {
 	// Richlist for a token
 	// (GET /api/v1/tokens/{token_standard}/holders)
 	ListTokenHolders(w http.ResponseWriter, r *http.Request, tokenStandard string, params ListTokenHoldersParams)
+	// WebSocket stream of new account_blocks (transactions)
+	// (GET /api/v1/transactions/stream)
+	StreamTransactions(w http.ResponseWriter, r *http.Request, params StreamTransactionsParams)
 	// Liveness probe
 	// (GET /healthz)
 	GetHealthz(w http.ResponseWriter, r *http.Request)
@@ -2581,6 +2594,71 @@ func (siw *ServerInterfaceWrapper) ListTokenHolders(w http.ResponseWriter, r *ht
 	handler.ServeHTTP(w, r)
 }
 
+// StreamTransactions operation middleware
+func (siw *ServerInterfaceWrapper) StreamTransactions(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+	_ = err
+
+	ctx := r.Context()
+
+	ctx = context.WithValue(ctx, BearerAuthScopes, []string{})
+
+	r = r.WithContext(ctx)
+
+	// Parameter object where we will unmarshal all parameters from the context
+	var params StreamTransactionsParams
+
+	// ------------- Optional query parameter "address" -------------
+
+	err = runtime.BindQueryParameterWithOptions("form", true, false, "address", r.URL.Query(), &params.Address, runtime.BindQueryParameterOptions{Type: "string", Format: ""})
+	if err != nil {
+		var requiredError *runtime.RequiredParameterError
+		if errors.As(err, &requiredError) {
+			siw.ErrorHandlerFunc(w, r, &RequiredParamError{ParamName: "address"})
+		} else {
+			siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "address", Err: err})
+		}
+		return
+	}
+
+	// ------------- Optional query parameter "from_height" -------------
+
+	err = runtime.BindQueryParameterWithOptions("form", true, false, "from_height", r.URL.Query(), &params.FromHeight, runtime.BindQueryParameterOptions{Type: "integer", Format: "int64"})
+	if err != nil {
+		var requiredError *runtime.RequiredParameterError
+		if errors.As(err, &requiredError) {
+			siw.ErrorHandlerFunc(w, r, &RequiredParamError{ParamName: "from_height"})
+		} else {
+			siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "from_height", Err: err})
+		}
+		return
+	}
+
+	// ------------- Optional query parameter "token" -------------
+
+	err = runtime.BindQueryParameterWithOptions("form", true, false, "token", r.URL.Query(), &params.Token, runtime.BindQueryParameterOptions{Type: "string", Format: ""})
+	if err != nil {
+		var requiredError *runtime.RequiredParameterError
+		if errors.As(err, &requiredError) {
+			siw.ErrorHandlerFunc(w, r, &RequiredParamError{ParamName: "token"})
+		} else {
+			siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "token", Err: err})
+		}
+		return
+	}
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.StreamTransactions(w, r, params)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
 // GetHealthz operation middleware
 func (siw *ServerInterfaceWrapper) GetHealthz(w http.ResponseWriter, r *http.Request) {
 
@@ -2760,6 +2838,7 @@ func HandlerWithOptions(si ServerInterface, options StdHTTPServerOptions) http.H
 	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/api/v1/tokens", wrapper.ListTokens)
 	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/api/v1/tokens/{token_standard}", wrapper.GetToken)
 	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/api/v1/tokens/{token_standard}/holders", wrapper.ListTokenHolders)
+	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/api/v1/transactions/stream", wrapper.StreamTransactions)
 	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/healthz", wrapper.GetHealthz)
 	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/readyz", wrapper.GetReadyz)
 

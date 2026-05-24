@@ -74,7 +74,7 @@ const (
 //     with from_height of the last momentum it saw.
 //
 //nolint:contextcheck // WS connection lifecycle is detached from r.Context by design — see body comment
-func MomentumsStream(signer *auth.Signer, hub *stream.Hub, repo streamMomentumsRepo) http.HandlerFunc {
+func MomentumsStream(signer *auth.Signer, hub *stream.Hub[*dto.Momentum], repo streamMomentumsRepo) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		// 1. Auth — header preferred, query-param fallback for browsers.
 		tok, codeStr := streamToken(r)
@@ -234,7 +234,7 @@ func replay(ctx context.Context, conn *websocket.Conn, repo streamMomentumsRepo,
 // runLive blocks on the subscriber channel + a ping ticker until the
 // client goes away. lastSent suppresses any momentum height <= lastSent
 // so a replay that overlapped with live arrivals doesn't double-emit.
-func runLive(ctx context.Context, conn *websocket.Conn, sub *stream.Subscriber, lastSent uint64) {
+func runLive(ctx context.Context, conn *websocket.Conn, sub *stream.Subscriber[*dto.Momentum], lastSent uint64) {
 	pingTicker := time.NewTicker(streamPingInterval)
 	defer pingTicker.Stop()
 
