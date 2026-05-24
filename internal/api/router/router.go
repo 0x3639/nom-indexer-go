@@ -120,6 +120,7 @@ func New(d Deps) http.Handler {
 		r.Get("/pillars", handlers.PillarsList(d.Repos.Pillar))
 		r.Get("/pillars/{name}", handlers.PillarsGetByName(d.Repos.Pillar))
 		r.Get("/pillars/{name}/delegators", handlers.PillarsDelegators(d.Repos.Pillar))
+		r.Get("/pillars/{name}/voting-report", handlers.PillarsVotingHistory(d.Repos.Vote))
 
 		r.Get("/sentinels", handlers.SentinelsList(d.Repos.Sentinel))
 
@@ -136,6 +137,7 @@ func New(d Deps) http.Handler {
 		r.Get("/projects/{id}", handlers.ProjectsGet(d.Repos.Project))
 		r.Get("/projects/{id}/phases", handlers.ProjectsPhases(d.Repos.ProjectPhase))
 		r.Get("/projects/{id}/votes", handlers.ProjectsVotes(d.Repos.Vote))
+		r.Get("/projects/{id}/voting-report", handlers.ProjectsVotingReport(d.Repos.Vote))
 
 		r.Get("/bridge/wraps", handlers.BridgeWraps(d.Repos.Bridge))
 		r.Get("/bridge/unwraps", handlers.BridgeUnwraps(d.Repos.Bridge))

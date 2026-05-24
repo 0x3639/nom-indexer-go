@@ -95,6 +95,40 @@ func PillarsDelegators(repo pillarsRepo) http.HandlerFunc {
 	}
 }
 
+// PillarsVotingHistory handles GET /api/v1/pillars/{name}/voting-report.
+// Returns one pillar's complete voting record across every project +
+// phase, with project + phase names joined server-side and vote codes
+// already translated to strings.
+func PillarsVotingHistory(repo votingReportRepo) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		name := chi.URLParam(r, "name")
+		if name == "" {
+			httpx.WriteProblem(w, http.StatusBadRequest, "invalid_name", "name is required")
+			return
+		}
+		row, err := repo.PillarVotingHistory(r.Context(), name)
+		if err != nil {
+			writeRepoError(w, err)
+			return
+		}
+		raws := make([]dto.RawPillarVote, 0, len(row.Votes))
+		for _, v := range row.Votes {
+			raws = append(raws, dto.RawPillarVote{
+				VotingID:          v.VotingID,
+				Vote:              v.Vote,
+				MomentumHeight:    v.MomentumHeight,
+				MomentumTimestamp: v.MomentumTimestamp,
+				ProjectID:         v.ProjectID,
+				PhaseID:           v.PhaseID,
+				ProjectName:       v.ProjectName,
+				PhaseName:         v.PhaseName,
+			})
+		}
+		httpx.WriteJSON(w, http.StatusOK,
+			dto.FromPillarVotingHistory(row.PillarName, row.PillarOwner, raws))
+	}
+}
+
 type sentinelsRepo interface {
 	List(ctx context.Context, activeOnly bool, opts repository.ListOpts) ([]*models.Sentinel, int64, error)
 }

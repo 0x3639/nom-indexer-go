@@ -605,6 +605,68 @@ components:
         data: { type: array, items: { $ref: '#/components/schemas/Vote' } }
         pagination: { $ref: '#/components/schemas/Pagination' }
 
+    ProposalVoteTally:
+      type: object
+      required: [voting_id, yes_count, no_count, abstain_count, no_vote_count,
+                 yes_pillars, no_pillars, abstain_pillars, no_vote_pillars]
+      properties:
+        voting_id: { type: string }
+        yes_count: { type: integer }
+        no_count: { type: integer }
+        abstain_count: { type: integer }
+        no_vote_count: { type: integer, description: "Active pillars that have not voted on this proposal." }
+        yes_pillars:     { type: array, items: { type: string } }
+        no_pillars:      { type: array, items: { type: string } }
+        abstain_pillars: { type: array, items: { type: string } }
+        no_vote_pillars: { type: array, items: { type: string } }
+
+    PhaseVoteTally:
+      type: object
+      required: [phase_id, phase_name, vote]
+      properties:
+        phase_id: { type: string }
+        phase_name: { type: string }
+        vote: { $ref: '#/components/schemas/ProposalVoteTally' }
+
+    ProjectVotingReport:
+      type: object
+      required: [project_id, project_name, active_pillar_count, project, phases]
+      properties:
+        project_id: { type: string }
+        project_name: { type: string }
+        active_pillar_count: { type: integer, description: "Denominator used for each tally — current is_revoked=false set." }
+        project: { $ref: '#/components/schemas/ProposalVoteTally' }
+        phases:
+          type: array
+          items: { $ref: '#/components/schemas/PhaseVoteTally' }
+
+    PillarVoteEntry:
+      type: object
+      required: [project_id, voting_id, vote, momentum_height, momentum_timestamp]
+      properties:
+        project_id: { type: string }
+        project_name: { type: string }
+        phase_id: { type: string }
+        phase_name: { type: string }
+        voting_id: { type: string }
+        vote: { type: string, enum: [yes, no, abstain, unknown] }
+        momentum_height: { type: integer, format: int64 }
+        momentum_timestamp: { type: integer, format: int64 }
+
+    PillarVotingHistory:
+      type: object
+      required: [pillar_name, pillar_owner, total_votes, yes_count, no_count, abstain_count, votes]
+      properties:
+        pillar_name: { type: string }
+        pillar_owner: { type: string }
+        total_votes: { type: integer }
+        yes_count: { type: integer }
+        no_count: { type: integer }
+        abstain_count: { type: integer }
+        votes:
+          type: array
+          items: { $ref: '#/components/schemas/PillarVoteEntry' }
+
     WrapTokenRequest:
       type: object
       required: [id, network_class, chain_id, to_address, token_standard, token_address, amount, fee, creation_momentum_height, confirmations_to_finality]
@@ -1324,6 +1386,38 @@ paths:
         '429':
           $ref: '#/components/responses/RateLimited'
 
+  /api/v1/pillars/{name}/voting-report:
+    get:
+      operationId: getPillarVotingHistory
+      summary: Server-aggregated voting history for a named pillar
+      description: |
+        Returns one pillar's complete voting record across every
+        Accelerator-Z project AND phase, with project + phase names
+        joined server-side and vote codes already translated to
+        `"yes"` / `"no"` / `"abstain"`. Ordered by `momentum_timestamp`
+        DESC.
+      tags: [pillars]
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: name
+          in: path
+          required: true
+          schema: { type: string }
+      responses:
+        '200':
+          description: Pillar voting history.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/PillarVotingHistory' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '404':
+          description: No pillar with that name.
+          content:
+            application/problem+json:
+              schema: { $ref: '#/components/schemas/Problem' }
+        '429': { $ref: '#/components/responses/RateLimited' }
+
   /api/v1/stakes:
     get:
       operationId: listStakes
@@ -1554,6 +1648,39 @@ paths:
             application/json:
               schema: { $ref: '#/components/schemas/VoteList' }
         '401': { $ref: '#/components/responses/Unauthorized' }
+        '429': { $ref: '#/components/responses/RateLimited' }
+
+  /api/v1/projects/{id}/voting-report:
+    get:
+      operationId: getProjectVotingReport
+      summary: Server-aggregated voting report for a project + all its phases
+      description: |
+        Returns the project's own proposal vote AND every phase's vote
+        pre-aggregated against the current active pillar set
+        (`is_revoked = false`). Each tally lists `yes_pillars`,
+        `no_pillars`, `abstain_pillars`, and `no_vote_pillars` by name.
+        One call replaces enumerate-projects + paginate-list_project_votes
+        + filter-by-pillar.
+      tags: [projects]
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: string }
+      responses:
+        '200':
+          description: Project voting report.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ProjectVotingReport' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '404':
+          description: No project with that ID.
+          content:
+            application/problem+json:
+              schema: { $ref: '#/components/schemas/Problem' }
         '429': { $ref: '#/components/responses/RateLimited' }
 
   /api/v1/bridge/wraps:
