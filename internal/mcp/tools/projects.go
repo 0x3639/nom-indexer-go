@@ -44,6 +44,17 @@ func registerProjects(srv *mcp.Server, repos *repository.Repositories) {
 		Description: "List pillar votes targeting the given project (or any of its phases), " +
 			"ordered by momentum_height DESC. vote=0 yes, 1 no, 2 abstain.",
 	}, listProjectVotes(repos))
+
+	mcp.AddTool(srv, &mcp.Tool{
+		Name: "get_project_voting_report",
+		Description: "Complete server-aggregated voting report for one project AND every " +
+			"phase: per-proposal yes/no/abstain counts plus the explicit pillar lists for " +
+			"each bucket (yes_pillars, no_pillars, abstain_pillars, no_vote_pillars). " +
+			"Denominator is the current active-pillar set (is_revoked=false). One call " +
+			"replaces the page-through-list_project_votes + filter-by-pillar pattern, so " +
+			"the LLM does not have to enumerate pillars × proposals client-side. Phases " +
+			"are returned in creation order. Pillar lists are name-only and alphabetized.",
+	}, getProjectVotingReport(repos))
 }
 
 func listProjects(repos *repository.Repositories) func(context.Context, *mcp.CallToolRequest, *ListMomentumsParams) (*mcp.CallToolResult, any, error) {
@@ -97,4 +108,39 @@ func listProjectVotes(repos *repository.Repositories) func(context.Context, *mcp
 		}
 		return jsonResult(dto.NewPage(dto.FromVotes(rows), page.Page, page.PageSize, total))
 	}
+}
+
+func getProjectVotingReport(repos *repository.Repositories) func(context.Context, *mcp.CallToolRequest, *ProjectIDParams) (*mcp.CallToolResult, any, error) {
+	return func(ctx context.Context, _ *mcp.CallToolRequest, p *ProjectIDParams) (*mcp.CallToolResult, any, error) {
+		row, err := repos.Vote.ProjectVotingReport(ctx, p.ID)
+		if err != nil {
+			return nil, nil, err
+		}
+		return jsonResult(projectVotingReportToDTO(row))
+	}
+}
+
+// projectVotingReportToDTO bridges the repository row type into the
+// public dto.ProjectVotingReport. The translation goes here rather
+// than in repo or dto: repo doesn't import dto, and dto doesn't
+// import repo — keeping them decoupled.
+func projectVotingReportToDTO(row *repository.ProjectVotingReportRow) *dto.ProjectVotingReport {
+	out := &dto.ProjectVotingReport{
+		ProjectID:         row.ProjectID,
+		ProjectName:       row.ProjectName,
+		ActivePillarCount: row.ActivePillarCount,
+		Project: dto.FromProposalTally(dto.RawProposalTally{
+			VotingID:      row.Project.VotingID,
+			ByPillar:      row.Project.ByPillar,
+			NoVotePillars: row.Project.NoVotePillars,
+		}),
+	}
+	for _, ph := range row.Phases {
+		out.Phases = append(out.Phases, dto.FromPhaseTally(ph.PhaseID, ph.PhaseName, dto.RawProposalTally{
+			VotingID:      ph.Tally.VotingID,
+			ByPillar:      ph.Tally.ByPillar,
+			NoVotePillars: ph.Tally.NoVotePillars,
+		}))
+	}
+	return out
 }

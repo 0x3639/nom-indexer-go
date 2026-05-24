@@ -49,6 +49,15 @@ func registerPillars(srv *mcp.Server, repos *repository.Repositories) {
 			"delegation_start_timestamp ASC (longest-tenured first). Looks up name → owner " +
 			"first; returns 404 (via tool error) if the pillar name is unknown.",
 	}, listPillarDelegators(repos))
+
+	mcp.AddTool(srv, &mcp.Tool{
+		Name: "get_pillar_voting_history",
+		Description: "Complete voting record for one named pillar across every Accelerator-Z " +
+			"project AND phase, with project + phase names joined server-side and vote codes " +
+			"translated to \"yes\" / \"no\" / \"abstain\". Returns yes/no/abstain totals plus " +
+			"the per-vote entries ordered momentum_timestamp DESC (newest first). One call " +
+			"replaces enumerate-projects + page-through-list_project_votes + filter-by-pillar.",
+	}, getPillarVotingHistory(repos))
 }
 
 func listPillars(repos *repository.Repositories) func(context.Context, *mcp.CallToolRequest, *ListPillarsParams) (*mcp.CallToolResult, any, error) {
@@ -92,5 +101,28 @@ func listPillarDelegators(repos *repository.Repositories) func(context.Context, 
 			return nil, nil, err
 		}
 		return jsonResult(dto.NewPage(dto.FromPillarDelegators(rows), page.Page, page.PageSize, total))
+	}
+}
+
+func getPillarVotingHistory(repos *repository.Repositories) func(context.Context, *mcp.CallToolRequest, *PillarNameParams) (*mcp.CallToolResult, any, error) {
+	return func(ctx context.Context, _ *mcp.CallToolRequest, p *PillarNameParams) (*mcp.CallToolResult, any, error) {
+		row, err := repos.Vote.PillarVotingHistory(ctx, p.Name)
+		if err != nil {
+			return nil, nil, err
+		}
+		raws := make([]dto.RawPillarVote, 0, len(row.Votes))
+		for _, v := range row.Votes {
+			raws = append(raws, dto.RawPillarVote{
+				VotingID:          v.VotingID,
+				Vote:              v.Vote,
+				MomentumHeight:    v.MomentumHeight,
+				MomentumTimestamp: v.MomentumTimestamp,
+				ProjectID:         v.ProjectID,
+				PhaseID:           v.PhaseID,
+				ProjectName:       v.ProjectName,
+				PhaseName:         v.PhaseName,
+			})
+		}
+		return jsonResult(dto.FromPillarVotingHistory(row.PillarName, row.PillarOwner, raws))
 	}
 }
