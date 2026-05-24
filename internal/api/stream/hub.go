@@ -11,13 +11,7 @@ import (
 
 	"github.com/jackc/pgx/v5"
 	"go.uber.org/zap"
-
-	"github.com/0x3639/nom-indexer-go/internal/api/dto"
 )
-
-// Channel name the indexer NOTIFY uses. Kept in sync with
-// internal/indexer/processor.go::notifyMomentum.
-const channelName = "momentum_new"
 
 // defaultClientBuffer is the per-subscriber channel size. Sized at 32 so
 // a brief network blip (a few seconds of unflushed frames) doesn't
@@ -69,27 +63,27 @@ var (
 	ErrTooManyForSubject = errors.New("too many concurrent streams for this subject")
 )
 
-// Subscriber is one consumer of the hub. The handler reads from Recv()
-// and closes via Close() when the WebSocket goes away. The subject
-// field is the JWT sub the connection was opened under; it's used for
-// per-subject cap accounting on Close.
-type Subscriber struct {
-	ch      chan *dto.Momentum
-	hub     *Hub
+// Subscriber is one consumer of a Hub[T]. The handler reads from
+// Recv() and closes via Close() when the WebSocket goes away. The
+// subject field is the JWT sub the connection was opened under; it's
+// used for per-subject cap accounting on Close.
+type Subscriber[T any] struct {
+	ch      chan T
+	hub     *Hub[T]
 	subject string
 	closed  atomic.Bool
 	lagged  atomic.Uint64
 }
 
-// Recv returns the channel the handler reads new momentums from.
-func (s *Subscriber) Recv() <-chan *dto.Momentum {
+// Recv returns the channel the handler reads new events from.
+func (s *Subscriber[T]) Recv() <-chan T {
 	return s.ch
 }
 
-// Lagged returns the number of momentums dropped because the
-// subscriber's channel was full. Non-zero means the handler is too
-// slow to keep up and should close the connection.
-func (s *Subscriber) Lagged() uint64 {
+// Lagged returns the number of events dropped because the subscriber's
+// channel was full. Non-zero means the handler is too slow to keep up
+// and should close the connection.
+func (s *Subscriber[T]) Lagged() uint64 {
 	return s.lagged.Load()
 }
 
@@ -97,7 +91,7 @@ func (s *Subscriber) Lagged() uint64 {
 // Safe to call multiple times; only the first call closes the channel,
 // so drainAll on Run exit and an explicit handler Close cannot race
 // into a double-close panic.
-func (s *Subscriber) Close() {
+func (s *Subscriber[T]) Close() {
 	if s.closed.Swap(true) {
 		return
 	}
@@ -105,30 +99,49 @@ func (s *Subscriber) Close() {
 	close(s.ch)
 }
 
-// Hub owns the single LISTEN connection and fans incoming momentums out
-// to all current subscribers. Construct one per API process via New()
-// and run it via Run().
-type Hub struct {
+// Hub owns the single LISTEN connection for one Postgres NOTIFY
+// channel and fans incoming events out to all current subscribers.
+// Construct one per (channel, event-type) pair per API process via
+// New() and run it via Run().
+//
+// The generic type T is what the hub dispatches to subscribers — for
+// the API today that's *dto.Momentum for the momentums stream and
+// *dto.AccountBlock for the transactions stream. The unmarshal hook in
+// Config decodes the NOTIFY payload into T.
+type Hub[T any] struct {
 	connectFn     func(context.Context) (*pgx.Conn, error)
+	channelName   string
+	unmarshal     func([]byte) (T, error)
 	logger        *zap.Logger
 	bufSize       int
 	perSubjectMax int
 
-	state atomic.Int32 // statePending / stateRunning / stateStopped
+	state atomic.Int32 // statePending / stateRunning / stateDegraded / stateStopped
 
 	mu         sync.RWMutex
-	subs       map[*Subscriber]struct{}
+	subs       map[*Subscriber[T]]struct{}
 	perSubject map[string]int
 }
 
 // Config bundles the inputs to New(). connectFn must produce a fresh
 // *pgx.Conn (not from a pool) so the hub can hold it for the process
 // lifetime without contending with request handlers.
-type Config struct {
+type Config[T any] struct {
 	ConnectFn func(context.Context) (*pgx.Conn, error)
 	Logger    *zap.Logger
+
+	// ChannelName is the Postgres NOTIFY channel the hub LISTENs on.
+	// Must match the indexer's pg_notify call exactly.
+	ChannelName string
+
+	// Unmarshal decodes a NOTIFY payload into the dispatched type.
+	// Must be safe for concurrent use; the hub calls it sequentially
+	// from the LISTEN loop, but a stricter contract simplifies tests.
+	Unmarshal func([]byte) (T, error)
+
 	// ClientBuf is the per-subscriber channel size (default 32).
 	ClientBuf int
+
 	// PerSubjectMax caps concurrent stream connections per JWT
 	// subject. The Go zero value (field omitted) applies the default
 	// (8); a negative value disables the cap entirely. Setting an
@@ -137,7 +150,7 @@ type Config struct {
 }
 
 // New returns a Hub. It does NOT start the LISTEN loop — call Run().
-func New(cfg Config) *Hub {
+func New[T any](cfg Config[T]) *Hub[T] {
 	buf := cfg.ClientBuf
 	if buf <= 0 {
 		buf = defaultClientBuffer
@@ -148,12 +161,14 @@ func New(cfg Config) *Hub {
 	if perSub == 0 {
 		perSub = defaultPerSubjectMax
 	}
-	return &Hub{
+	return &Hub[T]{
 		connectFn:     cfg.ConnectFn,
+		channelName:   cfg.ChannelName,
+		unmarshal:     cfg.Unmarshal,
 		logger:        cfg.Logger,
 		bufSize:       buf,
 		perSubjectMax: perSub,
-		subs:          make(map[*Subscriber]struct{}),
+		subs:          make(map[*Subscriber[T]]struct{}),
 		perSubject:    make(map[string]int),
 	}
 }
@@ -162,7 +177,7 @@ func New(cfg Config) *Hub {
 // Handlers should check this before subscribing — there's also a state
 // re-check inside Subscribe under lock, but the fast path avoids the
 // mutex when the hub is clearly down.
-func (h *Hub) Running() bool {
+func (h *Hub[T]) Running() bool {
 	return h.state.Load() == stateRunning
 }
 
@@ -172,7 +187,7 @@ func (h *Hub) Running() bool {
 // Returns ErrHubNotRunning if Run hasn't started or has already exited;
 // returns ErrTooManyForSubject if the subject is at its cap. Always
 // call Subscriber.Close() to release the slot.
-func (h *Hub) Subscribe(subject string) (*Subscriber, error) {
+func (h *Hub[T]) Subscribe(subject string) (*Subscriber[T], error) {
 	if h.state.Load() != stateRunning {
 		return nil, ErrHubNotRunning
 	}
@@ -186,8 +201,8 @@ func (h *Hub) Subscribe(subject string) (*Subscriber, error) {
 	if h.perSubjectMax > 0 && h.perSubject[subject] >= h.perSubjectMax {
 		return nil, ErrTooManyForSubject
 	}
-	s := &Subscriber{
-		ch:      make(chan *dto.Momentum, h.bufSize),
+	s := &Subscriber[T]{
+		ch:      make(chan T, h.bufSize),
 		hub:     h,
 		subject: subject,
 	}
@@ -198,7 +213,7 @@ func (h *Hub) Subscribe(subject string) (*Subscriber, error) {
 
 // SubscriberCount returns the current live subscriber count. Intended
 // for /metrics exporters.
-func (h *Hub) SubscriberCount() int {
+func (h *Hub[T]) SubscriberCount() int {
 	h.mu.RLock()
 	defer h.mu.RUnlock()
 	return len(h.subs)
@@ -207,13 +222,13 @@ func (h *Hub) SubscriberCount() int {
 // SubjectCount returns the number of open connections currently
 // attributed to subject — useful for the handler to surface the cap in
 // 429 problem-detail bodies.
-func (h *Hub) SubjectCount(subject string) int {
+func (h *Hub[T]) SubjectCount(subject string) int {
 	h.mu.RLock()
 	defer h.mu.RUnlock()
 	return h.perSubject[subject]
 }
 
-func (h *Hub) unsubscribe(s *Subscriber) {
+func (h *Hub[T]) unsubscribe(s *Subscriber[T]) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	if _, ok := h.subs[s]; !ok {
@@ -234,7 +249,7 @@ func (h *Hub) unsubscribe(s *Subscriber) {
 // reconnect once the hub is healthy) and on terminal shutdown (via
 // drainAll). After this, every Subscriber the caller previously held
 // will see a closed channel.
-func (h *Hub) closeAllSubs() {
+func (h *Hub[T]) closeAllSubs() {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	for s := range h.subs {
@@ -242,7 +257,7 @@ func (h *Hub) closeAllSubs() {
 			close(s.ch)
 		}
 	}
-	h.subs = make(map[*Subscriber]struct{})
+	h.subs = make(map[*Subscriber[T]]struct{})
 	h.perSubject = make(map[string]int)
 }
 
@@ -250,7 +265,7 @@ func (h *Hub) closeAllSubs() {
 // subscriber. Called when Run is about to return permanently — ctx
 // canceled — so callers' <-sub.Recv() loops unblock promptly and new
 // Subscribe calls fail with ErrHubNotRunning.
-func (h *Hub) drainAll() {
+func (h *Hub[T]) drainAll() {
 	h.state.Store(stateStopped)
 	h.closeAllSubs()
 }
@@ -288,7 +303,7 @@ func nextBackoff(d time.Duration) time.Duration {
 //   - Active subscribers are closed every time the underlying
 //     connection drops (closeAllSubs). WS handlers observe the
 //     channel close and tear down their client connections; clients
-//     reconnect with from_height of their last seen momentum to fill
+//     reconnect with from_height of their last seen event to fill
 //     the gap.
 //   - During reconnect attempts the hub sits in stateDegraded and
 //     Subscribe rejects with ErrHubNotRunning. Clients retry until
@@ -305,7 +320,7 @@ func nextBackoff(d time.Duration) time.Duration {
 // maxBackoff ceiling.
 //
 //nolint:contextcheck // detached ctx used only on shutdown / pgx close
-func (h *Hub) Run(ctx context.Context) error {
+func (h *Hub[T]) Run(ctx context.Context) error {
 	defer h.drainAll()
 	backoff := initialBackoff
 
@@ -326,6 +341,7 @@ func (h *Hub) Run(ctx context.Context) error {
 			backoff = initialBackoff
 		}
 		h.logger.Warn("stream hub connect/listen failed; will retry",
+			zap.String("channel", h.channelName),
 			zap.Error(err), zap.Duration("backoff", backoff))
 		if !sleep(ctx, backoff) {
 			return nil
@@ -356,7 +372,7 @@ func (h *Hub) Run(ctx context.Context) error {
 // that would never come.
 //
 //nolint:contextcheck // pgx.Close on a detached ctx is the standard cleanup pattern
-func (h *Hub) connectAndListen(ctx context.Context) (listened bool, err error) {
+func (h *Hub[T]) connectAndListen(ctx context.Context) (listened bool, err error) {
 	conn, err := h.connectFn(ctx)
 	if err != nil {
 		return false, fmt.Errorf("connect: %w", err)
@@ -367,12 +383,12 @@ func (h *Hub) connectAndListen(ctx context.Context) (listened bool, err error) {
 		_ = conn.Close(closeCtx)
 	}
 
-	if _, err := conn.Exec(ctx, "LISTEN "+channelName); err != nil {
+	if _, err := conn.Exec(ctx, "LISTEN "+h.channelName); err != nil {
 		closeConn()
 		return false, fmt.Errorf("LISTEN: %w", err)
 	}
 	h.state.Store(stateRunning)
-	h.logger.Info("stream hub listening", zap.String("channel", channelName))
+	h.logger.Info("stream hub listening", zap.String("channel", h.channelName))
 
 	for {
 		notif, werr := conn.WaitForNotification(ctx)
@@ -386,21 +402,23 @@ func (h *Hub) connectAndListen(ctx context.Context) (listened bool, err error) {
 			h.closeAllSubs()
 			closeConn()
 			if errors.Is(werr, context.Canceled) || errors.Is(werr, context.DeadlineExceeded) {
-				h.logger.Info("stream hub shutting down")
+				h.logger.Info("stream hub shutting down",
+					zap.String("channel", h.channelName))
 				return true, nil
 			}
 			return true, fmt.Errorf("wait: %w", werr)
 		}
-		var m dto.Momentum
-		if uerr := json.Unmarshal([]byte(notif.Payload), &m); uerr != nil {
+		event, uerr := h.unmarshal([]byte(notif.Payload))
+		if uerr != nil {
 			// Malformed payload from the indexer is a bug, not a runtime
 			// failure — log and continue so a single bad notify doesn't
 			// kill the stream.
 			h.logger.Warn("stream hub malformed notify payload",
+				zap.String("channel", h.channelName),
 				zap.String("payload", notif.Payload), zap.Error(uerr))
 			continue
 		}
-		h.dispatch(&m)
+		h.dispatch(event)
 	}
 }
 
@@ -409,13 +427,13 @@ func (h *Hub) connectAndListen(ctx context.Context) (listened bool, err error) {
 // set; the handler observes Lagged() and closes the connection on its
 // own schedule. Holding the read lock for the whole loop is fine —
 // Subscribe/unsubscribe take the write lock so they wait until
-// dispatch finishes the current momentum.
-func (h *Hub) dispatch(m *dto.Momentum) {
+// dispatch finishes the current event.
+func (h *Hub[T]) dispatch(event T) {
 	h.mu.RLock()
 	defer h.mu.RUnlock()
 	for s := range h.subs {
 		select {
-		case s.ch <- m:
+		case s.ch <- event:
 		default:
 			s.lagged.Add(1)
 		}
@@ -423,24 +441,37 @@ func (h *Hub) dispatch(m *dto.Momentum) {
 }
 
 // DispatchForTest synthesizes a notification without going through
-// Postgres. Intended for handler-level unit tests that need to inject a
-// momentum into the fan-out without standing up a real NOTIFY pipeline.
-// Production callers should never use this — momentums must come from
+// Postgres. Intended for handler-level unit tests that need to inject
+// an event into the fan-out without standing up a real NOTIFY pipeline.
+// Production callers should never use this — events must come from
 // the LISTEN loop so the indexer remains the single source of truth.
-func DispatchForTest(h *Hub, m *dto.Momentum) {
-	h.dispatch(m)
+func DispatchForTest[T any](h *Hub[T], event T) {
+	h.dispatch(event)
 }
 
 // MarkRunningForTest puts the hub into the running state without
 // actually running the LISTEN loop, so handler-level tests can
 // Subscribe without spinning up Postgres.
-func MarkRunningForTest(h *Hub) {
+func MarkRunningForTest[T any](h *Hub[T]) {
 	h.state.Store(stateRunning)
 }
 
 // MarkStoppedForTest drains all subscribers and flips state to stopped
 // — used by tests that want to observe Subscribe rejecting after Run
 // has exited.
-func MarkStoppedForTest(h *Hub) {
+func MarkStoppedForTest[T any](h *Hub[T]) {
 	h.drainAll()
+}
+
+// UnmarshalJSON returns a Config.Unmarshal hook that uses
+// encoding/json to decode payloads into *T. Convenience for the common
+// case where the NOTIFY payload is a JSON object matching a DTO.
+func UnmarshalJSON[T any]() func([]byte) (*T, error) {
+	return func(b []byte) (*T, error) {
+		var v T
+		if err := json.Unmarshal(b, &v); err != nil {
+			return nil, err
+		}
+		return &v, nil
+	}
 }

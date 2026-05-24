@@ -2,6 +2,7 @@ package stream
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"sync"
 	"sync/atomic"
@@ -14,13 +15,23 @@ import (
 	"github.com/0x3639/nom-indexer-go/internal/api/dto"
 )
 
-func newTestHub() *Hub {
-	h := New(Config{Logger: zap.NewNop(), ClientBuf: 4, PerSubjectMax: 100})
+// newTestHub returns a *Hub[*dto.Momentum] in stateRunning, ready for
+// dispatch tests. Most tests use this since the original suite was
+// written for momentums; the hub's generic plumbing is exercised by
+// the same calls.
+func newTestHub() *Hub[*dto.Momentum] {
+	h := New(Config[*dto.Momentum]{
+		Logger:        zap.NewNop(),
+		ChannelName:   "momentum_new",
+		Unmarshal:     UnmarshalJSON[dto.Momentum](),
+		ClientBuf:     4,
+		PerSubjectMax: 100,
+	})
 	MarkRunningForTest(h)
 	return h
 }
 
-func mustSubscribe(t *testing.T, h *Hub, subject string) *Subscriber {
+func mustSubscribe(t *testing.T, h *Hub[*dto.Momentum], subject string) *Subscriber[*dto.Momentum] {
 	t.Helper()
 	s, err := h.Subscribe(subject)
 	if err != nil {
@@ -49,7 +60,7 @@ func TestHub_SubscribeAndDispatch(t *testing.T) {
 
 func TestHub_FanOutAcrossSubscribers(t *testing.T) {
 	h := newTestHub()
-	subs := make([]*Subscriber, 5)
+	subs := make([]*Subscriber[*dto.Momentum], 5)
 	for i := range subs {
 		subs[i] = mustSubscribe(t, h, "alice")
 		defer subs[i].Close()
@@ -159,10 +170,16 @@ func TestHub_DispatchWithNoSubscribersIsHarmless(t *testing.T) {
 }
 
 func TestHub_PerSubjectCap(t *testing.T) {
-	h := New(Config{Logger: zap.NewNop(), ClientBuf: 4, PerSubjectMax: 3})
+	h := New(Config[*dto.Momentum]{
+		Logger:        zap.NewNop(),
+		ChannelName:   "momentum_new",
+		Unmarshal:     UnmarshalJSON[dto.Momentum](),
+		ClientBuf:     4,
+		PerSubjectMax: 3,
+	})
 	MarkRunningForTest(h)
 
-	subs := make([]*Subscriber, 3)
+	subs := make([]*Subscriber[*dto.Momentum], 3)
 	for i := range subs {
 		s, err := h.Subscribe("alice")
 		if err != nil {
@@ -176,19 +193,16 @@ func TestHub_PerSubjectCap(t *testing.T) {
 		}
 	}()
 
-	// 4th alice connection should fail.
 	if _, err := h.Subscribe("alice"); !errors.Is(err, ErrTooManyForSubject) {
 		t.Errorf("expected ErrTooManyForSubject; got %v", err)
 	}
 
-	// bob is a different subject — fine.
 	bob, err := h.Subscribe("bob")
 	if err != nil {
 		t.Fatalf("Subscribe bob: %v", err)
 	}
 	defer bob.Close()
 
-	// After closing one alice, a new alice should succeed.
 	subs[0].Close()
 	alice4, err := h.Subscribe("alice")
 	if err != nil {
@@ -198,7 +212,11 @@ func TestHub_PerSubjectCap(t *testing.T) {
 }
 
 func TestHub_StatePending_RejectsSubscribe(t *testing.T) {
-	h := New(Config{Logger: zap.NewNop()})
+	h := New(Config[*dto.Momentum]{
+		Logger:      zap.NewNop(),
+		ChannelName: "momentum_new",
+		Unmarshal:   UnmarshalJSON[dto.Momentum](),
+	})
 	// Don't call MarkRunningForTest — hub is pending.
 	if _, err := h.Subscribe("alice"); !errors.Is(err, ErrHubNotRunning) {
 		t.Errorf("Subscribe on pending hub: got %v, want ErrHubNotRunning", err)
@@ -208,19 +226,14 @@ func TestHub_StatePending_RejectsSubscribe(t *testing.T) {
 	}
 }
 
-// TestHub_RunReconnectsOnConnectFailure forces the connectFn to fail
-// every call. The hub should retry with backoff rather than giving up
-// after the first failure (which was the pre-fix behavior — Run
-// returned permanently on any connect error).
-//
-// We let Run iterate for ~3 seconds then cancel; the initial backoff
-// is 1s (initialBackoff const), so we expect 3+ connectFn calls.
 func TestHub_RunReconnectsOnConnectFailure(t *testing.T) {
 	var calls atomic.Int32
 	connectErr := errors.New("simulated DB outage")
-	h := New(Config{
-		Logger:    zap.NewNop(),
-		ClientBuf: 4,
+	h := New(Config[*dto.Momentum]{
+		Logger:      zap.NewNop(),
+		ChannelName: "momentum_new",
+		Unmarshal:   UnmarshalJSON[dto.Momentum](),
+		ClientBuf:   4,
 		ConnectFn: func(_ context.Context) (*pgx.Conn, error) {
 			calls.Add(1)
 			return nil, connectErr
@@ -250,14 +263,6 @@ func TestHub_RunReconnectsOnConnectFailure(t *testing.T) {
 	}
 }
 
-// TestHub_CloseAllSubsIsOrthogonalToState documents the helper's
-// narrow contract: closeAllSubs touches only the subscriber set, not
-// the hub state. Production callers must flip state to Degraded BEFORE
-// closing subs (see connectAndListen's wait-error path) — otherwise
-// there is a race window where a new Subscribe sees Running, lands in
-// the empty map, and waits forever for frames that will never come.
-// This test asserts the helper's invariants in isolation; it does NOT
-// claim that callers can rely on state staying Running across the call.
 func TestHub_CloseAllSubsIsOrthogonalToState(t *testing.T) {
 	h := newTestHub()
 	a := mustSubscribe(t, h, "alice")
@@ -265,7 +270,7 @@ func TestHub_CloseAllSubsIsOrthogonalToState(t *testing.T) {
 
 	h.closeAllSubs()
 
-	for i, s := range []*Subscriber{a, b} {
+	for i, s := range []*Subscriber[*dto.Momentum]{a, b} {
 		select {
 		case _, ok := <-s.Recv():
 			if ok {
@@ -279,9 +284,6 @@ func TestHub_CloseAllSubsIsOrthogonalToState(t *testing.T) {
 	if !h.Running() {
 		t.Error("closeAllSubs flipped state; helper should only touch subs")
 	}
-	// Subscribe still works (state is unchanged) — this is precisely
-	// the window connectAndListen's wait-error path protects against
-	// by flipping state to Degraded before invoking closeAllSubs.
 	c, err := h.Subscribe("carol")
 	if err != nil {
 		t.Errorf("Subscribe after closeAllSubs (state still Running): %v", err)
@@ -297,10 +299,9 @@ func TestHub_StateStopped_DrainsExistingAndRejectsNew(t *testing.T) {
 	defer a.Close()
 	defer b.Close()
 
-	MarkStoppedForTest(h) // simulates Run exit
+	MarkStoppedForTest(h)
 
-	// Both existing subscribers should see their channels closed.
-	for i, s := range []*Subscriber{a, b} {
+	for i, s := range []*Subscriber[*dto.Momentum]{a, b} {
 		select {
 		case _, ok := <-s.Recv():
 			if ok {
@@ -311,11 +312,49 @@ func TestHub_StateStopped_DrainsExistingAndRejectsNew(t *testing.T) {
 		}
 	}
 
-	// New subscribes are rejected.
 	if _, err := h.Subscribe("alice"); !errors.Is(err, ErrHubNotRunning) {
 		t.Errorf("Subscribe after stop: got %v, want ErrHubNotRunning", err)
 	}
 	if h.Running() {
 		t.Error("Running() = true after MarkStoppedForTest")
+	}
+}
+
+// TestHub_GenericInstantiation proves Hub works for a non-Momentum type
+// by instantiating it on AccountBlock and dispatching through the
+// same machinery. The generic refactor is the whole point of the
+// transactions-stream PR; this is the canary.
+func TestHub_GenericInstantiation(t *testing.T) {
+	h := New(Config[*dto.AccountBlock]{
+		Logger:      zap.NewNop(),
+		ChannelName: "account_block_new",
+		Unmarshal:   UnmarshalJSON[dto.AccountBlock](),
+		ClientBuf:   4,
+	})
+	MarkRunningForTest(h)
+	s, err := h.Subscribe("tx-client")
+	if err != nil {
+		t.Fatalf("Subscribe: %v", err)
+	}
+	defer s.Close()
+
+	h.dispatch(&dto.AccountBlock{Hash: "ab-1", Address: "z1qq", Amount: "100"})
+	select {
+	case ab := <-s.Recv():
+		if ab.Hash != "ab-1" {
+			t.Errorf("hash = %q, want ab-1", ab.Hash)
+		}
+	case <-time.After(100 * time.Millisecond):
+		t.Fatal("did not receive account_block frame")
+	}
+
+	// Spot-check UnmarshalJSON for AccountBlock.
+	payload, _ := json.Marshal(&dto.AccountBlock{Hash: "ab-2", Address: "z1qq"})
+	got, err := h.unmarshal(payload)
+	if err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if got.Hash != "ab-2" {
+		t.Errorf("unmarshal hash = %q, want ab-2", got.Hash)
 	}
 }

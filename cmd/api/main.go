@@ -26,6 +26,7 @@ import (
 	"github.com/jackc/pgx/v5"
 	"go.uber.org/zap"
 
+	"github.com/0x3639/nom-indexer-go/internal/api/dto"
 	"github.com/0x3639/nom-indexer-go/internal/api/metrics"
 	"github.com/0x3639/nom-indexer-go/internal/api/router"
 	"github.com/0x3639/nom-indexer-go/internal/api/stream"
@@ -72,16 +73,25 @@ func main() {
 	repos := repository.NewRepositories(pool)
 	m := metrics.New()
 
-	// Stream hub: dedicated pgx.Conn (NOT from the pool) holds a single
-	// LISTEN momentum_new for the process lifetime. Constructed here so
-	// the router can route /api/v1/momentums/stream to it; the
-	// goroutine that actually runs it is started after the router is
-	// built so a hub failure can't race the HTTP listener.
-	hub := stream.New(stream.Config{
-		ConnectFn: func(ctx context.Context) (*pgx.Conn, error) {
-			return pgx.Connect(ctx, cfg.Database.ConnectionString())
-		},
-		Logger: logger,
+	// Stream hubs: dedicated pgx.Conn (NOT from the pool) each holds a
+	// LISTEN on its respective channel for the process lifetime.
+	// Constructed here so the router can route the WS endpoints; the
+	// goroutines that actually run them are started after the router
+	// is built so a hub failure can't race the HTTP listener.
+	connectStreamConn := func(ctx context.Context) (*pgx.Conn, error) {
+		return pgx.Connect(ctx, cfg.Database.ConnectionString())
+	}
+	hub := stream.New(stream.Config[*dto.Momentum]{
+		ConnectFn:   connectStreamConn,
+		Logger:      logger,
+		ChannelName: "momentum_new",
+		Unmarshal:   stream.UnmarshalJSON[dto.Momentum](),
+	})
+	txHub := stream.New(stream.Config[*dto.AccountBlock]{
+		ConnectFn:   connectStreamConn,
+		Logger:      logger,
+		ChannelName: "account_block_new",
+		Unmarshal:   stream.UnmarshalJSON[dto.AccountBlock](),
 	})
 
 	r := router.New(router.Deps{
@@ -90,6 +100,7 @@ func main() {
 		Logger:             logger,
 		Pool:               pool,
 		Hub:                hub,
+		TxHub:              txHub,
 		Metrics:            m.Middleware,
 		CORSAllowedOrigins: cfg.API.CORSAllowedOriginsList(),
 		RateLimitPerMinute: cfg.API.RateLimitPerMinute,
@@ -129,13 +140,19 @@ func main() {
 			errCh <- fmt.Errorf("metrics server: %w", err)
 		}
 	}()
-	// Stream hub runs alongside the HTTP listeners. A hub failure
-	// (connection drop, LISTEN error) downgrades the streaming
-	// endpoint to 5xx for new subscribers but does NOT bring down the
-	// REST API — log and continue.
+	// Stream hubs run alongside the HTTP listeners. A hub failure
+	// (connection drop, LISTEN error) downgrades only the matching
+	// streaming endpoint to 5xx for new subscribers; it does NOT bring
+	// down the REST API or the other hub — log and continue.
 	go func() {
 		if err := hub.Run(ctx); err != nil {
-			logger.Error("stream hub exited; /api/v1/momentums/stream is degraded",
+			logger.Error("momentum stream hub exited; /api/v1/momentums/stream is degraded",
+				zap.Error(err))
+		}
+	}()
+	go func() {
+		if err := txHub.Run(ctx); err != nil {
+			logger.Error("transaction stream hub exited; /api/v1/transactions/stream is degraded",
 				zap.Error(err))
 		}
 	}()

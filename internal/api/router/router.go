@@ -17,6 +17,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 	"go.uber.org/zap"
 
+	"github.com/0x3639/nom-indexer-go/internal/api/dto"
 	"github.com/0x3639/nom-indexer-go/internal/api/handlers"
 	"github.com/0x3639/nom-indexer-go/internal/api/httpx"
 	apimw "github.com/0x3639/nom-indexer-go/internal/api/middleware"
@@ -36,8 +37,9 @@ type Deps struct {
 	Repos              *repository.Repositories
 	Signer             *auth.Signer
 	Logger             *zap.Logger
-	Pool               *pgxpool.Pool // used by /readyz to ping the DB; may be nil in tests
-	Hub                *stream.Hub   // optional; required for /api/v1/momentums/stream
+	Pool               *pgxpool.Pool                  // used by /readyz to ping the DB; may be nil in tests
+	Hub                *stream.Hub[*dto.Momentum]     // optional; required for /api/v1/momentums/stream
+	TxHub              *stream.Hub[*dto.AccountBlock] // optional; required for /api/v1/transactions/stream
 	Metrics            MetricsMiddleware
 	CORSAllowedOrigins []string
 	RateLimitPerMinute int
@@ -81,6 +83,14 @@ func New(d Deps) http.Handler {
 			return
 		}
 		handlers.MomentumsStream(d.Signer, d.Hub, d.Repos.Momentum)(w, r)
+	})
+	r.Get("/api/v1/transactions/stream", func(w http.ResponseWriter, r *http.Request) {
+		if d.TxHub == nil {
+			httpx.WriteProblem(w, http.StatusServiceUnavailable, "stream_disabled",
+				"transactions stream hub is not configured on this instance")
+			return
+		}
+		handlers.TransactionsStream(d.Signer, d.TxHub, d.Repos.AccountBlock, d.Repos.Momentum)(w, r)
 	})
 
 	// Authenticated /api/v1 subtree.

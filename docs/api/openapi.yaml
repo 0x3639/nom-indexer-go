@@ -1008,6 +1008,92 @@ paths:
         '429':
           $ref: '#/components/responses/RateLimited'
 
+  /api/v1/transactions/stream:
+    get:
+      operationId: streamTransactions
+      summary: WebSocket stream of new account_blocks (transactions)
+      description: |
+        Upgrades the connection to a WebSocket and pushes one JSON
+        frame per newly-indexed account_block. Frame shape matches the
+        `AccountBlock` schema this spec defines for the REST endpoints.
+
+        ## Auth
+
+        Same as `/api/v1/momentums/stream`: `Authorization: Bearer
+        <token>` header OR `?token=<jwt>` query parameter for
+        browsers.
+
+        ## Filtering
+
+        - **No filter**: stream every account_block the indexer
+          commits.
+        - `?address=z1q...`: server filters to blocks where `address`
+          (sender) OR `to_address` (recipient) matches. Cheap (string
+          compare per frame); much smaller bandwidth on the wire than
+          firehose + client-side filter.
+
+        ## Replay
+
+        Pass `?from_height=N` (a MOMENTUM height) to backfill all
+        account_blocks from that point up to the current chain tip
+        before switching to live streaming. Powered by a single range
+        scan capped at 10,000 rows; beyond that, use the REST
+        `/api/v1/account_blocks` endpoint for the historical gap and
+        reconnect for live.
+
+        ## Close codes
+
+        Mirrors `/api/v1/momentums/stream` — 1000 normal, 1011
+        internal, 4000 `slow_consumer`. The HTTP upgrade may also
+        respond with 401 (auth), 429 (subject cap), or 503
+        (hub down). The per-subject cap is independent from the
+        momentum stream cap.
+      tags: [transactions]
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: address
+          in: query
+          required: false
+          description: Server-side filter. Empty = firehose.
+          schema: { type: string }
+        - name: from_height
+          in: query
+          required: false
+          schema:
+            type: integer
+            format: int64
+            minimum: 0
+            examples: [13000000]
+        - name: token
+          in: query
+          required: false
+          description: JWT fallback for browser clients.
+          schema: { type: string }
+      responses:
+        '101':
+          description: Switching Protocols — WebSocket connection established.
+        '400':
+          description: Invalid `from_height` value.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '429':
+          description: Per-subject connection cap reached.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
+        '503':
+          description: Stream is unavailable.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
+
   /api/v1/account_blocks:
     get:
       operationId: listAccountBlocks

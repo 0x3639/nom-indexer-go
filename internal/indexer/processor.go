@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"math"
 	"math/big"
+	"strconv"
 	"time"
 
 	"github.com/0x3639/znn-sdk-go/utils"
@@ -162,6 +163,65 @@ func queueMomentumNotify(batch *pgx.Batch, m *models.Momentum) error {
 	return nil
 }
 
+// queueAccountBlockNotify appends a NOTIFY account_block_new statement
+// for the just-inserted account block. Same transaction as the
+// InsertBatch — Postgres only delivers NOTIFY after commit.
+//
+// Payload field names mirror dto.AccountBlock so the stream hub can
+// json.Unmarshal directly. Amount is stringified (matches the REST DTO
+// convention; int64 transfers can exceed 2^53). Input is included if
+// txData decoded a method; large inputs (contract calls) push payload
+// size — Postgres caps NOTIFY at 8 KB, which is comfortable for the
+// typical transfer block but contract calls with very large argument
+// lists could overflow. In that case the NOTIFY is dropped (logged
+// indexer-side) and the live frame is lost; the WS client's normal
+// reconnect-with-from_height path fills the gap via REST replay.
+func queueAccountBlockNotify(batch *pgx.Batch, ab *models.AccountBlock, txData *models.TxData) error {
+	// Build snake_case payload manually because models.AccountBlock has
+	// no json tags. Amount stringified to match dto.AccountBlock wire
+	// shape; the hub unmarshals into dto.AccountBlock so its Amount
+	// field type (dto.Amount = string) matches.
+	method := ""
+	var input json.RawMessage
+	if txData != nil {
+		method = txData.Method
+		if len(txData.Inputs) > 0 {
+			b, err := json.Marshal(txData.Inputs)
+			if err != nil {
+				return fmt.Errorf("marshal tx_data inputs: %w", err)
+			}
+			input = b
+		}
+	}
+	payload, err := json.Marshal(map[string]interface{}{
+		"hash":                 ab.Hash,
+		"momentum_hash":        ab.MomentumHash,
+		"momentum_timestamp":   ab.MomentumTimestamp,
+		"momentum_height":      ab.MomentumHeight,
+		"block_type":           ab.BlockType,
+		"height":               ab.Height,
+		"address":              ab.Address,
+		"to_address":           ab.ToAddress,
+		"amount":               strconv.FormatInt(ab.Amount, 10),
+		"token_standard":       ab.TokenStandard,
+		"data":                 ab.Data,
+		"method":               method,
+		"input":                input,
+		"paired_account_block": ab.PairedAccountBlock,
+	})
+	if err != nil {
+		return fmt.Errorf("marshal account_block notify payload: %w", err)
+	}
+	// Defensive: Postgres rejects NOTIFY payloads above 8000 bytes. If a
+	// contract call's inputs blow that budget, skip the live notify —
+	// REST + ?from_height= replay will still catch it.
+	if len(payload) > 7900 {
+		return nil
+	}
+	batch.Queue(`SELECT pg_notify('account_block_new', $1::text)`, string(payload))
+	return nil
+}
+
 // updateBalances updates balances for all addresses in a momentum
 func (i *Indexer) updateBalances(ctx context.Context, batch *pgx.Batch, headers []*types.AccountHeader, momentumTimestamp int64) error {
 	for _, header := range headers {
@@ -267,6 +327,15 @@ func (i *Indexer) processAccountBlocks(ctx context.Context, batch *pgx.Batch, m 
 		}
 
 		i.repos.AccountBlock.InsertBatch(batch, accountBlock, txData)
+
+		// Queue NOTIFY for the transactions WS stream. Same transaction
+		// as the InsertBatch above — Postgres only delivers NOTIFY on
+		// commit, so subscribers never see an event for a rolled-back
+		// block. A payload marshal failure rolls the whole momentum
+		// back via the normal retry path.
+		if err := queueAccountBlockNotify(batch, accountBlock, txData); err != nil {
+			return fmt.Errorf("queue account_block %s notify: %w", accountBlock.Hash, err)
+		}
 
 		// Track ZNN/QSR flow + activity on the involved accounts. Sends bump
 		// znn_sent/qsr_sent on the sender; receives bump znn_received/qsr_received

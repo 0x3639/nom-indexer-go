@@ -275,3 +275,57 @@ func (r *AccountBlockRepository) ListByAddress(ctx context.Context, address stri
 	}
 	return out, total, nil
 }
+
+// ListByMomentumHeightRange returns account_blocks whose momentum_height
+// is in [fromMomentumHeight, toMomentumHeight] inclusive, ordered first
+// by momentum_height ASC then by hash (deterministic tiebreak). Powers
+// the transactions WS stream's replay/catch-up path — a single
+// indexed range scan, optionally narrowed by sender/recipient address.
+//
+// addressFilter == "" disables the address WHERE — used by clients
+// streaming without ?address=. Otherwise the WHERE matches either
+// sender (address) or recipient (to_address), mirroring the REST
+// ListByAddress endpoint.
+//
+// The caller must pass a sensible limit (the stream handler uses
+// streamReplayMaxRows = 10,000). limit == 0 means no cap; callers
+// should not rely on that.
+func (r *AccountBlockRepository) ListByMomentumHeightRange(
+	ctx context.Context,
+	fromMomentumHeight, toMomentumHeight int64,
+	addressFilter string,
+	limit int,
+) ([]*models.AccountBlock, error) {
+	if fromMomentumHeight > toMomentumHeight {
+		return nil, nil
+	}
+	args := []interface{}{fromMomentumHeight, toMomentumHeight}
+	where := `WHERE momentum_height >= $1 AND momentum_height <= $2`
+	if addressFilter != "" {
+		args = append(args, addressFilter)
+		where += ` AND (address = $3 OR to_address = $3)`
+	}
+	q := `
+		SELECT ` + accountBlockCols + `
+		FROM account_blocks
+		` + where + `
+		ORDER BY momentum_height ASC, hash ASC`
+	if limit > 0 {
+		args = append(args, limit)
+		q += fmt.Sprintf(` LIMIT $%d`, len(args))
+	}
+	rows, err := r.pool.Query(ctx, q, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []*models.AccountBlock
+	for rows.Next() {
+		var ab models.AccountBlock
+		if err := scanAccountBlock(rows, &ab, nil); err != nil {
+			return nil, err
+		}
+		out = append(out, &ab)
+	}
+	return out, rows.Err()
+}
