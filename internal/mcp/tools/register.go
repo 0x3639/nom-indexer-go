@@ -15,7 +15,5 @@ import (
 // mcp.AddTool one or more times. Keeping the helpers per-file makes
 // the catalog easy to scan: one file, one domain, one mental model.
 func Register(srv *mcp.Server, repos *repository.Repositories) {
-	// M0: skeleton only. Tools land per-milestone.
-	_ = srv
-	_ = repos
+	registerStatus(srv, repos)
 }

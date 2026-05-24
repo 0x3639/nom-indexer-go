@@ -28,6 +28,7 @@ import (
 
 	"go.uber.org/zap"
 
+	"github.com/0x3639/nom-indexer-go/internal/auth"
 	"github.com/0x3639/nom-indexer-go/internal/config"
 	"github.com/0x3639/nom-indexer-go/internal/database"
 	mcpserver "github.com/0x3639/nom-indexer-go/internal/mcp/server"
@@ -66,11 +67,16 @@ func main() {
 
 	repos := repository.NewRepositories(pool)
 
+	signer, err := auth.NewSigner(secret)
+	if err != nil {
+		logger.Fatal("failed to initialize JWT signer", zap.Error(err))
+	}
+
 	srv := mcpserver.New(mcpserver.Deps{
 		Repos:  repos,
 		Logger: logger,
 	})
-	handler := mcpserver.HTTPHandler(srv)
+	handler := mcpserver.Auth(signer)(mcpserver.HTTPHandler(srv))
 
 	mux := http.NewServeMux()
 	mux.Handle("/mcp", handler)
