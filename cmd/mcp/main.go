@@ -80,8 +80,12 @@ func main() {
 		Repos:       repos,
 		Logger:      logger,
 		Middlewares: []mcp.Middleware{m.Middleware()},
+		Version:     version,
 	})
-	handler := mcpserver.Auth(signer)(mcpserver.HTTPHandler(srv))
+	handler := mcpserver.HTTPHandler(srv)
+	handler = mcpserver.RateLimit(cfg.MCP.RateLimitPerMinute)(handler)
+	handler = mcpserver.Auth(signer)(handler)
+	handler = mcpserver.CORS(cfg.MCP.CORSAllowedOriginsList())(handler)
 
 	mux := http.NewServeMux()
 	mux.Handle("/mcp", handler)

@@ -57,5 +57,5 @@ mcp:
   jwt_secret: ""
   # Comma-separated origin allowlist for browser MCP clients.
   cors_allowed_origins: ""
-  # Per-subject rate limit, calls/minute.
+  # Per-subject rate limit, MCP transport requests/minute.
   rate_limit_per_minute: 60

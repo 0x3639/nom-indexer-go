@@ -122,9 +122,11 @@ client works. The example below smoke-tests `get_status` end-to-end.
 
 ```bash
 TOKEN="paste your token"
+HEADERS="$(mktemp)"
 
-# 1. initialize — required handshake.
-curl -s -X POST http://localhost:8081/mcp \
+# 1. initialize — required handshake. Capture the session id header.
+curl -sS -D "$HEADERS" -o /tmp/nom-mcp-init.out \
+     -X POST http://localhost:8081/mcp \
      -H "Authorization: Bearer $TOKEN" \
      -H "Content-Type: application/json" \
      -H "Accept: application/json, text/event-stream" \
@@ -132,17 +134,31 @@ curl -s -X POST http://localhost:8081/mcp \
           "params":{"protocolVersion":"2025-06-18",
                     "capabilities":{},
                     "clientInfo":{"name":"smoke","version":"0"}}}'
+SESSION="$(awk 'tolower($1)=="mcp-session-id:" {gsub("\r","",$2); print $2}' "$HEADERS")"
 
-# 2. tools/list — discover the catalog.
-curl -s -X POST http://localhost:8081/mcp \
+# 2. initialized — completes the lifecycle notification.
+curl -sS -X POST http://localhost:8081/mcp \
      -H "Authorization: Bearer $TOKEN" \
+     -H "Mcp-Session-Id: $SESSION" \
+     -H "MCP-Protocol-Version: 2025-06-18" \
+     -H "Content-Type: application/json" \
+     -H "Accept: application/json, text/event-stream" \
+     -d '{"jsonrpc":"2.0","method":"notifications/initialized"}'
+
+# 3. tools/list — discover the catalog.
+curl -sS -X POST http://localhost:8081/mcp \
+     -H "Authorization: Bearer $TOKEN" \
+     -H "Mcp-Session-Id: $SESSION" \
+     -H "MCP-Protocol-Version: 2025-06-18" \
      -H "Content-Type: application/json" \
      -H "Accept: application/json, text/event-stream" \
      -d '{"jsonrpc":"2.0","id":2,"method":"tools/list"}'
 
-# 3. tools/call get_status.
-curl -s -X POST http://localhost:8081/mcp \
+# 4. tools/call get_status.
+curl -sS -X POST http://localhost:8081/mcp \
      -H "Authorization: Bearer $TOKEN" \
+     -H "Mcp-Session-Id: $SESSION" \
+     -H "MCP-Protocol-Version: 2025-06-18" \
      -H "Content-Type: application/json" \
      -H "Accept: application/json, text/event-stream" \
      -d '{"jsonrpc":"2.0","id":3,"method":"tools/call",

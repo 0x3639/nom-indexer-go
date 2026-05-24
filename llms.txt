@@ -7,7 +7,7 @@ Hash-formatted flat index of every documentation page, generated from mkdocs.yml
 - [Home](docs/index.md): A Go service that indexes the Zenon Network blockchain (NoM) into PostgreSQL.
 ## Architecture
 
-- [Overview](docs/architecture/overview.md): The big picture: one indexer process, one read-only HTTP API
+- [Overview](docs/architecture/overview.md): The big picture: one indexer process, read-only REST API and MCP
 - [Data flow](docs/architecture/data-flow.md): A line-by-line trace of what happens between "the node tells us a new
 - [Sync and recovery](docs/architecture/sync-and-recovery.md): How the indexer catches up from a cold start, transitions to real-time
 - [Cron and snapshots](docs/architecture/cron-and-snapshots.md): The cron goroutine in
@@ -77,7 +77,7 @@ Hash-formatted flat index of every documentation page, generated from mkdocs.yml
 - [ABI decoding](docs/indexing/abi-decoding.md): How raw account-block call data becomes `(method, inputs)` for the
 ## Operations
 
-- [Deploy](docs/operations/deploy.md): The canonical deployment is Docker Compose. Two containers: the
+- [Deploy](docs/operations/deploy.md): The canonical deployment is Docker Compose. The core stack is the
 - [Monitoring](docs/operations/monitoring.md): What "healthy" looks like and how to spot trouble.
 - [Backfill](docs/operations/backfill.md): Three paths exist for filling gaps in the indexer's tables. Pick by use case.
 - [Backup and restore](docs/operations/backup-restore.md): Two shell scripts ship with the repo:

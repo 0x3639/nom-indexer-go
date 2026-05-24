@@ -60,11 +60,34 @@ auto-discovered via `resources/list` and pulled on demand. By hand:
 
 ```bash
 TOKEN="paste your token"
-curl -s -X POST http://localhost:8081/mcp \
+HEADERS="$(mktemp)"
+
+curl -sS -D "$HEADERS" -o /tmp/nom-mcp-init.out \
+     -X POST http://localhost:8081/mcp \
      -H "Authorization: Bearer $TOKEN" \
      -H "Content-Type: application/json" \
      -H "Accept: application/json, text/event-stream" \
-     -d '{"jsonrpc":"2.0","id":1,"method":"resources/read",
+     -d '{"jsonrpc":"2.0","id":1,"method":"initialize",
+          "params":{"protocolVersion":"2025-06-18",
+                    "capabilities":{},
+                    "clientInfo":{"name":"smoke","version":"0"}}}'
+SESSION="$(awk 'tolower($1)=="mcp-session-id:" {gsub("\r","",$2); print $2}' "$HEADERS")"
+
+curl -sS -X POST http://localhost:8081/mcp \
+     -H "Authorization: Bearer $TOKEN" \
+     -H "Mcp-Session-Id: $SESSION" \
+     -H "MCP-Protocol-Version: 2025-06-18" \
+     -H "Content-Type: application/json" \
+     -H "Accept: application/json, text/event-stream" \
+     -d '{"jsonrpc":"2.0","method":"notifications/initialized"}'
+
+curl -sS -X POST http://localhost:8081/mcp \
+     -H "Authorization: Bearer $TOKEN" \
+     -H "Mcp-Session-Id: $SESSION" \
+     -H "MCP-Protocol-Version: 2025-06-18" \
+     -H "Content-Type: application/json" \
+     -H "Accept: application/json, text/event-stream" \
+     -d '{"jsonrpc":"2.0","id":2,"method":"resources/read",
           "params":{"uri":"schema://overview"}}'
 ```
 

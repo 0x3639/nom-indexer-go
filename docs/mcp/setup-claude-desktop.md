@@ -24,6 +24,11 @@ docker compose exec -T mcp /app/jwt-issue \
 # → eyJhbGciOiJIUzI1NiIs…
 ```
 
+The issuer reads `API_JWT_SECRET` by default, which matches the MCP
+server's default shared-secret mode. If the operator set
+`MCP_JWT_SECRET`, add `--secret-env MCP_JWT_SECRET` to the command so
+the token is signed with the MCP-only secret.
+
 Hand the token to the user out-of-band (1Password, signed message,
 whatever). There is no token endpoint — there is no way to mint a
 token from inside Claude Desktop.

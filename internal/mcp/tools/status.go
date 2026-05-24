@@ -20,7 +20,7 @@ var nowFn = time.Now
 // SDK can derive a JSON Schema (an empty {}).
 type GetStatusParams struct{}
 
-func registerStatus(srv *mcp.Server, repos *repository.Repositories) {
+func registerStatus(srv *mcp.Server, repos *repository.Repositories, version string) {
 	mcp.AddTool(srv, &mcp.Tool{
 		Name: "get_status",
 		Description: "Return the indexer's current sync state — latest momentum height, its " +
@@ -28,14 +28,14 @@ func registerStatus(srv *mcp.Server, repos *repository.Repositories) {
 			"timestamp). Computed entirely from the database; does not contact the Zenon " +
 			"node. An indexer_lag_seconds value larger than ~30 indicates the indexer is " +
 			"falling behind the chain head. Returns latest_height=0 on an empty DB.",
-	}, getStatus(repos))
+	}, getStatus(repos, version))
 }
 
-func getStatus(repos *repository.Repositories) func(context.Context, *mcp.CallToolRequest, *GetStatusParams) (*mcp.CallToolResult, *dto.Status, error) {
+func getStatus(repos *repository.Repositories, version string) func(context.Context, *mcp.CallToolRequest, *GetStatusParams) (*mcp.CallToolResult, *dto.Status, error) {
 	return func(ctx context.Context, _ *mcp.CallToolRequest, _ *GetStatusParams) (*mcp.CallToolResult, *dto.Status, error) {
 		m, err := repos.Momentum.GetLatest(ctx)
 		if errors.Is(err, pgx.ErrNoRows) {
-			return jsonResult(&dto.Status{Version: "dev"})
+			return jsonResult(&dto.Status{Version: version})
 		}
 		if err != nil {
 			return nil, nil, err
@@ -48,7 +48,7 @@ func getStatus(repos *repository.Repositories) func(context.Context, *mcp.CallTo
 			LatestHeight:      m.Height,
 			LatestTimestamp:   m.Timestamp,
 			IndexerLagSeconds: lag,
-			Version:           "dev",
+			Version:           version,
 		})
 	}
 }

@@ -10,7 +10,8 @@ where the config lives.
 1. The operator has the stack running and the MCP service reachable on
    a URL you can hit.
 2. The operator has minted you a JWT (see the Claude Desktop guide for
-   the `jwt-issue` invocation).
+   the `jwt-issue` invocation, including the `--secret-env
+   MCP_JWT_SECRET` flag when MCP uses isolated key material).
 
 ## Add the MCP server
 

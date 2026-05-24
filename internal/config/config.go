@@ -95,7 +95,7 @@ type MCPConfig struct {
 	// without an Origin header, so CORS only matters for browser-based
 	// MCP clients.
 	CORSAllowedOrigins string `mapstructure:"cors_allowed_origins"`
-	// RateLimitPerMinute caps tool calls per JWT subject. Defaults
+	// RateLimitPerMinute caps MCP transport requests per JWT subject. Defaults
 	// to 60 (matches the REST API).
 	RateLimitPerMinute int `mapstructure:"rate_limit_per_minute"`
 }

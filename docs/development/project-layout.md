@@ -69,7 +69,7 @@ cmd/* → internal/indexer → internal/repository → internal/models
 
 - `internal/repository` never imports `internal/indexer`.
 - `internal/models` is leaf-most — imports stdlib only (intentional —
-  the models become the API contract for the future REST + MCP layers).
+  the models are shared by the REST API and MCP layers).
 - `internal/indexer` is the only package that knows about the SDK.
 
 ## Why `internal/`
@@ -77,8 +77,8 @@ cmd/* → internal/indexer → internal/repository → internal/models
 Every non-leaf package lives under `internal/` so external Go callers
 can't import them. The shipped API service lives at `cmd/api/` with
 its packages under `internal/api/{dto,handlers,httpx,metrics,middleware,oapi,router}`;
-the future MCP server will follow the same pattern under
-`internal/mcp/`. Nothing outside this module gets to import them.
+the MCP server follows the same pattern under `internal/mcp/`. Nothing
+outside this module gets to import them.
 
 ## What's *not* a package
 

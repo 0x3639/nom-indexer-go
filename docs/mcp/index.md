@@ -18,8 +18,8 @@ docker compose up -d
 # (Requires POSTGRES_PASSWORD and API_JWT_SECRET in .env.)
 
 # 2. Mint a token. The MCP and API services share API_JWT_SECRET by
-#    default (set MCP_JWT_SECRET to isolate them). Either container
-#    bundles cmd/jwt-issue.
+#    default (set MCP_JWT_SECRET to isolate them). The jwt-issue binary
+#    reads API_JWT_SECRET unless --secret-env is provided.
 export TOKEN=$(docker compose exec -T api /app/jwt-issue \
     --sub claude-desktop --ttl 24h --scope read | tail -1)
 
@@ -91,12 +91,21 @@ Every call to `/mcp` must include an HS256 JWT, either:
 - `?token=<token>` query parameter (browser MCP clients that cannot
   set custom headers on the upgrade request).
 
-The signer is shared with the REST API. Operators mint tokens with the
-bundled `cmd/jwt-issue` CLI; there is no token endpoint.
+The signer is shared with the REST API by default. Operators mint tokens
+with the bundled `cmd/jwt-issue` CLI; there is no token endpoint.
 
 ```bash
 # Mint a 30-day token for a single Claude Desktop user.
 docker compose exec -T mcp /app/jwt-issue \
+    --sub alice --ttl 720h --scope read
+```
+
+If `MCP_JWT_SECRET` is set, point the issuer at that environment
+variable so the token is signed with the MCP-only secret:
+
+```bash
+docker compose exec -T mcp /app/jwt-issue \
+    --secret-env MCP_JWT_SECRET \
     --sub alice --ttl 720h --scope read
 ```
 

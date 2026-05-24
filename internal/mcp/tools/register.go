@@ -14,8 +14,8 @@ import (
 // matching domain file (status.go, momentums.go, ...) and calls
 // mcp.AddTool one or more times. Keeping the helpers per-file makes
 // the catalog easy to scan: one file, one domain, one mental model.
-func Register(srv *mcp.Server, repos *repository.Repositories) {
-	registerStatus(srv, repos)
+func Register(srv *mcp.Server, repos *repository.Repositories, version string) {
+	registerStatus(srv, repos, version)
 	registerMomentums(srv, repos)
 	registerAccounts(srv, repos)
 	registerTokens(srv, repos)

@@ -38,8 +38,8 @@ For one-shot ingestion: [`llms-full.txt`](llms-full.txt) concatenates every page
 
 ## When in doubt, follow these rules
 
-1. **Schema is the contract.** The shipped REST API (`cmd/api`,
-   reading from `internal/repository`) and the future MCP server both
+1. **Schema is the contract.** The shipped REST API (`cmd/api`) and
+   MCP server (`cmd/mcp`), both reading from `internal/repository`,
    read these tables directly. Any column change is a public API
    change. Match the migrations/SQL files exactly when editing models or
    repositories.

@@ -22,7 +22,8 @@ explicit overrides listed below.
 | Field | Type | Env var | Default | Description |
 |---|---|---|---|---|
 | `database.password` | string | `DATABASE_PASSWORD` (or `POSTGRES_PASSWORD` in compose) | — | Postgres password. Validation fails if empty. |
-| `api.jwt_secret` | string | `API_JWT_SECRET` | — | HS256 signing secret. **Required only when the `cmd/api` HTTP API runs** — the indexer ignores this field. `cmd/api` refuses to start if empty. Generate with `openssl rand -base64 48`. |
+| `api.jwt_secret` | string | `API_JWT_SECRET` | — | HS256 signing secret. **Required when `cmd/api` runs** and used by `cmd/mcp` unless `mcp.jwt_secret` is set. The indexer ignores this field. Generate with `openssl rand -base64 48`. |
+| `mcp.jwt_secret` | string | `MCP_JWT_SECRET` | — | Optional HS256 signing secret for `cmd/mcp`. Required only when `cmd/mcp` runs without `api.jwt_secret`; set it to isolate MCP tokens from REST API tokens. |
 
 ## Node
 
@@ -88,6 +89,20 @@ for the on-wire contract.
 | `api.cors_allowed_origins` | string | `API_CORS_ALLOWED_ORIGINS` | `""` (deny) | Comma-separated origin allowlist. Empty disables CORS entirely (browsers will block cross-origin requests). |
 | `api.rate_limit_per_minute` | int | `API_RATE_LIMIT_PER_MINUTE` | `60` | Per-JWT-subject sliding-window limit. `0` or negative disables rate limiting. |
 
+## MCP (`cmd/mcp` only)
+
+The fields below are read only by the hosted MCP server binary; the
+indexer binary ignores them. See the [MCP reference](../mcp/index.md)
+for the on-wire contract and client setup guides.
+
+| Field | Type | Env var | Default | Description |
+|---|---|---|---|---|
+| `mcp.port` | int | `MCP_PORT` | `8081` | Public listener port for Streamable HTTP at `/mcp`. The docker-compose mcp service publishes this 1:1 to the host. |
+| `mcp.metrics_port` | int | `MCP_METRICS_PORT` | `9091` | Separate listener for Prometheus `/metrics`. Bound to `0.0.0.0`; scope to a private network in production. |
+| `mcp.jwt_secret` | string | `MCP_JWT_SECRET` | `""` | Optional HS256 signing secret. Empty means `cmd/mcp` falls back to `api.jwt_secret` / `API_JWT_SECRET`; set it only when REST and MCP should have separate tokens. |
+| `mcp.cors_allowed_origins` | string | `MCP_CORS_ALLOWED_ORIGINS` | `""` (deny) | Comma-separated origin allowlist for browser MCP clients. Empty disables CORS entirely. |
+| `mcp.rate_limit_per_minute` | int | `MCP_RATE_LIMIT_PER_MINUTE` | `60` | Per-JWT-subject sliding-window limit for MCP transport requests. `0` or negative disables rate limiting. |
+
 ## Migrations
 
 | Variable | Default | Description |
@@ -105,10 +120,13 @@ forwards them to the Postgres container:
 | `POSTGRES_PASSWORD` | — | **Required.** Same value the indexer's `DATABASE_PASSWORD` should use. |
 | `POSTGRES_DB` | `nom_indexer` | Initial database name. |
 
-The `api` compose service additionally requires `API_JWT_SECRET` in
-`.env` (the container refuses to start without it). It does **not**
-fail at compose interpolation time, so `docker compose up postgres
-indexer` works without setting it.
+The `api` compose service requires `API_JWT_SECRET` in `.env` (the
+container refuses to start without it). The `mcp` compose service
+requires either `API_JWT_SECRET` or `MCP_JWT_SECRET`; set
+`MCP_JWT_SECRET` only when you want isolated MCP key material. Compose
+does **not** fail at interpolation time for those optional read
+services, so `docker compose up postgres indexer` works without setting
+either secret.
 
 ## Validation
 

@@ -55,8 +55,8 @@ tax dramatically.
 
 ## Read replica (for API / MCP consumers)
 
-The `cmd/api` service and the future MCP server are pure read
-consumers — they should not contend with the indexer's writes.
+The `cmd/api` and `cmd/mcp` services are pure read consumers — they
+should not contend with the indexer's writes.
 Two options:
 
 1. **Postgres streaming replica.** Point read consumers at the replica.

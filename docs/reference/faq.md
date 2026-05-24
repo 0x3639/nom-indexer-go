@@ -112,10 +112,10 @@ for per-domain curl examples, and
 [`specs/API_SPECIFICATION.md`](https://github.com/0x3639/nom-indexer-go/blob/main/specs/API_SPECIFICATION.md)
 for the architecture decision record that produced the v1 API.
 
-## Where does the future MCP server fit?
+## Where does the MCP server fit?
 
-Same pattern: `cmd/mcp`, reads from Postgres, exposes resources +
-tools by table. See [`docs/mcp/index.md`](../mcp/index.md).
+Same pattern as the REST API: `cmd/mcp` reads from Postgres and exposes
+resources + tools by table. See [`docs/mcp/index.md`](../mcp/index.md).
 
 ## How do I know if the indexer is healthy?
 

@@ -23,6 +23,9 @@ const (
 type Deps struct {
 	Repos  *repository.Repositories
 	Logger *zap.Logger
+	// Version is returned by get_status. cmd/mcp passes the build-time
+	// version; tests may leave it empty to use "dev".
+	Version string
 	// Middlewares are applied to the MCP receiving handler before any
 	// tool/resource handler runs. Used to attach the metrics observer
 	// (per-tool counter + duration histogram). Order matches the order
@@ -34,11 +37,15 @@ type Deps struct {
 // registered in internal/mcp. The server is transport-agnostic;
 // HTTPHandler wraps it for the Streamable HTTP transport.
 func New(d Deps) *mcp.Server {
+	version := d.Version
+	if version == "" {
+		version = "dev"
+	}
 	srv := mcp.NewServer(&mcp.Implementation{
 		Name:    implName,
 		Version: implVersion,
 	}, nil)
-	tools.Register(srv, d.Repos)
+	tools.Register(srv, d.Repos, version)
 	resources.Register(srv)
 	if len(d.Middlewares) > 0 {
 		srv.AddReceivingMiddleware(d.Middlewares...)
@@ -51,8 +58,8 @@ func New(d Deps) *mcp.Server {
 // same server instance is reused across requests (the SDK manages
 // per-request sessions).
 //
-// Middleware composition happens at cmd/mcp/main.go — kept out of this
-// constructor so tests can build a bare handler without auth/CORS.
+// Transport middleware composition happens at cmd/mcp/main.go — kept out
+// of this constructor so tests can build a bare handler without auth/CORS.
 func HTTPHandler(srv *mcp.Server) http.Handler {
 	return mcp.NewStreamableHTTPHandler(func(*http.Request) *mcp.Server {
 		return srv
