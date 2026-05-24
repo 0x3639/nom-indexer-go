@@ -76,14 +76,14 @@ func TestHub_SlowSubscriberLagsRatherThanBlocks(t *testing.T) {
 	defer slow.Close()
 
 	// Fill the buffer + drop 6 more — slow never reads.
-	for i := uint64(0); i < 10; i++ {
-		h.dispatch(&dto.Momentum{Height: i})
+	for i := range 10 {
+		h.dispatch(&dto.Momentum{Height: uint64(i)})
 	}
 
 	if got := slow.Lagged(); got != 6 {
 		t.Errorf("lagged = %d, want 6 (10 dispatched, buffer=4)", got)
 	}
-	for i := 0; i < 4; i++ {
+	for i := range 4 {
 		m := <-slow.Recv()
 		if m.Height != uint64(i) {
 			t.Errorf("position %d: got height %d, want %d", i, m.Height, i)
@@ -100,17 +100,15 @@ func TestHub_FastSubscriberNotPenalizedBySlowOne(t *testing.T) {
 
 	var received atomic.Uint64
 	var wg sync.WaitGroup
-	wg.Add(1)
-	go func() {
-		defer wg.Done()
+	wg.Go(func() {
 		for range fast.Recv() {
 			received.Add(1)
 		}
-	}()
+	})
 
 	const n = 50
-	for i := uint64(0); i < n; i++ {
-		h.dispatch(&dto.Momentum{Height: i})
+	for i := range n {
+		h.dispatch(&dto.Momentum{Height: uint64(i)})
 		time.Sleep(200 * time.Microsecond)
 	}
 
