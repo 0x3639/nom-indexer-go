@@ -79,6 +79,46 @@ services:
     networks:
       - nom-indexer
 
+  # Hosted MCP server. Speaks Model Context Protocol over Streamable HTTP
+  # so remote AI agents (Claude Desktop, Claude Code, etc.) can query the
+  # same Postgres tables the REST API serves. Auth uses the same HS256
+  # JWT secret as the API by default; set MCP_JWT_SECRET to isolate.
+  mcp:
+    build:
+      context: .
+      dockerfile: Dockerfile.mcp
+    container_name: nom-indexer-mcp
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      DATABASE_ADDRESS: postgres
+      DATABASE_PORT: 5432
+      DATABASE_NAME: ${POSTGRES_DB:-nom_indexer}
+      DATABASE_USERNAME: ${POSTGRES_USER:-postgres}
+      DATABASE_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env (copy .env.example)}
+      MCP_PORT: ${MCP_PORT:-8081}
+      MCP_METRICS_PORT: ${MCP_METRICS_PORT:-9091}
+      # Same fallback chain as cmd/mcp: prefer MCP_JWT_SECRET, fall
+      # back to API_JWT_SECRET. Container refuses to start if both empty.
+      API_JWT_SECRET: ${API_JWT_SECRET:-}
+      MCP_JWT_SECRET: ${MCP_JWT_SECRET:-}
+      MCP_CORS_ALLOWED_ORIGINS: ${MCP_CORS_ALLOWED_ORIGINS:-}
+      MCP_RATE_LIMIT_PER_MINUTE: ${MCP_RATE_LIMIT_PER_MINUTE:-60}
+    ports:
+      - "${MCP_PORT:-8081}:${MCP_PORT:-8081}"
+      - "${MCP_METRICS_PORT:-9091}:${MCP_METRICS_PORT:-9091}"
+    restart: unless-stopped
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - wget -q -O- "http://localhost:${MCP_PORT:-8081}/healthz" | grep -q ok || exit 1
+      interval: 10s
+      timeout: 3s
+      retries: 3
+    networks:
+      - nom-indexer
+
 networks:
   nom-indexer:
     driver: bridge

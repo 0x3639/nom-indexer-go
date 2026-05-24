@@ -8,9 +8,9 @@ These rules apply across every table in this schema. Where a per-table page
 notes a column behavior, it links back here so the rule is described in exactly
 one place.
 
-The schema is the contract between the indexer and its consumers (today: human
-SQL; soon: the REST API and the MCP server). Treat any deviation from these
-rules as a public-API change.
+The schema is the contract between the indexer and its consumers (human SQL,
+the REST API, and the MCP server). Treat any deviation from these rules as a
+public-API change.
 
 ## int64 cap
 

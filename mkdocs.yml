@@ -204,8 +204,10 @@ nav:
       - Bridge: api/endpoints/bridge.md
   - MCP:
     - Overview: mcp/index.md
-    - Resources: mcp/resources.md
     - Tools: mcp/tools.md
+    - Resources: mcp/resources.md
+    - Setup — Claude Desktop: mcp/setup-claude-desktop.md
+    - Setup — Claude Code: mcp/setup-claude-code.md
   - Reference:
     - Glossary: reference/glossary.md
     - Addresses: reference/addresses.md

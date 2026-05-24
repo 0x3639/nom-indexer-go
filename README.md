@@ -8,7 +8,7 @@
 
 A high-performance blockchain indexer for the [Zenon Network](https://zenon.network), written in Go. Ports the original [Dart nom-indexer](https://github.com/zenon-tools/nom-indexer) to a typed, batched, transactional Postgres pipeline.
 
-The service subscribes to a Zenon node over WebSocket, decodes embedded-contract activity, and writes a normalized 30-table schema. A read-only HTTP API (`cmd/api`, see [`docs/api/`](docs/api/index.md)) sits in front of those tables; the future MCP server will share the same DTO + repository layer.
+The service subscribes to a Zenon node over WebSocket, decodes embedded-contract activity, and writes a normalized 30-table schema. Read-only HTTP API (`cmd/api`, see [`docs/api/`](docs/api/index.md)) and MCP (`cmd/mcp`, see [`docs/mcp/`](docs/mcp/index.md)) services sit in front of those tables and share the same DTO + repository layer.
 
 ## Documentation
 
@@ -18,6 +18,7 @@ Full docs live at **[0x3639.github.io/nom-indexer-go](https://0x3639.github.io/n
 - [Schema reference](docs/schema/index.md) — every table, write path, gotchas
 - [Indexing flow](docs/indexing/index.md) — per-contract event handlers
 - [API reference](docs/api/index.md) — HTTP endpoints, auth (HS256 JWT), Swagger UI
+- [MCP reference](docs/mcp/index.md) — hosted Model Context Protocol server for AI clients
 - [Operations](docs/operations/deploy.md) — deploy, monitor, backfill, runbook
 - [Development](docs/development/setup.md) — local setup, recipes
 - [Config reference](docs/config/reference.md) — every env var + YAML key
@@ -36,12 +37,13 @@ cd nom-indexer-go
 # Local credentials (.env is gitignored).
 cp .env.example .env
 # Edit .env: set POSTGRES_PASSWORD (always required). If you also want to
-# run the HTTP API container, set API_JWT_SECRET — e.g. openssl rand -base64 48.
+# run the API or MCP containers, set API_JWT_SECRET — e.g. openssl rand -base64 48.
 
-# Indexer + Postgres only (the default; no API):
+# Indexer + Postgres only (the default; no read services):
 docker compose up -d postgres indexer
 
-# Or include the API container (requires API_JWT_SECRET set above):
+# Or include the API and MCP containers (requires API_JWT_SECRET set above,
+# unless MCP is isolated with MCP_JWT_SECRET):
 docker compose up -d
 
 # Follow the indexer.

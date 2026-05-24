@@ -2,9 +2,10 @@
 
 A Go service that indexes the Zenon Network blockchain (NoM) into PostgreSQL.
 It listens to a Zenon node over WebSocket, decodes embedded-contract activity,
-and writes a normalized relational schema. A read-only HTTP API (`cmd/api`,
-documented at [API](api/index.md)) reads those tables behind HS256 JWT auth;
-the future MCP server will share the same DTO + repository layer.
+and writes a normalized relational schema. Read-only API (`cmd/api`,
+documented at [API](api/index.md)) and MCP (`cmd/mcp`, documented at
+[MCP](mcp/index.md)) services read those tables behind HS256 JWT auth and
+share the same DTO + repository layer.
 
 ## Where to start
 
@@ -33,12 +34,13 @@ the future MCP server will share the same DTO + repository layer.
 
     1. [API overview](api/index.md) — quick start, auth, conventions, Swagger UI.
     2. [Endpoint catalog](api/endpoints/index.md) — per-domain curl examples.
-    3. [Schema overview](schema/index.md) — table-by-table reference for
-       direct SQL access or future MCP consumers.
-    4. [Schema conventions](schema/conventions.md) — int64 cap, timestamp,
+    3. [MCP overview](mcp/index.md) — hosted tool catalog for Claude Desktop,
+       Claude Code, and other MCP clients.
+    4. [Schema overview](schema/index.md) — table-by-table reference for
+       direct SQL and API/MCP consumers.
+    5. [Schema conventions](schema/conventions.md) — int64 cap, timestamp,
        hash encoding rules that every table follows.
-    5. [Glossary](reference/glossary.md) — Zenon-specific terms.
-    6. [MCP (forthcoming)](mcp/index.md)
+    6. [Glossary](reference/glossary.md) — Zenon-specific terms.
 
 ## What's in the docs
 
@@ -55,7 +57,7 @@ the future MCP server will share the same DTO + repository layer.
 | [Code reference](code-reference/index.md) | Go package summaries pulled from `doc.go`. |
 | [Reference](reference/glossary.md) | Glossary, addresses, FAQ, known issues. |
 | [API](api/index.md) | HTTP endpoints, HS256 JWT auth, Swagger UI, per-domain pages. |
-| [MCP](mcp/index.md) | (Stub — fills in when the MCP server ships.) |
+| [MCP](mcp/index.md) | Model Context Protocol tools/resources, auth, setup guides. |
 
 ## Documentation conventions
 

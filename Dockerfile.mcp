@@ -1,0 +1,40 @@
+# Build stage — CGO disabled. The MCP server never imports go-zenon
+# (which pulls in secp256k1 via CGO); only the indexer does. A CGO-free
+# build produces a ~15 MB static binary and a smaller runtime image.
+# Same shape as Dockerfile.api so operators have one mental model.
+FROM golang:1.25-alpine AS builder
+
+WORKDIR /app
+
+RUN apk add --no-cache git
+
+COPY go.mod go.sum ./
+RUN go mod download
+
+COPY . .
+
+ARG VERSION=dev
+RUN CGO_ENABLED=0 GOOS=linux \
+    go build -ldflags "-s -w -X main.version=${VERSION}" \
+    -o /app/mcp ./cmd/mcp && \
+    CGO_ENABLED=0 GOOS=linux \
+    go build -ldflags "-s -w" \
+    -o /app/jwt-issue ./cmd/jwt-issue
+
+# Runtime stage
+FROM alpine:3.19
+
+WORKDIR /app
+
+RUN apk add --no-cache ca-certificates tzdata && \
+    addgroup -g 1000 mcp && adduser -D -u 1000 -G mcp mcp
+
+COPY --from=builder /app/mcp /app/mcp
+COPY --from=builder /app/jwt-issue /app/jwt-issue
+
+USER mcp
+
+# 8081 = MCP (Streamable HTTP), 9091 = Prometheus /metrics
+EXPOSE 8081 9091
+
+CMD ["/app/mcp"]

@@ -4,9 +4,10 @@ title: Deploy
 
 # Deploy
 
-The canonical deployment is Docker Compose. Two containers: the
-indexer binary and Postgres 16. Everything else is configured via env
-vars in `.env`.
+The canonical deployment is Docker Compose. The core stack is the
+indexer binary plus Postgres 16; the same compose file also defines
+read-only API and MCP services. Everything is configured via env vars
+in `.env`.
 
 ## Prerequisites
 
@@ -24,13 +25,14 @@ cd nom-indexer-go
 # Local credentials. .env is gitignored.
 cp .env.example .env
 # Edit .env. Required: POSTGRES_PASSWORD.
-# Required only if you bring up the api service: API_JWT_SECRET (any
-# strong random string; openssl rand -base64 48).
+# Required only if you bring up the api or mcp service: API_JWT_SECRET
+# (any strong random string; openssl rand -base64 48). Set
+# MCP_JWT_SECRET only if MCP should use separate tokens.
 
 # Indexer + Postgres only (most common — read directly from the DB):
 docker compose up -d postgres indexer
 
-# Or the full stack including the read-only HTTP API container:
+# Or the full stack including the read-only HTTP API and MCP containers:
 docker compose up -d
 ```
 
@@ -44,18 +46,24 @@ The compose file:
   exposes the read-only HTTP API on `${API_PORT:-8080}` and
   Prometheus `/metrics` on `${API_METRICS_PORT:-9090}`. The api
   container refuses to start without `API_JWT_SECRET` in `.env`.
+- Defines an optional `mcp` service (built from `Dockerfile.mcp`) that
+  exposes Streamable HTTP MCP on `${MCP_PORT:-8081}` and Prometheus
+  `/metrics` on `${MCP_METRICS_PORT:-9091}`. The mcp container refuses
+  to start unless either `API_JWT_SECRET` or `MCP_JWT_SECRET` is set.
 
 ## Environment variables
 
 See [`config/reference.md`](../config/reference.md) for the full table.
 The compose-specific ones are `POSTGRES_USER`, `POSTGRES_PASSWORD`,
-`POSTGRES_DB` (Postgres + indexer + API) plus `API_JWT_SECRET`,
-`API_PORT`, `API_METRICS_PORT`, `API_CORS_ALLOWED_ORIGINS`, and
-`API_RATE_LIMIT_PER_MINUTE` (API only).
+`POSTGRES_DB` (Postgres + indexer + read services), the API settings
+(`API_JWT_SECRET`, `API_PORT`, `API_METRICS_PORT`,
+`API_CORS_ALLOWED_ORIGINS`, `API_RATE_LIMIT_PER_MINUTE`), and the MCP
+settings (`MCP_JWT_SECRET`, `MCP_PORT`, `MCP_METRICS_PORT`,
+`MCP_CORS_ALLOWED_ORIGINS`, `MCP_RATE_LIMIT_PER_MINUTE`).
 
 ## Image build
 
-The Dockerfile is multi-stage:
+The indexer `Dockerfile` is multi-stage:
 
 - **Stage 1** — `golang:1.25-alpine` with CGO toolchain (`gcc musl-dev`)
   for secp256k1. `go mod tidy && go build -o /app/indexer ./cmd/indexer`.
@@ -64,6 +72,10 @@ The Dockerfile is multi-stage:
 
 Final image is ~50 MB. `MIGRATIONS_PATH=/app/migrations` is baked into
 the runtime.
+
+`Dockerfile.api` and `Dockerfile.mcp` follow the same two-stage pattern
+but build CGO-free read-service binaries (`cmd/api`, `cmd/mcp`, and
+`cmd/jwt-issue`).
 
 To rebuild after code changes:
 
@@ -104,6 +116,7 @@ self-runs migrations at startup, same as the container.
 ## Health checks
 
 - **Postgres** — the compose file's healthcheck uses `pg_isready`.
-- **Indexer** — there's no HTTP health endpoint yet (planned with the
-  API). The current liveness signal is "sync cursor is advancing"; see
-  [`monitoring.md`](monitoring.md).
+- **Indexer** — there's no HTTP health endpoint; the liveness signal is
+  "sync cursor is advancing"; see [`monitoring.md`](monitoring.md).
+- **API** — `/healthz` and `/readyz` on `${API_PORT:-8080}`.
+- **MCP** — `/healthz` and `/readyz` on `${MCP_PORT:-8081}`.

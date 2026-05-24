@@ -43,3 +43,19 @@ api:
   cors_allowed_origins: ""
   # Per-subject (or per-IP) rate limit, requests/minute.
   rate_limit_per_minute: 60
+
+# Used only by cmd/mcp (the hosted MCP server for AI agents). The
+# indexer and API ignore this block.
+mcp:
+  # Public MCP port (Streamable HTTP at POST /mcp).
+  port: 8081
+  # Prometheus /metrics port (separate listener).
+  metrics_port: 9091
+  # HS256 secret. Leave empty to share api.jwt_secret with the REST API;
+  # set explicitly to isolate the two surfaces. Prefer the MCP_JWT_SECRET
+  # env var over checking a value in here.
+  jwt_secret: ""
+  # Comma-separated origin allowlist for browser MCP clients.
+  cors_allowed_origins: ""
+  # Per-subject rate limit, MCP transport requests/minute.
+  rate_limit_per_minute: 60

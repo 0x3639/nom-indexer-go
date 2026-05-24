@@ -4,9 +4,8 @@ title: Architecture overview
 
 # Architecture overview
 
-The big picture: one indexer process, one read-only HTTP API
-process, one Postgres database, several independent work lanes, and
-one future consumer surface (MCP).
+The big picture: one indexer process, read-only REST API and MCP
+processes, one Postgres database, and several independent work lanes.
 
 ## System context
 
@@ -16,26 +15,24 @@ flowchart LR
     idx["nom-indexer-go<br/>(cmd/indexer)"]:::core
     pg[(PostgreSQL<br/>30 tables)]:::core
     api["REST API<br/>(cmd/api)"]:::core
-    mcp["MCP server<br/>(forthcoming)"]:::future
+    mcp["MCP server<br/>(cmd/mcp)"]:::core
     web["explorer UI / SDK<br/>consumers"]:::external
 
     node -- "Subscriber + Ledger + Embedded RPCs" --> idx
     idx -- "writes" --> pg
     pg -- "reads" --> api
-    pg -. "reads" .-> mcp
+    pg -- "reads" --> mcp
     api -- "HTTP + JWT" --> web
-    mcp -. "MCP" .-> web
+    mcp -- "MCP + JWT" --> web
 
     classDef core fill:#3949ab,stroke:#1a237e,color:#fff;
     classDef external fill:#e0e0e0,stroke:#616161;
-    classDef future stroke-dasharray:5 5,fill:#fafafa,stroke:#9e9e9e;
 ```
 
 - The REST API server lives at `cmd/api` with HS256 JWT auth and
   Prometheus `/metrics` on a sidecar port. See [API](../api/index.md).
-- The MCP server (dashed) is still future work; it will live at
-  `cmd/mcp` and share `internal/api/dto` + `internal/repository`
-  with the REST API.
+- The MCP server lives at `cmd/mcp`, uses the same repository/DTO
+  contracts as the REST API, and exposes them as MCP tools/resources.
 
 ## Process layout
 
@@ -86,8 +83,8 @@ flowchart LR
 ```
 
 `internal/models` is the leaf — it imports stdlib only. That keeps
-it safe for `internal/api/dto` to depend on without dragging in pgx,
-and reserves the same property for the future MCP package.
+it safe for `internal/api/dto` and the MCP tool layer to depend on
+without dragging in pgx.
 
 ## Data flow at a glance
 
