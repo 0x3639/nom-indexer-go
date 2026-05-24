@@ -252,12 +252,15 @@ func TestHub_RunReconnectsOnConnectFailure(t *testing.T) {
 	}
 }
 
-// TestHub_CloseAllSubsKeepsStateRunning verifies the split between
-// closeAllSubs (for reconnect — closes channels, leaves state alone)
-// and drainAll (for terminal shutdown — both). The reconnect path
-// closes existing subs so client handlers exit; new clients can then
-// subscribe and start receiving frames once the connection is back.
-func TestHub_CloseAllSubsKeepsStateRunning(t *testing.T) {
+// TestHub_CloseAllSubsIsOrthogonalToState documents the helper's
+// narrow contract: closeAllSubs touches only the subscriber set, not
+// the hub state. Production callers must flip state to Degraded BEFORE
+// closing subs (see connectAndListen's wait-error path) — otherwise
+// there is a race window where a new Subscribe sees Running, lands in
+// the empty map, and waits forever for frames that will never come.
+// This test asserts the helper's invariants in isolation; it does NOT
+// claim that callers can rely on state staying Running across the call.
+func TestHub_CloseAllSubsIsOrthogonalToState(t *testing.T) {
 	h := newTestHub()
 	a := mustSubscribe(t, h, "alice")
 	b := mustSubscribe(t, h, "bob")
@@ -276,11 +279,14 @@ func TestHub_CloseAllSubsKeepsStateRunning(t *testing.T) {
 	}
 
 	if !h.Running() {
-		t.Error("closeAllSubs flipped state; should only happen on drainAll")
+		t.Error("closeAllSubs flipped state; helper should only touch subs")
 	}
+	// Subscribe still works (state is unchanged) — this is precisely
+	// the window connectAndListen's wait-error path protects against
+	// by flipping state to Degraded before invoking closeAllSubs.
 	c, err := h.Subscribe("carol")
 	if err != nil {
-		t.Errorf("Subscribe after closeAllSubs: %v", err)
+		t.Errorf("Subscribe after closeAllSubs (state still Running): %v", err)
 	} else {
 		c.Close()
 	}

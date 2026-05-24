@@ -130,7 +130,9 @@ type Config struct {
 	// ClientBuf is the per-subscriber channel size (default 32).
 	ClientBuf int
 	// PerSubjectMax caps concurrent stream connections per JWT
-	// subject (default 8). Zero or negative disables the cap.
+	// subject. The Go zero value (field omitted) applies the default
+	// (8); a negative value disables the cap entirely. Setting an
+	// explicit zero is treated the same as omitting the field.
 	PerSubjectMax int
 }
 
@@ -140,6 +142,8 @@ func New(cfg Config) *Hub {
 	if buf <= 0 {
 		buf = defaultClientBuffer
 	}
+	// PerSubjectMax: 0 (the Go zero value, ie. field omitted) →
+	// default; negative → disabled. See Config.PerSubjectMax doc.
 	perSub := cfg.PerSubjectMax
 	if perSub == 0 {
 		perSub = defaultPerSubjectMax
@@ -289,6 +293,16 @@ func nextBackoff(d time.Duration) time.Duration {
 //   - During reconnect attempts the hub sits in stateDegraded and
 //     Subscribe rejects with ErrHubNotRunning. Clients retry until
 //     the hub flips back to stateRunning (typically within seconds).
+//   - The transition from stateRunning to stateDegraded happens
+//     INSIDE connectAndListen (before closeAllSubs), so a Subscribe
+//     racing with a connection drop cannot land on a hub that is
+//     simultaneously closing its subscribers. See comment there.
+//
+// Backoff is reset to initialBackoff whenever connectAndListen
+// reports that it successfully reached LISTEN at any point during
+// the iteration — so a long-lived hub that drops once after hours
+// of healthy operation reconnects in 1 s, not at the prior
+// maxBackoff ceiling.
 //
 //nolint:contextcheck // detached ctx used only on shutdown / pgx close
 func (h *Hub) Run(ctx context.Context) error {
@@ -296,30 +310,23 @@ func (h *Hub) Run(ctx context.Context) error {
 	backoff := initialBackoff
 
 	for {
-		if err := h.connectAndListen(ctx); err != nil {
-			if ctx.Err() != nil {
-				return nil
-			}
-			h.logger.Warn("stream hub connect/listen failed; will retry",
-				zap.Error(err), zap.Duration("backoff", backoff))
-			h.state.Store(stateDegraded)
-			if !sleep(ctx, backoff) {
-				return nil
-			}
-			backoff = nextBackoff(backoff)
-			continue
-		}
-
-		// connectAndListen succeeded and returned (either ctx canceled
-		// or notification error). closeAllSubs has already run so
-		// stale subscribers don't outlive the connection drop.
+		listened, err := h.connectAndListen(ctx)
 		if ctx.Err() != nil {
 			return nil
 		}
-		// Notification error case — keep retrying. Reset backoff after
-		// a successful session so a long-lived hub that drops once
-		// doesn't start at the maxBackoff cap.
-		h.state.Store(stateDegraded)
+		if err == nil {
+			// connectAndListen returns nil only when ctx is canceled
+			// (handled above). Defensive — should not hit.
+			return nil
+		}
+
+		if listened {
+			// A session lived past LISTEN at least once — the prior
+			// backoff was earned by failures that may not recur. Reset.
+			backoff = initialBackoff
+		}
+		h.logger.Warn("stream hub connect/listen failed; will retry",
+			zap.Error(err), zap.Duration("backoff", backoff))
 		if !sleep(ctx, backoff) {
 			return nil
 		}
@@ -328,46 +335,69 @@ func (h *Hub) Run(ctx context.Context) error {
 }
 
 // connectAndListen runs one connect→LISTEN→waitLoop cycle. Returns
-// nil on a clean exit (ctx canceled), an error on either a connect
-// failure or a notification wait failure. The caller (Run) decides
-// whether to retry. closeAllSubs runs on every exit path so a stale
-// connection never has lingering subscribers.
+// (listened=false, err) on a connect/LISTEN failure, (listened=true,
+// err) on a wait-loop failure after a session was successfully
+// established, or (listened=true, nil) on a clean ctx-canceled exit.
+// The listened bool tells Run whether to reset its backoff counter.
+//
+// State transition order on a notification-wait failure (critical to
+// avoid a Subscribe race onto a dead hub):
+//
+//  1. flip state to stateDegraded (Subscribe now rejects)
+//  2. close all current subscribers (handlers exit promptly)
+//  3. close the pgx connection
+//
+// Doing 1 BEFORE 2 means a Subscribe racing with the connection drop
+// either lands while state is still Running (and gets closed by step
+// 2 — handler reconnects with from_height) OR after state flipped to
+// Degraded (and is rejected with 503 immediately). The previous code
+// had a window where state was Running, subs were already closed,
+// and a new Subscribe would land in an empty map awaiting frames
+// that would never come.
 //
 //nolint:contextcheck // pgx.Close on a detached ctx is the standard cleanup pattern
-func (h *Hub) connectAndListen(ctx context.Context) error {
+func (h *Hub) connectAndListen(ctx context.Context) (listened bool, err error) {
 	conn, err := h.connectFn(ctx)
 	if err != nil {
-		return fmt.Errorf("connect: %w", err)
+		return false, fmt.Errorf("connect: %w", err)
 	}
-	defer func() {
+	closeConn := func() {
 		closeCtx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 		defer cancel()
 		_ = conn.Close(closeCtx)
-	}()
-	defer h.closeAllSubs()
+	}
 
 	if _, err := conn.Exec(ctx, "LISTEN "+channelName); err != nil {
-		return fmt.Errorf("LISTEN: %w", err)
+		closeConn()
+		return false, fmt.Errorf("LISTEN: %w", err)
 	}
 	h.state.Store(stateRunning)
 	h.logger.Info("stream hub listening", zap.String("channel", channelName))
 
 	for {
-		notif, err := conn.WaitForNotification(ctx)
-		if err != nil {
-			if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
-				h.logger.Info("stream hub shutting down")
-				return nil
+		notif, werr := conn.WaitForNotification(ctx)
+		if werr != nil {
+			// Order matters — see method comment. State flips first so
+			// a racing Subscribe sees Degraded immediately; subs are
+			// then closed; conn is closed last.
+			if ctx.Err() == nil {
+				h.state.Store(stateDegraded)
 			}
-			return fmt.Errorf("wait: %w", err)
+			h.closeAllSubs()
+			closeConn()
+			if errors.Is(werr, context.Canceled) || errors.Is(werr, context.DeadlineExceeded) {
+				h.logger.Info("stream hub shutting down")
+				return true, nil
+			}
+			return true, fmt.Errorf("wait: %w", werr)
 		}
 		var m dto.Momentum
-		if err := json.Unmarshal([]byte(notif.Payload), &m); err != nil {
+		if uerr := json.Unmarshal([]byte(notif.Payload), &m); uerr != nil {
 			// Malformed payload from the indexer is a bug, not a runtime
 			// failure — log and continue so a single bad notify doesn't
 			// kill the stream.
 			h.logger.Warn("stream hub malformed notify payload",
-				zap.String("payload", notif.Payload), zap.Error(err))
+				zap.String("payload", notif.Payload), zap.Error(uerr))
 			continue
 		}
 		h.dispatch(&m)
