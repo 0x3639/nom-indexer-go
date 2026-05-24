@@ -107,3 +107,10 @@ func (s *statusRecorder) Write(b []byte) (int, error) {
 	}
 	return s.ResponseWriter.Write(b)
 }
+
+// Unwrap exposes the underlying ResponseWriter so http.ResponseController
+// (Go 1.20+) can find a Hijacker on the chain. Required for the
+// WebSocket stream handler — without it the upgrade fails with 501.
+func (s *statusRecorder) Unwrap() http.ResponseWriter {
+	return s.ResponseWriter
+}

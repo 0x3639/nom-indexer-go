@@ -36,3 +36,62 @@ curl -s -H "Authorization: Bearer $TOKEN" \
 | Path param | Type | Notes |
 |---|---|---|
 | `height` | uint64 | Non-numeric / negative input → `400 invalid_height`. Unknown height → `404`. |
+
+## Stream — `GET /api/v1/momentums/stream` (WebSocket)
+
+Upgrades to a WebSocket and pushes one JSON frame per newly-indexed
+momentum (same shape as the REST endpoints). Powered by Postgres
+`LISTEN`/`NOTIFY` — no polling, sub-second latency, one persistent
+connection per API process regardless of subscriber count.
+
+### Auth
+
+Either of:
+
+- `Authorization: Bearer <token>` header (CLI / server-side).
+- `?token=<jwt>` query parameter (browsers — the WebSocket API
+  cannot send custom headers on the upgrade request). Tokens passed
+  this way may end up in HTTP proxy logs; mint short-TTL tokens for
+  stream consumers.
+
+### Replay
+
+Pass `?from_height=N` to backfill momentums starting at height `N`
+before switching to live streaming. The catch-up scan is capped at
+10,000 rows — beyond that, use the REST `/api/v1/momentums` endpoint
+for the historical gap and reconnect for live.
+
+### Close codes
+
+| Code | Meaning |
+|---|---|
+| `1000` | Normal: client disconnected or server shutdown. |
+| `1011` | Internal: replay or dispatch error. |
+| `4000` | `slow_consumer`: dispatch dropped frames. Reconnect with `from_height` of the last height you saw. |
+
+Auth failures during the HTTP upgrade come back as
+`401 application/problem+json`, not as a close code.
+
+### Examples
+
+```bash
+# CLI (websocat or wscat)
+TOKEN="$(docker compose exec api /app/jwt-issue --sub stream-cli --ttl 1h)"
+wscat -c "ws://localhost:8080/api/v1/momentums/stream" \
+      -H "Authorization: Bearer $TOKEN"
+```
+
+```javascript
+// Browser
+const url = `ws://localhost:8080/api/v1/momentums/stream?token=${encodeURIComponent(jwt)}&from_height=${lastSeen}`;
+const ws = new WebSocket(url);
+ws.onmessage = (e) => {
+  const momentum = JSON.parse(e.data);
+  console.log(momentum.height, momentum.producer_name);
+};
+ws.onclose = (e) => {
+  if (e.code === 4000) {
+    // slow_consumer — reconnect with the last height we saw
+  }
+};
+```

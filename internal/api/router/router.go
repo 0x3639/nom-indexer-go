@@ -20,6 +20,7 @@ import (
 	"github.com/0x3639/nom-indexer-go/internal/api/handlers"
 	"github.com/0x3639/nom-indexer-go/internal/api/httpx"
 	apimw "github.com/0x3639/nom-indexer-go/internal/api/middleware"
+	"github.com/0x3639/nom-indexer-go/internal/api/stream"
 	"github.com/0x3639/nom-indexer-go/internal/auth"
 	"github.com/0x3639/nom-indexer-go/internal/repository"
 )
@@ -36,6 +37,7 @@ type Deps struct {
 	Signer             *auth.Signer
 	Logger             *zap.Logger
 	Pool               *pgxpool.Pool // used by /readyz to ping the DB; may be nil in tests
+	Hub                *stream.Hub   // optional; required for /api/v1/momentums/stream
 	Metrics            MetricsMiddleware
 	CORSAllowedOrigins []string
 	RateLimitPerMinute int
@@ -66,6 +68,20 @@ func New(d Deps) http.Handler {
 	// Unauthenticated routes.
 	r.Get("/healthz", healthz)
 	r.Get("/readyz", readyz(d.Pool))
+
+	// WebSocket stream — registered at the top level so it bypasses
+	// the /api/v1 chi Auth middleware. The handler does its own auth
+	// (header OR ?token= query) because browsers can't set custom
+	// headers on a WS upgrade. Registered only if a Hub is wired in;
+	// otherwise the route returns 503.
+	r.Get("/api/v1/momentums/stream", func(w http.ResponseWriter, r *http.Request) {
+		if d.Hub == nil {
+			httpx.WriteProblem(w, http.StatusServiceUnavailable, "stream_disabled",
+				"momentum stream hub is not configured on this instance")
+			return
+		}
+		handlers.MomentumsStream(d.Signer, d.Hub, d.Repos.Momentum)(w, r)
+	})
 
 	// Authenticated /api/v1 subtree.
 	r.Route("/api/v1", func(r chi.Router) {
