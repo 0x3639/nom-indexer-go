@@ -22,4 +22,8 @@ func Register(srv *mcp.Server, repos *repository.Repositories) {
 	registerAccountBlocks(srv, repos)
 	registerPillars(srv, repos)
 	registerSentinels(srv, repos)
+	registerStakesFusions(srv, repos)
+	registerRewards(srv, repos)
+	registerProjects(srv, repos)
+	registerBridge(srv, repos)
 }
