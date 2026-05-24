@@ -2,6 +2,7 @@ package repository
 
 import (
 	"context"
+	"fmt"
 
 	"github.com/jackc/pgx/v5/pgxpool"
 
@@ -54,6 +55,35 @@ func (r *ProjectPhaseRepository) GetIDsCreatedAtOrAfter(ctx context.Context, tim
 		ids = append(ids, id)
 	}
 	return ids, rows.Err()
+}
+
+// ListByProject returns every phase of a project, ordered by creation
+// timestamp ascending (phase 1 first).
+func (r *ProjectPhaseRepository) ListByProject(ctx context.Context, projectID string) ([]*models.ProjectPhase, error) {
+	if projectID == "" {
+		return nil, fmt.Errorf("project_id is required")
+	}
+	rows, err := r.pool.Query(ctx, `
+		SELECT id, project_id, voting_id, name, description, url,
+			znn_funds_needed, qsr_funds_needed, creation_timestamp, accepted_timestamp,
+			status, yes_votes, no_votes, total_votes
+		FROM project_phases WHERE project_id = $1
+		ORDER BY creation_timestamp ASC`, projectID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []*models.ProjectPhase
+	for rows.Next() {
+		var p models.ProjectPhase
+		if err := rows.Scan(&p.ID, &p.ProjectID, &p.VotingID, &p.Name, &p.Description, &p.URL,
+			&p.ZnnFundsNeeded, &p.QsrFundsNeeded, &p.CreationTimestamp, &p.AcceptedTimestamp,
+			&p.Status, &p.YesVotes, &p.NoVotes, &p.TotalVotes); err != nil {
+			return nil, err
+		}
+		out = append(out, &p)
+	}
+	return out, rows.Err()
 }
 
 // GetProjectAndPhaseIDFromVotingID retrieves project and phase IDs from voting ID

@@ -2,6 +2,7 @@ package repository
 
 import (
 	"context"
+	"fmt"
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -104,6 +105,69 @@ func (r *TokenRepository) UpdateHolderCount(ctx context.Context, tokenStandard s
 		WHERE token_standard = $1`,
 		tokenStandard, count)
 	return err
+}
+
+// GetByStandard returns a token by its ZTS identifier. Returns pgx.ErrNoRows
+// if not present.
+func (r *TokenRepository) GetByStandard(ctx context.Context, tokenStandard string) (*models.Token, error) {
+	if tokenStandard == "" {
+		return nil, fmt.Errorf("token_standard is required")
+	}
+	var t models.Token
+	err := r.pool.QueryRow(ctx, `
+		SELECT token_standard, name, symbol, domain, decimals, owner,
+			total_supply, max_supply, is_burnable, is_mintable, is_utility,
+			total_burned, last_update_timestamp, holder_count, transaction_count
+		FROM tokens WHERE token_standard = $1`, tokenStandard).Scan(
+		&t.TokenStandard, &t.Name, &t.Symbol, &t.Domain, &t.Decimals, &t.Owner,
+		&t.TotalSupply, &t.MaxSupply, &t.IsBurnable, &t.IsMintable, &t.IsUtility,
+		&t.TotalBurned, &t.LastUpdateTimestamp, &t.HolderCount, &t.TransactionCount)
+	if err != nil {
+		return nil, err
+	}
+	return &t, nil
+}
+
+// List returns tokens ordered by holder_count descending (most-held first)
+// with the total row count. Pagination friendly for large catalogs.
+func (r *TokenRepository) List(ctx context.Context, opts ListOpts) ([]*models.Token, int64, error) {
+	rows, err := r.pool.Query(ctx, `
+		SELECT token_standard, name, symbol, domain, decimals, owner,
+			total_supply, max_supply, is_burnable, is_mintable, is_utility,
+			total_burned, last_update_timestamp, holder_count, transaction_count,
+			COUNT(*) OVER () AS total
+		FROM tokens
+		ORDER BY holder_count DESC, token_standard ASC
+		LIMIT $1 OFFSET $2`, opts.Limit, opts.Offset)
+	if err != nil {
+		return nil, 0, err
+	}
+	defer rows.Close()
+
+	var (
+		out   []*models.Token
+		total int64
+	)
+	for rows.Next() {
+		var t models.Token
+		if err := rows.Scan(&t.TokenStandard, &t.Name, &t.Symbol, &t.Domain, &t.Decimals, &t.Owner,
+			&t.TotalSupply, &t.MaxSupply, &t.IsBurnable, &t.IsMintable, &t.IsUtility,
+			&t.TotalBurned, &t.LastUpdateTimestamp, &t.HolderCount, &t.TransactionCount, &total); err != nil {
+			return nil, 0, err
+		}
+		out = append(out, &t)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, 0, err
+	}
+	if len(out) == 0 && opts.Offset > 0 {
+		var err error
+		total, err = fallbackCount(ctx, r.pool, `SELECT COUNT(*) FROM tokens`)
+		if err != nil {
+			return nil, 0, err
+		}
+	}
+	return out, total, nil
 }
 
 // GetAll retrieves all tokens

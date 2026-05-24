@@ -1,5 +1,5 @@
 # Build stage
-FROM golang:1.24-alpine AS builder
+FROM golang:1.25-alpine AS builder
 
 WORKDIR /app
 
@@ -13,7 +13,7 @@ RUN go mod download
 # Copy source code
 COPY . .
 
-# Update go.mod for Go 1.24 and build the binary (CGO required for secp256k1)
+# Build the binary (CGO required for secp256k1)
 RUN go mod tidy && CGO_ENABLED=1 GOOS=linux go build -o /app/indexer ./cmd/indexer
 
 # Runtime stage

@@ -1,15 +1,21 @@
 # nom-indexer-go API Specification
 
-> **Status: Draft / Implementation brief — not the API reference.**
+> **Status: Superseded by [`docs/api/`](../docs/api/index.md). Kept as an ADR.**
 >
-> The REST API server has not been built yet. This document is a self-contained
-> implementation plan for building it; it does not describe a live API. When
-> the server ships, the user-facing reference will live at
-> [`docs/api/`](../docs/api/index.md) (rendered as Swagger UI from
-> `docs/api/openapi.yaml`), and this file will get a "Superseded by docs/api/"
-> notice but remain as an ADR.
+> The REST API server has shipped. The live reference is the OpenAPI 3.1
+> contract at [`docs/api/openapi.yaml`](../docs/api/openapi.yaml) and the
+> rendered Swagger UI on the docs site
+> ([API overview](https://0x3639.github.io/nom-indexer-go/api/)). The
+> per-domain endpoint pages at
+> [`docs/api/endpoints/`](../docs/api/endpoints/) cover the same routes
+> with curl examples.
 >
-> For the schema that any future API will sit on top of, see
+> This file is retained because it captured the implementation
+> decisions (router choice, auth scheme, pagination model, DTO
+> strategy) that produced the v1 API. Treat it as an architecture
+> decision record, not as the API contract.
+>
+> For the schema that the REST API reads directly, see
 > [`docs/schema/`](../docs/schema/index.md).
 
 This document provides everything needed to build a REST API layer for the nom-indexer-go database using Go and Gin.

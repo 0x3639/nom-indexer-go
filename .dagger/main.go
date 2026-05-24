@@ -12,15 +12,30 @@ import (
 
 type NomIndexer struct{}
 
-// Build builds the Docker image using the existing Dockerfile
+// Build builds the indexer Docker image using the default Dockerfile.
 func (m *NomIndexer) Build(source *dagger.Directory) *dagger.Container {
 	return source.DockerBuild()
+}
+
+// BuildAPI builds the API Docker image (Dockerfile.api, CGO_ENABLED=0).
+// Keeps the API image small and proves the API never accidentally
+// imports anything that needs CGO.
+func (m *NomIndexer) BuildAPI(source *dagger.Directory) *dagger.Container {
+	return source.DockerBuild(dagger.DirectoryDockerBuildOpts{
+		Dockerfile: "Dockerfile.api",
+	})
+}
+
+// PublishAPI builds and pushes the API image to GitHub Container Registry.
+func (m *NomIndexer) PublishAPI(ctx context.Context, source *dagger.Directory, tag string) (string, error) {
+	return m.BuildAPI(source).
+		Publish(ctx, "ghcr.io/0x3639/nom-indexer-api:"+tag)
 }
 
 // Test runs go test with CGO enabled (required for secp256k1)
 func (m *NomIndexer) Test(ctx context.Context, source *dagger.Directory) (string, error) {
 	return dag.Container().
-		From("golang:1.24-alpine").
+		From("golang:1.25-alpine").
 		WithExec([]string{"apk", "add", "--no-cache", "git", "gcc", "musl-dev"}).
 		WithMountedCache("/go/pkg/mod", dag.CacheVolume("go-mod")).
 		WithMountedCache("/root/.cache/go-build", dag.CacheVolume("go-build")).
@@ -31,12 +46,13 @@ func (m *NomIndexer) Test(ctx context.Context, source *dagger.Directory) (string
 		Stdout(ctx)
 }
 
-// Lint runs golangci-lint on the source code
-// Note: Uses Go 1.24 base image and installs golangci-lint since pre-built images
-// don't yet support Go 1.24
+// Lint runs golangci-lint on the source code.
+// golangci-lint is built from source inside the golang:1.25 base image
+// so it tracks the Go toolchain version pinned in go.mod (1.25). The
+// official pre-built binaries lag the latest Go release by several weeks.
 func (m *NomIndexer) Lint(ctx context.Context, source *dagger.Directory) (string, error) {
 	return dag.Container().
-		From("golang:1.24-alpine").
+		From("golang:1.25-alpine").
 		WithExec([]string{"apk", "add", "--no-cache", "git", "gcc", "musl-dev", "binutils-gold"}).
 		WithExec([]string{"go", "install", "github.com/golangci/golangci-lint/v2/cmd/golangci-lint@v2.7.1"}).
 		WithMountedCache("/go/pkg/mod", dag.CacheVolume("go-mod")).
@@ -67,8 +83,16 @@ func (m *NomIndexer) CI(ctx context.Context, source *dagger.Directory) (string, 
 		return "", err
 	}
 
-	// Build container to validate Dockerfile
-	_ = m.Build(source)
+	// Build both container images. Dagger graph nodes are lazy —
+	// assigning to _ never materializes the build, so Dockerfile
+	// regressions used to pass CI silently. Sync(ctx) forces the
+	// container to actually build.
+	if _, err := m.Build(source).Sync(ctx); err != nil {
+		return "", err
+	}
+	if _, err := m.BuildAPI(source).Sync(ctx); err != nil {
+		return "", err
+	}
 
 	return "CI passed: lint, test, and build succeeded!", nil
 }

@@ -3,6 +3,8 @@ package repository
 import (
 	"context"
 	"encoding/json"
+	"errors"
+	"fmt"
 	"strings"
 
 	"github.com/jackc/pgx/v5"
@@ -159,4 +161,98 @@ func (r *AccountBlockRepository) GetRewardDetails(ctx context.Context, receiveBl
 		"source":        source,
 		"tokenStandard": tokenStandard,
 	}, nil
+}
+
+// accountBlockCols is the SELECT-list (plus COUNT(*) OVER ()) used by every
+// List method. Kept in one place so column order stays in sync with Scan.
+const accountBlockCols = `hash, momentum_hash, momentum_timestamp, momentum_height, block_type,
+	height, address, to_address, amount, token_standard, data, method, input,
+	paired_account_block, descendant_of`
+
+func scanAccountBlock(rows pgx.Row, ab *models.AccountBlock, total *int64) error {
+	return rows.Scan(
+		&ab.Hash, &ab.MomentumHash, &ab.MomentumTimestamp, &ab.MomentumHeight, &ab.BlockType,
+		&ab.Height, &ab.Address, &ab.ToAddress, &ab.Amount, &ab.TokenStandard, &ab.Data,
+		&ab.Method, &ab.Input, &ab.PairedAccountBlock, &ab.DescendantOf, total)
+}
+
+// List returns account blocks ordered by momentum_height (newest-first by
+// default), with the total row count for pagination.
+func (r *AccountBlockRepository) List(ctx context.Context, opts ListOpts) ([]*models.AccountBlock, int64, error) {
+	query := fmt.Sprintf(`
+		SELECT `+accountBlockCols+`, COUNT(*) OVER () AS total
+		FROM account_blocks
+		ORDER BY momentum_height %s
+		LIMIT $1 OFFSET $2`, orderClause(opts.Sort))
+	rows, err := r.pool.Query(ctx, query, opts.Limit, opts.Offset)
+	if err != nil {
+		return nil, 0, err
+	}
+	defer rows.Close()
+
+	var (
+		out   []*models.AccountBlock
+		total int64
+	)
+	for rows.Next() {
+		var ab models.AccountBlock
+		if err := scanAccountBlock(rows, &ab, &total); err != nil {
+			return nil, 0, err
+		}
+		out = append(out, &ab)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, 0, err
+	}
+	if len(out) == 0 && opts.Offset > 0 {
+		var err error
+		total, err = fallbackCount(ctx, r.pool, `SELECT COUNT(*) FROM account_blocks`)
+		if err != nil {
+			return nil, 0, err
+		}
+	}
+	return out, total, nil
+}
+
+// ListByAddress returns account blocks where the address is either sender
+// or recipient. Useful for "transactions for an account" queries.
+func (r *AccountBlockRepository) ListByAddress(ctx context.Context, address string, opts ListOpts) ([]*models.AccountBlock, int64, error) {
+	if address == "" {
+		return nil, 0, errors.New("address is required")
+	}
+	query := fmt.Sprintf(`
+		SELECT `+accountBlockCols+`, COUNT(*) OVER () AS total
+		FROM account_blocks
+		WHERE address = $1 OR to_address = $1
+		ORDER BY momentum_height %s
+		LIMIT $2 OFFSET $3`, orderClause(opts.Sort))
+	rows, err := r.pool.Query(ctx, query, address, opts.Limit, opts.Offset)
+	if err != nil {
+		return nil, 0, err
+	}
+	defer rows.Close()
+
+	var (
+		out   []*models.AccountBlock
+		total int64
+	)
+	for rows.Next() {
+		var ab models.AccountBlock
+		if err := scanAccountBlock(rows, &ab, &total); err != nil {
+			return nil, 0, err
+		}
+		out = append(out, &ab)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, 0, err
+	}
+	if len(out) == 0 && opts.Offset > 0 {
+		var err error
+		total, err = fallbackCount(ctx, r.pool,
+			`SELECT COUNT(*) FROM account_blocks WHERE address = $1 OR to_address = $1`, address)
+		if err != nil {
+			return nil, 0, err
+		}
+	}
+	return out, total, nil
 }

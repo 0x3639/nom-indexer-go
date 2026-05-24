@@ -7,7 +7,7 @@ Hash-formatted flat index of every documentation page, generated from mkdocs.yml
 - [Home](docs/index.md): A Go service that indexes the Zenon Network blockchain (NoM) into PostgreSQL.
 ## Architecture
 
-- [Overview](docs/architecture/overview.md): The big picture: one process, one Postgres database, several
+- [Overview](docs/architecture/overview.md): The big picture: one indexer process, one read-only HTTP API
 - [Data flow](docs/architecture/data-flow.md): A line-by-line trace of what happens between "the node tells us a new
 - [Sync and recovery](docs/architecture/sync-and-recovery.md): How the indexer catches up from a cold start, transitions to real-time
 - [Cron and snapshots](docs/architecture/cron-and-snapshots.md): The cron goroutine in
@@ -119,9 +119,23 @@ Hash-formatted flat index of every documentation page, generated from mkdocs.yml
 - [internal/database](docs/code-reference/database.md): Source: [`internal/database/`](https://github.com/0x3639/nom-indexer-go/tree/main/internal/database)
 ## API
 
-- [Overview](docs/api/index.md): A REST API for the indexer is planned. This page is a stub; endpoint references
-- [Authentication](docs/api/auth.md): The REST API has not been implemented yet, so there is no runtime
-- [Pagination](docs/api/pagination.md): The REST API has not been implemented yet, so pagination parameters and
+- [Overview](docs/api/index.md): The nom-indexer-go HTTP API is a read-only layer over the indexed
+- [Authentication](docs/api/auth.md): All endpoints under `/api/v1/` require a Bearer JWT. `/healthz`,
+- [Pagination](docs/api/pagination.md): Collection endpoints use **offset/limit** pagination with a fixed
+### Endpoints
+
+- [Overview](docs/api/endpoints/index.md): Read the full machine-readable contract in
+- [Meta](docs/api/endpoints/meta.md): Liveness, readiness, and indexer sync state.
+- [Momentums](docs/api/endpoints/momentums.md): A momentum is a block header in Zenon's dual-ledger model. See the
+- [Accounts](docs/api/endpoints/accounts.md): `address` is the account's Zenon address (`z1q…`).
+- [Account blocks](docs/api/endpoints/account_blocks.md): Account-blocks are Zenon's dual-ledger transactions: one block is
+- [Tokens](docs/api/endpoints/tokens.md): ZTS tokens registered on the Zenon Network.
+- [Pillars](docs/api/endpoints/pillars.md): Pillars are Zenon's validator nodes.
+- [Sentinels](docs/api/endpoints/sentinels.md): Sentinels are Zenon's secondary network nodes (lighter-stake than
+- [Stakes & Fusions](docs/api/endpoints/stakes_fusions.md): Both default to `is_active = true`; pass `?include_inactive=true`
+- [Projects & Votes](docs/api/endpoints/projects.md): Accelerator-Z projects, phases, and pillar votes.
+- [Rewards](docs/api/endpoints/rewards.md): Per-account reward surfaces.
+- [Bridge](docs/api/endpoints/bridge.md): Cross-chain wrap/unwrap requests handled by the Zenon bridge.
 ## MCP
 
 - [Overview](docs/mcp/index.md): A Model Context Protocol server is planned. This page is a stub; tool and

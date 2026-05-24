@@ -3,6 +3,7 @@ package repository
 import (
 	"context"
 	"errors"
+	"fmt"
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -111,6 +112,174 @@ func (r *BridgeRepository) IsUnwrapRequestFinalized(ctx context.Context, txHash 
 		return false, false, err
 	}
 	return true, redeemed || revoked, nil
+}
+
+// ListWraps returns wrap_token_requests ordered by
+// creation_momentum_height descending, paginated.
+func (r *BridgeRepository) ListWraps(ctx context.Context, opts ListOpts) ([]*models.WrapTokenRequest, int64, error) {
+	rows, err := r.pool.Query(ctx, `
+		SELECT id, network_class, chain_id, to_address, token_standard,
+			token_address, amount, fee, signature, creation_momentum_height, confirmations_to_finality,
+			COUNT(*) OVER () AS total
+		FROM wrap_token_requests
+		ORDER BY creation_momentum_height DESC
+		LIMIT $1 OFFSET $2`, opts.Limit, opts.Offset)
+	if err != nil {
+		return nil, 0, err
+	}
+	defer rows.Close()
+	var (
+		out   []*models.WrapTokenRequest
+		total int64
+	)
+	for rows.Next() {
+		var w models.WrapTokenRequest
+		if err := rows.Scan(&w.ID, &w.NetworkClass, &w.ChainID, &w.ToAddress, &w.TokenStandard,
+			&w.TokenAddress, &w.Amount, &w.Fee, &w.Signature, &w.CreationMomentumHeight, &w.ConfirmationsToFinality, &total); err != nil {
+			return nil, 0, err
+		}
+		out = append(out, &w)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, 0, err
+	}
+	if len(out) == 0 && opts.Offset > 0 {
+		var err error
+		total, err = fallbackCount(ctx, r.pool, `SELECT COUNT(*) FROM wrap_token_requests`)
+		if err != nil {
+			return nil, 0, err
+		}
+	}
+	return out, total, nil
+}
+
+// ListWrapsByAddress returns wraps where to_address matches.
+func (r *BridgeRepository) ListWrapsByAddress(ctx context.Context, address string, opts ListOpts) ([]*models.WrapTokenRequest, int64, error) {
+	if address == "" {
+		return nil, 0, fmt.Errorf("address is required")
+	}
+	rows, err := r.pool.Query(ctx, `
+		SELECT id, network_class, chain_id, to_address, token_standard,
+			token_address, amount, fee, signature, creation_momentum_height, confirmations_to_finality,
+			COUNT(*) OVER () AS total
+		FROM wrap_token_requests
+		WHERE to_address = $1
+		ORDER BY creation_momentum_height DESC
+		LIMIT $2 OFFSET $3`, address, opts.Limit, opts.Offset)
+	if err != nil {
+		return nil, 0, err
+	}
+	defer rows.Close()
+	var (
+		out   []*models.WrapTokenRequest
+		total int64
+	)
+	for rows.Next() {
+		var w models.WrapTokenRequest
+		if err := rows.Scan(&w.ID, &w.NetworkClass, &w.ChainID, &w.ToAddress, &w.TokenStandard,
+			&w.TokenAddress, &w.Amount, &w.Fee, &w.Signature, &w.CreationMomentumHeight, &w.ConfirmationsToFinality, &total); err != nil {
+			return nil, 0, err
+		}
+		out = append(out, &w)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, 0, err
+	}
+	if len(out) == 0 && opts.Offset > 0 {
+		var err error
+		total, err = fallbackCount(ctx, r.pool,
+			`SELECT COUNT(*) FROM wrap_token_requests WHERE to_address = $1`, address)
+		if err != nil {
+			return nil, 0, err
+		}
+	}
+	return out, total, nil
+}
+
+// ListUnwraps returns unwrap_token_requests ordered by
+// registration_momentum_height descending.
+func (r *BridgeRepository) ListUnwraps(ctx context.Context, opts ListOpts) ([]*models.UnwrapTokenRequest, int64, error) {
+	rows, err := r.pool.Query(ctx, `
+		SELECT transaction_hash, log_index, network_class, chain_id,
+			to_address, token_standard, token_address, amount, signature,
+			registration_momentum_height, redeemed, revoked, redeemable_in,
+			COUNT(*) OVER () AS total
+		FROM unwrap_token_requests
+		ORDER BY registration_momentum_height DESC
+		LIMIT $1 OFFSET $2`, opts.Limit, opts.Offset)
+	if err != nil {
+		return nil, 0, err
+	}
+	defer rows.Close()
+	var (
+		out   []*models.UnwrapTokenRequest
+		total int64
+	)
+	for rows.Next() {
+		var u models.UnwrapTokenRequest
+		if err := rows.Scan(&u.TransactionHash, &u.LogIndex, &u.NetworkClass, &u.ChainID,
+			&u.ToAddress, &u.TokenStandard, &u.TokenAddress, &u.Amount, &u.Signature,
+			&u.RegistrationMomentumHeight, &u.Redeemed, &u.Revoked, &u.RedeemableIn, &total); err != nil {
+			return nil, 0, err
+		}
+		out = append(out, &u)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, 0, err
+	}
+	if len(out) == 0 && opts.Offset > 0 {
+		var err error
+		total, err = fallbackCount(ctx, r.pool, `SELECT COUNT(*) FROM unwrap_token_requests`)
+		if err != nil {
+			return nil, 0, err
+		}
+	}
+	return out, total, nil
+}
+
+// ListUnwrapsByAddress returns unwraps where to_address matches.
+func (r *BridgeRepository) ListUnwrapsByAddress(ctx context.Context, address string, opts ListOpts) ([]*models.UnwrapTokenRequest, int64, error) {
+	if address == "" {
+		return nil, 0, fmt.Errorf("address is required")
+	}
+	rows, err := r.pool.Query(ctx, `
+		SELECT transaction_hash, log_index, network_class, chain_id,
+			to_address, token_standard, token_address, amount, signature,
+			registration_momentum_height, redeemed, revoked, redeemable_in,
+			COUNT(*) OVER () AS total
+		FROM unwrap_token_requests
+		WHERE to_address = $1
+		ORDER BY registration_momentum_height DESC
+		LIMIT $2 OFFSET $3`, address, opts.Limit, opts.Offset)
+	if err != nil {
+		return nil, 0, err
+	}
+	defer rows.Close()
+	var (
+		out   []*models.UnwrapTokenRequest
+		total int64
+	)
+	for rows.Next() {
+		var u models.UnwrapTokenRequest
+		if err := rows.Scan(&u.TransactionHash, &u.LogIndex, &u.NetworkClass, &u.ChainID,
+			&u.ToAddress, &u.TokenStandard, &u.TokenAddress, &u.Amount, &u.Signature,
+			&u.RegistrationMomentumHeight, &u.Redeemed, &u.Revoked, &u.RedeemableIn, &total); err != nil {
+			return nil, 0, err
+		}
+		out = append(out, &u)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, 0, err
+	}
+	if len(out) == 0 && opts.Offset > 0 {
+		var err error
+		total, err = fallbackCount(ctx, r.pool,
+			`SELECT COUNT(*) FROM unwrap_token_requests WHERE to_address = $1`, address)
+		if err != nil {
+			return nil, 0, err
+		}
+	}
+	return out, total, nil
 }
 
 // GetWrapSyncStopHeight returns the height we should sync back to for wrap requests.

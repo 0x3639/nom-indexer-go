@@ -1,19 +1,1535 @@
 openapi: 3.1.0
+
 info:
   title: nom-indexer-go API
-  version: 0.0.0
+  version: 0.1.0
   description: |
-    Placeholder OpenAPI 3.1 contract. The API server has not been implemented
-    yet. See specs/API_SPECIFICATION.md for the draft implementation brief.
+    Read-only HTTP API over the nom-indexer-go database. Schema-as-contract:
+    every response mirrors the underlying Postgres table layout documented at
+    https://0x3639.github.io/nom-indexer-go/schema/.
 
-    When the API ships, this file is filled in and rendered as Swagger UI via
-    mkdocs-swagger-ui-tag.
+    ## Authentication
+
+    All endpoints under `/api/v1/` require a Bearer JWT in the `Authorization`
+    header. Tokens are HS256-signed by an admin via `cmd/jwt-issue`; there is
+    no token-mint endpoint. See https://0x3639.github.io/nom-indexer-go/api/auth/.
+
+    ## Pagination
+
+    Collection endpoints use offset/limit (`?page=1&page_size=50`, max 200) and
+    return an envelope `{data: [...], pagination: {page, page_size, total}}`.
+    Single-item endpoints return the object directly.
+
+    ## Errors
+
+    Errors are returned as `application/problem+json` (RFC 7807) with a
+    JSON object carrying `type`, `title`, `status`, `detail`, and a
+    custom `code` field.
   contact:
     name: nom-indexer-go
     url: https://github.com/0x3639/nom-indexer-go
+  license:
+    name: MIT
+    identifier: MIT
+
 servers:
   - url: http://localhost:8080
-    description: Local development server (not yet implemented)
-paths: {}
+    description: Local development
+
 components:
-  schemas: {}
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+      description: |
+        HS256-signed JWT minted via `cmd/jwt-issue`. Carries `sub`, `exp`, `iat`,
+        and an OAuth 2.0 space-separated `scope` claim.
+
+  parameters:
+    PageParam:
+      name: page
+      in: query
+      description: 1-based page number. Defaults to 1. Out-of-range clamped silently.
+      required: false
+      schema:
+        type: integer
+        minimum: 1
+        default: 1
+        examples: [1]
+    PageSizeParam:
+      name: page_size
+      in: query
+      description: Items per page. Default 50, maximum 200. Out-of-range clamped silently.
+      required: false
+      schema:
+        type: integer
+        minimum: 1
+        maximum: 200
+        default: 50
+        examples: [50]
+    SortParam:
+      name: sort
+      in: query
+      description: Sort direction over the endpoint's documented sort column. Defaults vary per endpoint.
+      required: false
+      schema:
+        type: string
+        enum: [asc, desc]
+
+  schemas:
+    Problem:
+      type: object
+      description: RFC 7807 problem details.
+      required: [type, title, status]
+      properties:
+        type:
+          type: string
+          format: uri
+          description: A URI reference identifying the problem type.
+          examples: ["about:blank"]
+        title:
+          type: string
+          description: A short, human-readable summary.
+          examples: ["Unauthorized"]
+        status:
+          type: integer
+          format: int32
+          examples: [401]
+        detail:
+          type: string
+          description: A human-readable explanation specific to this occurrence.
+        instance:
+          type: string
+          format: uri
+          description: A URI reference identifying the specific occurrence.
+        code:
+          type: string
+          description: Stable application-level error code (extension).
+          examples: ["unauthorized"]
+
+    Health:
+      type: object
+      required: [status]
+      properties:
+        status:
+          type: string
+          enum: [ok]
+
+    Pagination:
+      type: object
+      required: [page, page_size, total]
+      properties:
+        page:
+          type: integer
+          examples: [1]
+        page_size:
+          type: integer
+          examples: [50]
+        total:
+          type: integer
+          format: int64
+          description: Total rows matching the query across all pages.
+          examples: [12345]
+
+    Status:
+      type: object
+      description: Indexer sync state derived from the database.
+      required: [latest_height, latest_timestamp, indexer_lag_seconds, version]
+      properties:
+        latest_height:
+          type: integer
+          format: int64
+          minimum: 0
+          description: Height of the most-recently-indexed momentum (0 if empty).
+          examples: [12345]
+        latest_timestamp:
+          type: integer
+          format: int64
+          description: Unix-seconds timestamp of the latest momentum.
+          examples: [1700000000]
+        indexer_lag_seconds:
+          type: integer
+          format: int64
+          description: Server clock minus latest_timestamp. Grows when the indexer falls behind.
+          examples: [5]
+        version:
+          type: string
+          examples: ["dev"]
+
+    Momentum:
+      type: object
+      required: [height, hash, timestamp, tx_count, producer]
+      properties:
+        height:
+          type: integer
+          format: int64
+          minimum: 0
+          examples: [12345]
+        hash:
+          type: string
+          examples: ["6b4a32ff…"]
+        timestamp:
+          type: integer
+          format: int64
+          examples: [1700000000]
+        tx_count:
+          type: integer
+          examples: [3]
+        producer:
+          type: string
+          examples: ["z1qq…"]
+        producer_owner:
+          type: string
+        producer_name:
+          type: string
+
+    MomentumList:
+      type: object
+      required: [data, pagination]
+      properties:
+        data:
+          type: array
+          items:
+            $ref: '#/components/schemas/Momentum'
+        pagination:
+          $ref: '#/components/schemas/Pagination'
+
+    Amount:
+      type: string
+      description: |
+        Raw int64 token amount (no decimals applied) serialized as a
+        JSON string. Strings avoid JavaScript Number precision loss for
+        values above 2^53-1 — ZNN total supply already exceeds that.
+      pattern: '^-?[0-9]+$'
+      examples: ["100000000000"]
+
+    Account:
+      type: object
+      required:
+        - address
+        - block_count
+        - genesis_znn_balance
+        - genesis_qsr_balance
+        - znn_sent
+        - znn_received
+        - qsr_sent
+        - qsr_received
+      properties:
+        address: { type: string }
+        block_count: { type: integer, format: int64 }
+        public_key: { type: string }
+        delegate: { type: string }
+        delegation_start_timestamp: { type: integer, format: int64 }
+        genesis_znn_balance: { $ref: '#/components/schemas/Amount' }
+        genesis_qsr_balance: { $ref: '#/components/schemas/Amount' }
+        znn_sent: { $ref: '#/components/schemas/Amount' }
+        znn_received: { $ref: '#/components/schemas/Amount' }
+        qsr_sent: { $ref: '#/components/schemas/Amount' }
+        qsr_received: { $ref: '#/components/schemas/Amount' }
+        first_active_at: { type: integer, format: int64 }
+        last_active_at: { type: integer, format: int64 }
+
+    Balance:
+      type: object
+      required: [address, token_standard, balance, last_updated_timestamp]
+      properties:
+        address: { type: string }
+        token_standard: { type: string }
+        balance: { $ref: '#/components/schemas/Amount' }
+        last_updated_timestamp: { type: integer, format: int64 }
+
+    BalanceList:
+      type: object
+      required: [data]
+      properties:
+        data:
+          type: array
+          items:
+            $ref: '#/components/schemas/Balance'
+
+    BalancePage:
+      type: object
+      required: [data, pagination]
+      properties:
+        data:
+          type: array
+          items:
+            $ref: '#/components/schemas/Balance'
+        pagination:
+          $ref: '#/components/schemas/Pagination'
+
+    Token:
+      type: object
+      required:
+        - token_standard
+        - name
+        - symbol
+        - decimals
+        - owner
+        - total_supply
+        - max_supply
+        - is_burnable
+        - is_mintable
+        - is_utility
+        - total_burned
+        - last_update_timestamp
+        - holder_count
+        - transaction_count
+      properties:
+        token_standard: { type: string, examples: ["zts1znnxxxxxxxxxxxxx9z4ulx"] }
+        name: { type: string }
+        symbol: { type: string }
+        domain: { type: string }
+        decimals: { type: integer }
+        owner: { type: string }
+        total_supply: { $ref: '#/components/schemas/Amount' }
+        max_supply: { $ref: '#/components/schemas/Amount' }
+        is_burnable: { type: boolean }
+        is_mintable: { type: boolean }
+        is_utility: { type: boolean }
+        total_burned: { $ref: '#/components/schemas/Amount' }
+        last_update_timestamp: { type: integer, format: int64 }
+        holder_count: { type: integer, format: int64 }
+        transaction_count: { type: integer, format: int64 }
+
+    AccountBlock:
+      type: object
+      description: |
+        A transaction (account-block in Zenon's dual-ledger model). One
+        block is either a send (block_type 1..4) or a receive (5..8); a
+        complete transaction is the matched (send, receive) pair.
+      required:
+        - hash
+        - momentum_hash
+        - momentum_timestamp
+        - momentum_height
+        - block_type
+        - height
+        - address
+        - amount
+      properties:
+        hash: { type: string }
+        momentum_hash: { type: string }
+        momentum_timestamp: { type: integer, format: int64 }
+        momentum_height: { type: integer, format: int64 }
+        block_type: { type: integer, examples: [2] }
+        height: { type: integer, format: int64 }
+        address: { type: string }
+        to_address: { type: string }
+        amount: { $ref: '#/components/schemas/Amount' }
+        token_standard: { type: string }
+        data: { type: string }
+        method: { type: string }
+        input:
+          description: Decoded contract inputs (JSON object) when the indexer recognized the method.
+          type: object
+          additionalProperties: { type: string }
+        paired_account_block: { type: string }
+        descendant_of: { type: string }
+
+    Pillar:
+      type: object
+      required:
+        - owner_address
+        - producer_address
+        - withdraw_address
+        - name
+        - rank
+        - is_revocable
+        - weight
+        - slot_cost_qsr
+        - is_revoked
+      properties:
+        owner_address: { type: string }
+        producer_address: { type: string }
+        withdraw_address: { type: string }
+        name: { type: string }
+        rank: { type: integer }
+        give_momentum_reward_percentage: { type: integer }
+        give_delegate_reward_percentage: { type: integer }
+        is_revocable: { type: boolean }
+        revoke_cooldown: { type: integer }
+        revoke_timestamp: { type: integer, format: int64 }
+        weight: { $ref: '#/components/schemas/Amount' }
+        epoch_produced_momentums: { type: integer }
+        epoch_expected_momentums: { type: integer }
+        slot_cost_qsr: { $ref: '#/components/schemas/Amount' }
+        spawn_timestamp: { type: integer, format: int64 }
+        voting_activity: { type: number, format: float }
+        produced_momentum_count: { type: integer, format: int64 }
+        is_revoked: { type: boolean }
+
+    PillarList:
+      type: object
+      required: [data, pagination]
+      properties:
+        data:
+          type: array
+          items:
+            $ref: '#/components/schemas/Pillar'
+        pagination:
+          $ref: '#/components/schemas/Pagination'
+
+    PillarDelegator:
+      type: object
+      required: [address, delegation_start_timestamp]
+      properties:
+        address: { type: string }
+        delegation_start_timestamp: { type: integer, format: int64 }
+
+    PillarDelegatorList:
+      type: object
+      required: [data, pagination]
+      properties:
+        data:
+          type: array
+          items:
+            $ref: '#/components/schemas/PillarDelegator'
+        pagination:
+          $ref: '#/components/schemas/Pagination'
+
+    Sentinel:
+      type: object
+      required: [owner, registration_timestamp, is_revocable, active]
+      properties:
+        owner: { type: string }
+        registration_timestamp: { type: integer, format: int64 }
+        is_revocable: { type: boolean }
+        revoke_cooldown: { type: string }
+        active: { type: boolean }
+
+    SentinelList:
+      type: object
+      required: [data, pagination]
+      properties:
+        data:
+          type: array
+          items:
+            $ref: '#/components/schemas/Sentinel'
+        pagination:
+          $ref: '#/components/schemas/Pagination'
+
+    Stake:
+      type: object
+      required: [id, address, start_timestamp, expiration_timestamp, znn_amount, duration_in_sec, is_active]
+      properties:
+        id: { type: string }
+        address: { type: string }
+        start_timestamp: { type: integer, format: int64 }
+        expiration_timestamp: { type: integer, format: int64 }
+        znn_amount: { $ref: '#/components/schemas/Amount' }
+        duration_in_sec: { type: integer }
+        is_active: { type: boolean }
+        cancel_id: { type: string }
+
+    StakeList:
+      type: object
+      required: [data, pagination]
+      properties:
+        data: { type: array, items: { $ref: '#/components/schemas/Stake' } }
+        pagination: { $ref: '#/components/schemas/Pagination' }
+
+    Fusion:
+      type: object
+      required:
+        - id
+        - address
+        - beneficiary
+        - momentum_hash
+        - momentum_timestamp
+        - momentum_height
+        - qsr_amount
+        - expiration_height
+        - is_active
+      properties:
+        id: { type: string }
+        address: { type: string }
+        beneficiary: { type: string }
+        momentum_hash: { type: string }
+        momentum_timestamp: { type: integer, format: int64 }
+        momentum_height: { type: integer, format: int64 }
+        qsr_amount: { $ref: '#/components/schemas/Amount' }
+        expiration_height: { type: integer, format: int64 }
+        is_active: { type: boolean }
+        cancel_id: { type: string }
+
+    FusionList:
+      type: object
+      required: [data, pagination]
+      properties:
+        data: { type: array, items: { $ref: '#/components/schemas/Fusion' } }
+        pagination: { $ref: '#/components/schemas/Pagination' }
+
+    CumulativeReward:
+      type: object
+      required: [address, reward_type, amount, token_standard]
+      properties:
+        address: { type: string }
+        reward_type:
+          type: string
+          enum: [Unknown, Stake, Delegation, Liquidity, Sentinel, Pillar]
+        amount: { $ref: '#/components/schemas/Amount' }
+        token_standard: { type: string }
+
+    CumulativeRewardList:
+      type: object
+      required: [data]
+      properties:
+        data: { type: array, items: { $ref: '#/components/schemas/CumulativeReward' } }
+
+    RewardTransaction:
+      type: object
+      required: [hash, address, reward_type, momentum_timestamp, momentum_height, account_height, amount, token_standard]
+      properties:
+        hash: { type: string }
+        address: { type: string }
+        reward_type:
+          type: string
+          enum: [Unknown, Stake, Delegation, Liquidity, Sentinel, Pillar]
+        momentum_timestamp: { type: integer, format: int64 }
+        momentum_height: { type: integer, format: int64 }
+        account_height: { type: integer, format: int64 }
+        amount: { $ref: '#/components/schemas/Amount' }
+        token_standard: { type: string }
+        source_address: { type: string }
+
+    RewardTransactionList:
+      type: object
+      required: [data, pagination]
+      properties:
+        data: { type: array, items: { $ref: '#/components/schemas/RewardTransaction' } }
+        pagination: { $ref: '#/components/schemas/Pagination' }
+
+    Project:
+      type: object
+      required:
+        - id
+        - voting_id
+        - owner
+        - name
+        - znn_funds_needed
+        - qsr_funds_needed
+        - creation_timestamp
+        - last_update_timestamp
+        - status
+        - yes_votes
+        - no_votes
+        - total_votes
+      properties:
+        id: { type: string }
+        voting_id: { type: string }
+        owner: { type: string }
+        name: { type: string }
+        description: { type: string }
+        url: { type: string }
+        znn_funds_needed: { $ref: '#/components/schemas/Amount' }
+        qsr_funds_needed: { $ref: '#/components/schemas/Amount' }
+        creation_timestamp: { type: integer, format: int64 }
+        last_update_timestamp: { type: integer, format: int64 }
+        status: { type: integer }
+        yes_votes: { type: integer }
+        no_votes: { type: integer }
+        total_votes: { type: integer }
+
+    ProjectList:
+      type: object
+      required: [data, pagination]
+      properties:
+        data: { type: array, items: { $ref: '#/components/schemas/Project' } }
+        pagination: { $ref: '#/components/schemas/Pagination' }
+
+    ProjectPhase:
+      type: object
+      required:
+        - id
+        - project_id
+        - voting_id
+        - name
+        - znn_funds_needed
+        - qsr_funds_needed
+        - creation_timestamp
+        - accepted_timestamp
+        - status
+        - yes_votes
+        - no_votes
+        - total_votes
+      properties:
+        id: { type: string }
+        project_id: { type: string }
+        voting_id: { type: string }
+        name: { type: string }
+        description: { type: string }
+        url: { type: string }
+        znn_funds_needed: { $ref: '#/components/schemas/Amount' }
+        qsr_funds_needed: { $ref: '#/components/schemas/Amount' }
+        creation_timestamp: { type: integer, format: int64 }
+        accepted_timestamp: { type: integer, format: int64 }
+        status: { type: integer }
+        yes_votes: { type: integer }
+        no_votes: { type: integer }
+        total_votes: { type: integer }
+
+    ProjectPhaseList:
+      type: object
+      required: [data]
+      properties:
+        data: { type: array, items: { $ref: '#/components/schemas/ProjectPhase' } }
+
+    Vote:
+      type: object
+      required:
+        - id
+        - momentum_hash
+        - momentum_timestamp
+        - momentum_height
+        - voter_address
+        - project_id
+        - voting_id
+        - vote
+      properties:
+        id: { type: integer }
+        momentum_hash: { type: string }
+        momentum_timestamp: { type: integer, format: int64 }
+        momentum_height: { type: integer, format: int64 }
+        voter_address: { type: string }
+        project_id: { type: string }
+        phase_id: { type: string }
+        voting_id: { type: string }
+        vote: { type: integer, description: "0=yes, 1=no, 2=abstain" }
+
+    VoteList:
+      type: object
+      required: [data, pagination]
+      properties:
+        data: { type: array, items: { $ref: '#/components/schemas/Vote' } }
+        pagination: { $ref: '#/components/schemas/Pagination' }
+
+    WrapTokenRequest:
+      type: object
+      required: [id, network_class, chain_id, to_address, token_standard, token_address, amount, fee, creation_momentum_height, confirmations_to_finality]
+      properties:
+        id: { type: string }
+        network_class: { type: integer }
+        chain_id: { type: integer }
+        to_address: { type: string }
+        token_standard: { type: string }
+        token_address: { type: string }
+        amount: { $ref: '#/components/schemas/Amount' }
+        fee: { $ref: '#/components/schemas/Amount' }
+        signature: { type: string }
+        creation_momentum_height: { type: integer, format: int64 }
+        confirmations_to_finality: { type: integer }
+
+    WrapTokenRequestList:
+      type: object
+      required: [data, pagination]
+      properties:
+        data: { type: array, items: { $ref: '#/components/schemas/WrapTokenRequest' } }
+        pagination: { $ref: '#/components/schemas/Pagination' }
+
+    UnwrapTokenRequest:
+      type: object
+      required: [transaction_hash, log_index, network_class, chain_id, to_address, token_standard, token_address, amount, registration_momentum_height, redeemed, revoked, redeemable_in]
+      properties:
+        transaction_hash: { type: string }
+        log_index: { type: integer, format: int64 }
+        network_class: { type: integer }
+        chain_id: { type: integer }
+        to_address: { type: string }
+        token_standard: { type: string }
+        token_address: { type: string }
+        amount: { $ref: '#/components/schemas/Amount' }
+        signature: { type: string }
+        registration_momentum_height: { type: integer, format: int64 }
+        redeemed: { type: boolean }
+        revoked: { type: boolean }
+        redeemable_in: { type: integer, format: int64 }
+
+    UnwrapTokenRequestList:
+      type: object
+      required: [data, pagination]
+      properties:
+        data: { type: array, items: { $ref: '#/components/schemas/UnwrapTokenRequest' } }
+        pagination: { $ref: '#/components/schemas/Pagination' }
+
+    AccountBlockList:
+      type: object
+      required: [data, pagination]
+      properties:
+        data:
+          type: array
+          items:
+            $ref: '#/components/schemas/AccountBlock'
+        pagination:
+          $ref: '#/components/schemas/Pagination'
+
+    TokenList:
+      type: object
+      required: [data, pagination]
+      properties:
+        data:
+          type: array
+          items:
+            $ref: '#/components/schemas/Token'
+        pagination:
+          $ref: '#/components/schemas/Pagination'
+
+  responses:
+    Unauthorized:
+      description: Missing or invalid bearer token.
+      content:
+        application/problem+json:
+          schema:
+            $ref: '#/components/schemas/Problem'
+    RateLimited:
+      description: Too many requests for this subject.
+      content:
+        application/problem+json:
+          schema:
+            $ref: '#/components/schemas/Problem'
+
+paths:
+  /healthz:
+    get:
+      operationId: getHealthz
+      summary: Liveness probe
+      description: |
+        Always returns 200 with `{"status":"ok"}`. Does not check the
+        database — that's `/readyz`. Suitable for k8s liveness checks.
+      tags: [meta]
+      security: []
+      responses:
+        '200':
+          description: Service is alive.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Health'
+
+  /readyz:
+    get:
+      operationId: getReadyz
+      summary: Readiness probe
+      description: |
+        Two checks:
+
+        1. Pings the Postgres pool.
+        2. Reads `schema_migrations` (golang-migrate) and asserts
+           `version >= minSchemaVersion` (pinned in
+           `internal/api/router/router.go`) AND `dirty = false`.
+
+        Returns 200 `{"status":"ready"}` when both pass. Returns
+        503 application/problem+json with a stable `code` field on
+        any failure:
+
+        | `code` | Cause |
+        |---|---|
+        | `db_unavailable` | Pool ping or query failed (network, pool exhausted). |
+        | `schema_not_migrated` | `schema_migrations` table missing OR `version` below the API's pinned minimum. Start the indexer container so migrations run. |
+        | `schema_dirty` | `schema_migrations.dirty = true` — last migration crashed mid-run; manual repair required. |
+      tags: [meta]
+      security: []
+      responses:
+        '200':
+          description: Service is ready to serve traffic.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [status]
+                properties:
+                  status: { type: string, enum: [ready] }
+        '503':
+          description: |
+            Service is not ready. The `code` field on the problem
+            body distinguishes db_unavailable, schema_not_migrated,
+            and schema_dirty (see operation description).
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
+
+  /api/v1/status:
+    get:
+      operationId: getStatus
+      summary: Indexer sync status
+      description: |
+        Returns the latest indexed momentum height, its timestamp, and
+        `indexer_lag_seconds = now - latest_timestamp`. Computed from the
+        database alone — does not hit the Zenon node.
+      tags: [meta]
+      security:
+        - bearerAuth: []
+      responses:
+        '200':
+          description: Current sync state.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Status'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '429':
+          $ref: '#/components/responses/RateLimited'
+
+  /api/v1/momentums:
+    get:
+      operationId: listMomentums
+      summary: List momentums
+      description: |
+        Returns momentums ordered by height (default `desc`). Page through
+        the full chain with `?page=` and `?page_size=`.
+      tags: [momentums]
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: '#/components/parameters/PageParam'
+        - $ref: '#/components/parameters/PageSizeParam'
+        - $ref: '#/components/parameters/SortParam'
+      responses:
+        '200':
+          description: Paginated list of momentums.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/MomentumList'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '429':
+          $ref: '#/components/responses/RateLimited'
+
+  /api/v1/momentums/latest:
+    get:
+      operationId: getLatestMomentum
+      summary: Get the most-recently-indexed momentum
+      description: |
+        Returns the highest-height momentum. Returns 404 if the indexer
+        has not processed any blocks yet.
+      tags: [momentums]
+      security:
+        - bearerAuth: []
+      responses:
+        '200':
+          description: The latest momentum.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Momentum'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          description: No momentums have been indexed yet.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
+        '429':
+          $ref: '#/components/responses/RateLimited'
+
+  /api/v1/accounts/{address}:
+    get:
+      operationId: getAccount
+      summary: Get account info
+      description: |
+        Returns the account's flow metrics (lifetime ZNN/QSR sent/received,
+        first/last activity) plus delegation state. Returns 404 if the
+        indexer has never observed the address.
+      tags: [accounts]
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: address
+          in: path
+          required: true
+          schema: { type: string, examples: ["z1qq…"] }
+      responses:
+        '200':
+          description: Account info.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Account'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          description: No account with that address.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
+        '429':
+          $ref: '#/components/responses/RateLimited'
+
+  /api/v1/accounts/{address}/balances:
+    get:
+      operationId: getAccountBalances
+      summary: List balances for an account
+      description: |
+        Returns every (token_standard, balance) row for the address,
+        sorted by balance DESC. Not paginated — an account typically
+        holds a handful of tokens.
+      tags: [accounts]
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: address
+          in: path
+          required: true
+          schema: { type: string }
+      responses:
+        '200':
+          description: List of balances.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/BalanceList'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '429':
+          $ref: '#/components/responses/RateLimited'
+
+  /api/v1/accounts/{address}/transactions:
+    get:
+      operationId: listAccountTransactions
+      summary: List transactions involving an address
+      description: |
+        Returns account-blocks where the address is either sender or
+        recipient. Sorted by momentum_height; default desc.
+      tags: [accounts]
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: address
+          in: path
+          required: true
+          schema: { type: string }
+        - $ref: '#/components/parameters/PageParam'
+        - $ref: '#/components/parameters/PageSizeParam'
+        - $ref: '#/components/parameters/SortParam'
+      responses:
+        '200':
+          description: Paginated list of account-blocks.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AccountBlockList'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '429':
+          $ref: '#/components/responses/RateLimited'
+
+  /api/v1/account_blocks:
+    get:
+      operationId: listAccountBlocks
+      summary: List account-blocks (transactions)
+      tags: [account_blocks]
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: '#/components/parameters/PageParam'
+        - $ref: '#/components/parameters/PageSizeParam'
+        - $ref: '#/components/parameters/SortParam'
+      responses:
+        '200':
+          description: Paginated list of account-blocks.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AccountBlockList'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '429':
+          $ref: '#/components/responses/RateLimited'
+
+  /api/v1/account_blocks/{hash}:
+    get:
+      operationId: getAccountBlock
+      summary: Get an account-block by hash
+      tags: [account_blocks]
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: hash
+          in: path
+          required: true
+          schema: { type: string }
+      responses:
+        '200':
+          description: The requested account-block.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AccountBlock'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          description: No account-block with that hash.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
+        '429':
+          $ref: '#/components/responses/RateLimited'
+
+  /api/v1/tokens:
+    get:
+      operationId: listTokens
+      summary: List ZTS tokens
+      description: |
+        Returns ZTS tokens ordered by holder_count DESC (most-held first),
+        then token_standard ASC for stability.
+      tags: [tokens]
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: '#/components/parameters/PageParam'
+        - $ref: '#/components/parameters/PageSizeParam'
+      responses:
+        '200':
+          description: Paginated list of tokens.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TokenList'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '429':
+          $ref: '#/components/responses/RateLimited'
+
+  /api/v1/tokens/{token_standard}:
+    get:
+      operationId: getToken
+      summary: Get a ZTS token by ZTS identifier
+      tags: [tokens]
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: token_standard
+          in: path
+          required: true
+          schema: { type: string }
+      responses:
+        '200':
+          description: Token info.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Token'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          description: No token with that standard.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
+        '429':
+          $ref: '#/components/responses/RateLimited'
+
+  /api/v1/tokens/{token_standard}/holders:
+    get:
+      operationId: listTokenHolders
+      summary: Richlist for a token
+      description: |
+        Returns addresses holding the token, sorted by balance DESC.
+        Excludes zero balances.
+      tags: [tokens]
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: token_standard
+          in: path
+          required: true
+          schema: { type: string }
+        - $ref: '#/components/parameters/PageParam'
+        - $ref: '#/components/parameters/PageSizeParam'
+      responses:
+        '200':
+          description: Paginated holder list.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/BalancePage'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '429':
+          $ref: '#/components/responses/RateLimited'
+
+  /api/v1/pillars:
+    get:
+      operationId: listPillars
+      summary: List pillars
+      description: |
+        Returns pillars ordered by rank ascending. Excludes revoked
+        pillars by default; pass `?include_revoked=true` to include them.
+      tags: [pillars]
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: '#/components/parameters/PageParam'
+        - $ref: '#/components/parameters/PageSizeParam'
+        - name: include_revoked
+          in: query
+          schema: { type: boolean, default: false }
+      responses:
+        '200':
+          description: Paginated list of pillars.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PillarList'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '429':
+          $ref: '#/components/responses/RateLimited'
+
+  /api/v1/pillars/{name}:
+    get:
+      operationId: getPillar
+      summary: Get a pillar by name
+      tags: [pillars]
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: name
+          in: path
+          required: true
+          schema: { type: string }
+      responses:
+        '200':
+          description: The requested pillar.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Pillar'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          description: No pillar with that name.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
+        '429':
+          $ref: '#/components/responses/RateLimited'
+
+  /api/v1/pillars/{name}/delegators:
+    get:
+      operationId: listPillarDelegators
+      summary: List delegators for a pillar
+      description: |
+        Returns the addresses currently delegated to the pillar, sorted
+        by delegation_start_timestamp ASC (longest-tenured first).
+      tags: [pillars]
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: name
+          in: path
+          required: true
+          schema: { type: string }
+        - $ref: '#/components/parameters/PageParam'
+        - $ref: '#/components/parameters/PageSizeParam'
+      responses:
+        '200':
+          description: Paginated delegator list.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PillarDelegatorList'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          description: No pillar with that name.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
+        '429':
+          $ref: '#/components/responses/RateLimited'
+
+  /api/v1/stakes:
+    get:
+      operationId: listStakes
+      summary: List stake entries
+      tags: [stakes]
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: '#/components/parameters/PageParam'
+        - $ref: '#/components/parameters/PageSizeParam'
+        - name: include_inactive
+          in: query
+          schema: { type: boolean, default: false }
+      responses:
+        '200':
+          description: Paginated stake list.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/StakeList' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '429': { $ref: '#/components/responses/RateLimited' }
+
+  /api/v1/accounts/{address}/stakes:
+    get:
+      operationId: listAccountStakes
+      summary: List stakes owned by an address
+      tags: [accounts]
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: address
+          in: path
+          required: true
+          schema: { type: string }
+        - $ref: '#/components/parameters/PageParam'
+        - $ref: '#/components/parameters/PageSizeParam'
+        - name: include_inactive
+          in: query
+          schema: { type: boolean, default: false }
+      responses:
+        '200':
+          description: Paginated stake list.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/StakeList' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '429': { $ref: '#/components/responses/RateLimited' }
+
+  /api/v1/fusions:
+    get:
+      operationId: listFusions
+      summary: List plasma fusion entries
+      tags: [fusions]
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: '#/components/parameters/PageParam'
+        - $ref: '#/components/parameters/PageSizeParam'
+        - name: include_inactive
+          in: query
+          schema: { type: boolean, default: false }
+      responses:
+        '200':
+          description: Paginated fusion list.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/FusionList' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '429': { $ref: '#/components/responses/RateLimited' }
+
+  /api/v1/accounts/{address}/fusions:
+    get:
+      operationId: listAccountFusions
+      summary: List fusions for an address (funder or beneficiary)
+      tags: [accounts]
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: address
+          in: path
+          required: true
+          schema: { type: string }
+        - $ref: '#/components/parameters/PageParam'
+        - $ref: '#/components/parameters/PageSizeParam'
+        - name: include_inactive
+          in: query
+          schema: { type: boolean, default: false }
+      responses:
+        '200':
+          description: Paginated fusion list.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/FusionList' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '429': { $ref: '#/components/responses/RateLimited' }
+
+  /api/v1/accounts/{address}/rewards:
+    get:
+      operationId: listAccountRewards
+      summary: Per-event reward history for an address
+      tags: [accounts]
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: address
+          in: path
+          required: true
+          schema: { type: string }
+        - $ref: '#/components/parameters/PageParam'
+        - $ref: '#/components/parameters/PageSizeParam'
+      responses:
+        '200':
+          description: Paginated reward-transaction list.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/RewardTransactionList' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '429': { $ref: '#/components/responses/RateLimited' }
+
+  /api/v1/accounts/{address}/rewards/cumulative:
+    get:
+      operationId: getAccountCumulativeRewards
+      summary: Cumulative reward totals for an address
+      description: |
+        Returns one row per (reward_type, token_standard) tuple — the
+        lifetime sum the indexer has rolled up.
+      tags: [accounts]
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: address
+          in: path
+          required: true
+          schema: { type: string }
+      responses:
+        '200':
+          description: Cumulative reward totals.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/CumulativeRewardList' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '429': { $ref: '#/components/responses/RateLimited' }
+
+  /api/v1/projects:
+    get:
+      operationId: listProjects
+      summary: List Accelerator-Z projects
+      tags: [projects]
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: '#/components/parameters/PageParam'
+        - $ref: '#/components/parameters/PageSizeParam'
+      responses:
+        '200':
+          description: Paginated project list.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ProjectList' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '429': { $ref: '#/components/responses/RateLimited' }
+
+  /api/v1/projects/{id}:
+    get:
+      operationId: getProject
+      summary: Get a project by ID
+      tags: [projects]
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: string }
+      responses:
+        '200':
+          description: The requested project.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Project' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '404':
+          description: No project with that id.
+          content:
+            application/problem+json:
+              schema: { $ref: '#/components/schemas/Problem' }
+        '429': { $ref: '#/components/responses/RateLimited' }
+
+  /api/v1/projects/{id}/phases:
+    get:
+      operationId: listProjectPhases
+      summary: List phases of a project
+      tags: [projects]
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: string }
+      responses:
+        '200':
+          description: Phases in creation order.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ProjectPhaseList' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '429': { $ref: '#/components/responses/RateLimited' }
+
+  /api/v1/projects/{id}/votes:
+    get:
+      operationId: listProjectVotes
+      summary: List pillar votes targeting a project (or any of its phases)
+      tags: [projects]
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: string }
+        - $ref: '#/components/parameters/PageParam'
+        - $ref: '#/components/parameters/PageSizeParam'
+      responses:
+        '200':
+          description: Paginated vote list.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/VoteList' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '429': { $ref: '#/components/responses/RateLimited' }
+
+  /api/v1/bridge/wraps:
+    get:
+      operationId: listBridgeWraps
+      summary: List wrap (Zenon → external chain) requests
+      tags: [bridge]
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: '#/components/parameters/PageParam'
+        - $ref: '#/components/parameters/PageSizeParam'
+      responses:
+        '200':
+          description: Paginated wrap-request list.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/WrapTokenRequestList' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '429': { $ref: '#/components/responses/RateLimited' }
+
+  /api/v1/bridge/unwraps:
+    get:
+      operationId: listBridgeUnwraps
+      summary: List unwrap (external chain → Zenon) requests
+      tags: [bridge]
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: '#/components/parameters/PageParam'
+        - $ref: '#/components/parameters/PageSizeParam'
+      responses:
+        '200':
+          description: Paginated unwrap-request list.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/UnwrapTokenRequestList' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '429': { $ref: '#/components/responses/RateLimited' }
+
+  /api/v1/accounts/{address}/bridge/wraps:
+    get:
+      operationId: listAccountBridgeWraps
+      summary: List wraps with to_address = {address}
+      tags: [accounts]
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: address
+          in: path
+          required: true
+          schema: { type: string }
+        - $ref: '#/components/parameters/PageParam'
+        - $ref: '#/components/parameters/PageSizeParam'
+      responses:
+        '200':
+          description: Paginated wrap-request list.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/WrapTokenRequestList' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '429': { $ref: '#/components/responses/RateLimited' }
+
+  /api/v1/accounts/{address}/bridge/unwraps:
+    get:
+      operationId: listAccountBridgeUnwraps
+      summary: List unwraps with to_address = {address}
+      tags: [accounts]
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: address
+          in: path
+          required: true
+          schema: { type: string }
+        - $ref: '#/components/parameters/PageParam'
+        - $ref: '#/components/parameters/PageSizeParam'
+      responses:
+        '200':
+          description: Paginated unwrap-request list.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/UnwrapTokenRequestList' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '429': { $ref: '#/components/responses/RateLimited' }
+
+  /api/v1/sentinels:
+    get:
+      operationId: listSentinels
+      summary: List sentinels
+      description: |
+        Returns sentinels ordered by registration_timestamp DESC
+        (newest first). Active sentinels only by default; pass
+        `?include_inactive=true` to include retired sentinels.
+      tags: [sentinels]
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: '#/components/parameters/PageParam'
+        - $ref: '#/components/parameters/PageSizeParam'
+        - name: include_inactive
+          in: query
+          schema: { type: boolean, default: false }
+      responses:
+        '200':
+          description: Paginated sentinel list.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SentinelList'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '429':
+          $ref: '#/components/responses/RateLimited'
+
+  /api/v1/momentums/{height}:
+    get:
+      operationId: getMomentumByHeight
+      summary: Get a momentum by height
+      tags: [momentums]
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: height
+          in: path
+          required: true
+          schema:
+            type: integer
+            format: int64
+            minimum: 0
+            examples: [12345]
+      responses:
+        '200':
+          description: The requested momentum.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Momentum'
+        '400':
+          description: Height is not a non-negative integer.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          description: No momentum exists at that height.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
+        '429':
+          $ref: '#/components/responses/RateLimited'

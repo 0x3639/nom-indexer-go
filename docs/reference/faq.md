@@ -103,13 +103,14 @@ See the recipes in [`docs/development/`](../development/setup.md):
 - [Add a table](../development/add-table.md)
 - [Add a cron job](../development/add-cron-job.md)
 
-## Where does the future REST API fit?
+## Where does the REST API fit?
 
-It will live alongside the indexer (`cmd/api`) and read from the same
-Postgres. The schema is the contract. See
-[`docs/api/index.md`](../api/index.md) for the stub and
+It ships at `cmd/api` and reads from the same Postgres. The schema
+is the contract. See [`docs/api/index.md`](../api/index.md) for the
+quick-start + Swagger UI, [`docs/api/endpoints/`](../api/endpoints/index.md)
+for per-domain curl examples, and
 [`specs/API_SPECIFICATION.md`](https://github.com/0x3639/nom-indexer-go/blob/main/specs/API_SPECIFICATION.md)
-for the draft implementation brief.
+for the architecture decision record that produced the v1 API.
 
 ## Where does the future MCP server fit?
 

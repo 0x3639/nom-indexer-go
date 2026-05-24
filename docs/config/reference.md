@@ -22,6 +22,7 @@ explicit overrides listed below.
 | Field | Type | Env var | Default | Description |
 |---|---|---|---|---|
 | `database.password` | string | `DATABASE_PASSWORD` (or `POSTGRES_PASSWORD` in compose) | — | Postgres password. Validation fails if empty. |
+| `api.jwt_secret` | string | `API_JWT_SECRET` | — | HS256 signing secret. **Required only when the `cmd/api` HTTP API runs** — the indexer ignores this field. `cmd/api` refuses to start if empty. Generate with `openssl rand -base64 48`. |
 
 ## Node
 
@@ -73,6 +74,20 @@ each.
 |---|---|---|---|---|
 | `backfill_on_startup` | bool | `BACKFILL_ON_STARTUP` | `false` | If true, fill gaps in `momentums` / `account_blocks` before live sync. Adds startup time proportional to the gap size. |
 
+## API (`cmd/api` only)
+
+The fields below are read only by the `cmd/api` HTTP API binary; the
+indexer binary ignores them. See the [API reference](../api/index.md)
+for the on-wire contract.
+
+| Field | Type | Env var | Default | Description |
+|---|---|---|---|---|
+| `api.port` | int | `API_PORT` | `8080` | Public listener port. The docker-compose api service publishes this 1:1 to the host. |
+| `api.metrics_port` | int | `API_METRICS_PORT` | `9090` | Separate listener for Prometheus `/metrics`. Bound to `0.0.0.0`; scope to a private network in production. |
+| `api.jwt_secret` | string | `API_JWT_SECRET` | — | **Required for `cmd/api`.** HS256 signing secret. See [Required](#required) above. |
+| `api.cors_allowed_origins` | string | `API_CORS_ALLOWED_ORIGINS` | `""` (deny) | Comma-separated origin allowlist. Empty disables CORS entirely (browsers will block cross-origin requests). |
+| `api.rate_limit_per_minute` | int | `API_RATE_LIMIT_PER_MINUTE` | `60` | Per-JWT-subject sliding-window limit. `0` or negative disables rate limiting. |
+
 ## Migrations
 
 | Variable | Default | Description |
@@ -89,6 +104,11 @@ forwards them to the Postgres container:
 | `POSTGRES_USER` | `postgres` | Owner role inside the container. |
 | `POSTGRES_PASSWORD` | — | **Required.** Same value the indexer's `DATABASE_PASSWORD` should use. |
 | `POSTGRES_DB` | `nom_indexer` | Initial database name. |
+
+The `api` compose service additionally requires `API_JWT_SECRET` in
+`.env` (the container refuses to start without it). It does **not**
+fail at compose interpolation time, so `docker compose up postgres
+indexer` works without setting it.
 
 ## Validation
 

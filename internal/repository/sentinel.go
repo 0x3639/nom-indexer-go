@@ -44,6 +44,48 @@ func (r *SentinelRepository) SetInactiveBatch(batch *pgx.Batch, owner string) {
 		owner)
 }
 
+// List returns sentinels ordered by registration timestamp descending
+// (newest first). active sentinels only by default.
+func (r *SentinelRepository) List(ctx context.Context, activeOnly bool, opts ListOpts) ([]*models.Sentinel, int64, error) {
+	where := ""
+	if activeOnly {
+		where = "WHERE active = true"
+	}
+	query := `
+		SELECT owner, registration_timestamp, is_revocable, revoke_cooldown, active,
+			COUNT(*) OVER () AS total
+		FROM sentinels ` + where + `
+		ORDER BY registration_timestamp DESC
+		LIMIT $1 OFFSET $2`
+	rows, err := r.pool.Query(ctx, query, opts.Limit, opts.Offset)
+	if err != nil {
+		return nil, 0, err
+	}
+	defer rows.Close()
+	var (
+		out   []*models.Sentinel
+		total int64
+	)
+	for rows.Next() {
+		var s models.Sentinel
+		if err := rows.Scan(&s.Owner, &s.RegistrationTimestamp, &s.IsRevocable, &s.RevokeCooldown, &s.Active, &total); err != nil {
+			return nil, 0, err
+		}
+		out = append(out, &s)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, 0, err
+	}
+	if len(out) == 0 && opts.Offset > 0 {
+		var err error
+		total, err = fallbackCount(ctx, r.pool, `SELECT COUNT(*) FROM sentinels `+where)
+		if err != nil {
+			return nil, 0, err
+		}
+	}
+	return out, total, nil
+}
+
 // GetByOwner retrieves a sentinel by owner
 func (r *SentinelRepository) GetByOwner(ctx context.Context, owner string) (*models.Sentinel, error) {
 	var s models.Sentinel

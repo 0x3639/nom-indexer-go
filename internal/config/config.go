@@ -15,6 +15,7 @@ type Config struct {
 	Database          DatabaseConfig `mapstructure:"database"`
 	Logging           LoggingConfig  `mapstructure:"logging"`
 	Cron              CronConfig     `mapstructure:"cron"`
+	API               APIConfig      `mapstructure:"api"`
 	BackfillOnStartup bool           `mapstructure:"backfill_on_startup"`
 }
 
@@ -39,6 +40,36 @@ type LoggingConfig struct {
 type CronConfig struct {
 	VotingActivityInterval string `mapstructure:"voting_activity_interval"`
 	TokenHoldersInterval   string `mapstructure:"token_holders_interval"`
+}
+
+// APIConfig controls the HTTP API server (cmd/api).
+type APIConfig struct {
+	// Port is the public listener port for the API.
+	Port int `mapstructure:"port"`
+	// MetricsPort is the separate listener for /metrics; bound to 0.0.0.0
+	// but typically scoped to a private network in deployment.
+	MetricsPort int `mapstructure:"metrics_port"`
+	// JWTSecret is the HS256 signing secret. Required when the API runs.
+	JWTSecret string `mapstructure:"jwt_secret"`
+	// CORSAllowedOrigins is a comma-separated allowlist; empty = deny.
+	CORSAllowedOrigins string `mapstructure:"cors_allowed_origins"`
+	// RateLimitPerMinute caps requests per JWT subject (or IP if unauthenticated).
+	RateLimitPerMinute int `mapstructure:"rate_limit_per_minute"`
+}
+
+// CORSAllowedOriginsList parses CORSAllowedOrigins into a trimmed slice.
+// Returns nil if the field is empty or contains no non-empty entries.
+func (a *APIConfig) CORSAllowedOriginsList() []string {
+	if a.CORSAllowedOrigins == "" {
+		return nil
+	}
+	var out []string
+	for _, p := range strings.Split(a.CORSAllowedOrigins, ",") {
+		if t := strings.TrimSpace(p); t != "" {
+			out = append(out, t)
+		}
+	}
+	return out
 }
 
 // ConnectionString returns the PostgreSQL connection string
@@ -69,6 +100,11 @@ func Load() (*Config, error) {
 	v.SetDefault("logging.format", "console")
 	v.SetDefault("cron.voting_activity_interval", "10m")
 	v.SetDefault("cron.token_holders_interval", "10m")
+	v.SetDefault("api.port", 8080)
+	v.SetDefault("api.metrics_port", 9090)
+	v.SetDefault("api.cors_allowed_origins", "")
+	v.SetDefault("api.rate_limit_per_minute", 60)
+	// Note: No default for api.jwt_secret - set via config.yaml or API_JWT_SECRET env var.
 	v.SetDefault("backfill_on_startup", false)
 
 	// Enable environment variable binding
@@ -86,6 +122,11 @@ func Load() (*Config, error) {
 	_ = v.BindEnv("logging.level", "LOG_LEVEL")
 	_ = v.BindEnv("logging.format", "LOG_FORMAT")
 	_ = v.BindEnv("backfill_on_startup", "BACKFILL_ON_STARTUP")
+	_ = v.BindEnv("api.port", "API_PORT")
+	_ = v.BindEnv("api.metrics_port", "API_METRICS_PORT")
+	_ = v.BindEnv("api.jwt_secret", "API_JWT_SECRET")
+	_ = v.BindEnv("api.cors_allowed_origins", "API_CORS_ALLOWED_ORIGINS")
+	_ = v.BindEnv("api.rate_limit_per_minute", "API_RATE_LIMIT_PER_MINUTE")
 
 	// Try to read config file (optional)
 	if err := v.ReadInConfig(); err != nil {

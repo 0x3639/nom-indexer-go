@@ -10,8 +10,9 @@ Source: [`internal/models/`](https://github.com/0x3639/nom-indexer-go/tree/main/
 
 Go struct mirrors of every table in the schema, plus enum types and
 address constants. The leaf of the import graph — stdlib only — which
-is intentional: the forthcoming API and MCP packages depend on it
-without pulling in pgx, viper, zap, or the SDK.
+is intentional: `internal/api/dto` already depends on it (and the
+future MCP package will too) without pulling in pgx, viper, zap, or
+the SDK.
 
 See the [`doc.go`](https://github.com/0x3639/nom-indexer-go/blob/main/internal/models/doc.go)
 package docstring.

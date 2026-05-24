@@ -2,6 +2,7 @@ package repository
 
 import (
 	"context"
+	"fmt"
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -55,6 +56,97 @@ func (r *FusionRepository) SetInactiveBatch(batch *pgx.Batch, cancelID, address 
 		UPDATE fusions SET is_active = false
 		WHERE cancel_id = $1 AND address = $2`,
 		cancelID, address)
+}
+
+// List returns fusions ordered by momentum_height descending. activeOnly
+// filters to is_active = true.
+func (r *FusionRepository) List(ctx context.Context, activeOnly bool, opts ListOpts) ([]*models.Fusion, int64, error) {
+	where := ""
+	if activeOnly {
+		where = "WHERE is_active = true"
+	}
+	query := `
+		SELECT id, address, beneficiary, momentum_hash, momentum_timestamp,
+			momentum_height, qsr_amount, expiration_height, is_active, cancel_id,
+			COUNT(*) OVER () AS total
+		FROM fusions ` + where + `
+		ORDER BY momentum_height DESC
+		LIMIT $1 OFFSET $2`
+	rows, err := r.pool.Query(ctx, query, opts.Limit, opts.Offset)
+	if err != nil {
+		return nil, 0, err
+	}
+	defer rows.Close()
+	var (
+		out   []*models.Fusion
+		total int64
+	)
+	for rows.Next() {
+		var f models.Fusion
+		if err := rows.Scan(&f.ID, &f.Address, &f.Beneficiary, &f.MomentumHash, &f.MomentumTimestamp,
+			&f.MomentumHeight, &f.QsrAmount, &f.ExpirationHeight, &f.IsActive, &f.CancelID, &total); err != nil {
+			return nil, 0, err
+		}
+		out = append(out, &f)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, 0, err
+	}
+	if len(out) == 0 && opts.Offset > 0 {
+		var err error
+		total, err = fallbackCount(ctx, r.pool, `SELECT COUNT(*) FROM fusions `+where)
+		if err != nil {
+			return nil, 0, err
+		}
+	}
+	return out, total, nil
+}
+
+// ListByAddress returns fusions where the address is either the funder
+// or the beneficiary.
+func (r *FusionRepository) ListByAddress(ctx context.Context, address string, activeOnly bool, opts ListOpts) ([]*models.Fusion, int64, error) {
+	if address == "" {
+		return nil, 0, fmt.Errorf("address is required")
+	}
+	where := "WHERE (address = $1 OR beneficiary = $1)"
+	if activeOnly {
+		where += " AND is_active = true"
+	}
+	query := `
+		SELECT id, address, beneficiary, momentum_hash, momentum_timestamp,
+			momentum_height, qsr_amount, expiration_height, is_active, cancel_id,
+			COUNT(*) OVER () AS total
+		FROM fusions ` + where + `
+		ORDER BY momentum_height DESC
+		LIMIT $2 OFFSET $3`
+	rows, err := r.pool.Query(ctx, query, address, opts.Limit, opts.Offset)
+	if err != nil {
+		return nil, 0, err
+	}
+	defer rows.Close()
+	var (
+		out   []*models.Fusion
+		total int64
+	)
+	for rows.Next() {
+		var f models.Fusion
+		if err := rows.Scan(&f.ID, &f.Address, &f.Beneficiary, &f.MomentumHash, &f.MomentumTimestamp,
+			&f.MomentumHeight, &f.QsrAmount, &f.ExpirationHeight, &f.IsActive, &f.CancelID, &total); err != nil {
+			return nil, 0, err
+		}
+		out = append(out, &f)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, 0, err
+	}
+	if len(out) == 0 && opts.Offset > 0 {
+		var err error
+		total, err = fallbackCount(ctx, r.pool, `SELECT COUNT(*) FROM fusions `+where, address)
+		if err != nil {
+			return nil, 0, err
+		}
+	}
+	return out, total, nil
 }
 
 // GetByID retrieves a fusion by ID

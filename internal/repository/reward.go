@@ -2,6 +2,7 @@ package repository
 
 import (
 	"context"
+	"fmt"
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -59,6 +60,79 @@ func (r *RewardRepository) InsertRewardTransactionBatch(batch *pgx.Batch, rt *mo
 		ON CONFLICT (hash) DO NOTHING`,
 		rt.Hash, rt.Address, int(rt.RewardType), rt.MomentumTimestamp,
 		rt.MomentumHeight, rt.AccountHeight, rt.Amount, rt.TokenStandard, rt.SourceAddress)
+}
+
+// CumulativeByAddress returns the rolled-up cumulative_rewards rows for
+// an address (one row per reward_type x token_standard).
+func (r *RewardRepository) CumulativeByAddress(ctx context.Context, address string) ([]*models.CumulativeReward, error) {
+	if address == "" {
+		return nil, fmt.Errorf("address is required")
+	}
+	rows, err := r.pool.Query(ctx, `
+		SELECT id, address, reward_type, amount, token_standard
+		FROM cumulative_rewards WHERE address = $1
+		ORDER BY reward_type ASC, token_standard ASC`, address)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []*models.CumulativeReward
+	for rows.Next() {
+		var c models.CumulativeReward
+		var rt int
+		if err := rows.Scan(&c.ID, &c.Address, &rt, &c.Amount, &c.TokenStandard); err != nil {
+			return nil, err
+		}
+		c.RewardType = models.RewardType(rt)
+		out = append(out, &c)
+	}
+	return out, rows.Err()
+}
+
+// HistoryByAddress returns per-event reward transactions for an address,
+// newest first, paginated.
+func (r *RewardRepository) HistoryByAddress(ctx context.Context, address string, opts ListOpts) ([]*models.RewardTransaction, int64, error) {
+	if address == "" {
+		return nil, 0, fmt.Errorf("address is required")
+	}
+	rows, err := r.pool.Query(ctx, `
+		SELECT hash, address, reward_type, momentum_timestamp, momentum_height,
+			account_height, amount, token_standard, source_address,
+			COUNT(*) OVER () AS total
+		FROM reward_transactions
+		WHERE address = $1
+		ORDER BY momentum_height DESC
+		LIMIT $2 OFFSET $3`, address, opts.Limit, opts.Offset)
+	if err != nil {
+		return nil, 0, err
+	}
+	defer rows.Close()
+	var (
+		out   []*models.RewardTransaction
+		total int64
+	)
+	for rows.Next() {
+		var rt models.RewardTransaction
+		var rtype int
+		if err := rows.Scan(&rt.Hash, &rt.Address, &rtype, &rt.MomentumTimestamp,
+			&rt.MomentumHeight, &rt.AccountHeight, &rt.Amount, &rt.TokenStandard, &rt.SourceAddress, &total); err != nil {
+			return nil, 0, err
+		}
+		rt.RewardType = models.RewardType(rtype)
+		out = append(out, &rt)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, 0, err
+	}
+	if len(out) == 0 && opts.Offset > 0 {
+		var err error
+		total, err = fallbackCount(ctx, r.pool,
+			`SELECT COUNT(*) FROM reward_transactions WHERE address = $1`, address)
+		if err != nil {
+			return nil, 0, err
+		}
+	}
+	return out, total, nil
 }
 
 // GetByAddress retrieves reward transactions for an address

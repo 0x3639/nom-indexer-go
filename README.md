@@ -1,6 +1,6 @@
 # nom-indexer-go
 
-[![Go Version](https://img.shields.io/badge/Go-1.24+-00ADD8?style=flat&logo=go)](https://go.dev/)
+[![Go Version](https://img.shields.io/badge/Go-1.25+-00ADD8?style=flat&logo=go)](https://go.dev/)
 [![PostgreSQL](https://img.shields.io/badge/PostgreSQL-16-336791?style=flat&logo=postgresql&logoColor=white)](https://www.postgresql.org/)
 [![Docker](https://img.shields.io/badge/Docker-ready-2496ED?style=flat&logo=docker&logoColor=white)](https://www.docker.com/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
@@ -8,7 +8,7 @@
 
 A high-performance blockchain indexer for the [Zenon Network](https://zenon.network), written in Go. Ports the original [Dart nom-indexer](https://github.com/zenon-tools/nom-indexer) to a typed, batched, transactional Postgres pipeline.
 
-The service subscribes to a Zenon node over WebSocket, decodes embedded-contract activity, and writes a normalized 30-table schema that downstream consumers — including the forthcoming REST API and MCP server — can query directly.
+The service subscribes to a Zenon node over WebSocket, decodes embedded-contract activity, and writes a normalized 30-table schema. A read-only HTTP API (`cmd/api`, see [`docs/api/`](docs/api/index.md)) sits in front of those tables; the future MCP server will share the same DTO + repository layer.
 
 ## Documentation
 
@@ -17,6 +17,7 @@ Full docs live at **[0x3639.github.io/nom-indexer-go](https://0x3639.github.io/n
 - [Architecture](docs/architecture/overview.md) — system context, goroutines, data flow
 - [Schema reference](docs/schema/index.md) — every table, write path, gotchas
 - [Indexing flow](docs/indexing/index.md) — per-contract event handlers
+- [API reference](docs/api/index.md) — HTTP endpoints, auth (HS256 JWT), Swagger UI
 - [Operations](docs/operations/deploy.md) — deploy, monitor, backfill, runbook
 - [Development](docs/development/setup.md) — local setup, recipes
 - [Config reference](docs/config/reference.md) — every env var + YAML key
@@ -32,10 +33,15 @@ Prerequisites: Docker, Docker Compose. (Optional: a private Zenon node WS URL.)
 git clone https://github.com/0x3639/nom-indexer-go.git
 cd nom-indexer-go
 
-# Local Postgres credentials (.env is gitignored).
+# Local credentials (.env is gitignored).
 cp .env.example .env
-# Edit .env and set POSTGRES_PASSWORD before continuing.
+# Edit .env: set POSTGRES_PASSWORD (always required). If you also want to
+# run the HTTP API container, set API_JWT_SECRET — e.g. openssl rand -base64 48.
 
+# Indexer + Postgres only (the default; no API):
+docker compose up -d postgres indexer
+
+# Or include the API container (requires API_JWT_SECRET set above):
 docker compose up -d
 
 # Follow the indexer.

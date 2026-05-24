@@ -42,12 +42,12 @@ theme:
 plugins:
   - search
   - include-markdown
+  # Renders <swagger-ui src="openapi.yaml"/> tags inline as Swagger UI.
+  # Used by docs/api/index.md and the per-endpoint pages.
+  - swagger-ui-tag
   # Mermaid is rendered via mkdocs-material's built-in support (pymdownx
   # superfences + the standard fence_code_format resolver below). No
   # separate mermaid2 plugin needed.
-  #
-  # Re-add `swagger-ui-tag` here once docs/api/openapi.yaml carries a real
-  # contract — today it's a placeholder skeleton.
   #
   # `mkdocstrings` (with the Go handler) is the eventual home for rendering
   # internal/*/doc.go content into the site. Wire it up when the doc.go
@@ -189,6 +189,19 @@ nav:
     - Overview: api/index.md
     - Authentication: api/auth.md
     - Pagination: api/pagination.md
+    - Endpoints:
+      - Overview: api/endpoints/index.md
+      - Meta: api/endpoints/meta.md
+      - Momentums: api/endpoints/momentums.md
+      - Accounts: api/endpoints/accounts.md
+      - Account blocks: api/endpoints/account_blocks.md
+      - Tokens: api/endpoints/tokens.md
+      - Pillars: api/endpoints/pillars.md
+      - Sentinels: api/endpoints/sentinels.md
+      - Stakes & Fusions: api/endpoints/stakes_fusions.md
+      - Projects & Votes: api/endpoints/projects.md
+      - Rewards: api/endpoints/rewards.md
+      - Bridge: api/endpoints/bridge.md
   - MCP:
     - Overview: mcp/index.md
     - Resources: mcp/resources.md

@@ -7,77 +7,776 @@ Every Markdown page in docs/ concatenated into a single file for LLM ingestion. 
 
 # Authentication
 
-The REST API has not been implemented yet, so there is no runtime
-authentication behavior to document.
+All endpoints under `/api/v1/` require a Bearer JWT. `/healthz`,
+`/readyz`, and `/metrics` are unauthenticated.
 
-Current expectation: the first API server will be read-only and deployed
-behind infrastructure-level access controls (reverse proxy, VPN, or
-private network). If application-level auth is added later, this page
-should document the accepted headers, failure responses, and local
-development defaults alongside the OpenAPI contract.
+## Scheme
+
+| | |
+|---|---|
+| Type | JWT, HS256-signed |
+| Header | `Authorization: Bearer <token>` |
+| Claims | `sub`, `exp`, `iat`, and an OAuth 2.0 space-separated `scope` claim |
+| Secret | `API_JWT_SECRET` env var on the server; never committed |
+
+The server pins HS256 in both the JWT validation method check and via
+`jwt.WithValidMethods` so an `alg=none` token cannot bypass signature
+verification.
+
+## Issuing tokens
+
+There is no token-mint HTTP endpoint. Tokens are issued out-of-band by
+an admin via the `cmd/jwt-issue` CLI bundled into the API container.
+
+```bash
+docker compose exec api /app/jwt-issue \
+    --sub <consumer-name> \
+    --ttl 24h \
+    --scope read
+```
+
+| Flag | Default | Notes |
+|---|---|---|
+| `--sub` | (required) | Subject claim — identifies the caller. Used as the rate-limit key, so make it stable per-consumer (e.g. `frontend-prod`). |
+| `--ttl` | `24h` | Go [`time.ParseDuration`](https://pkg.go.dev/time#ParseDuration) format. Avoid TTLs longer than a few days — see "Rotation" below. |
+| `--scope` | `read` | Comma-separated. Stored as a space-separated OAuth 2.0 scope claim. |
+
+The `jwt-issue` binary reads `API_JWT_SECRET` from the environment;
+it does **not** accept the secret on the command line.
+
+## Scopes
+
+The current API enforces only "valid token = read access". The
+`scope` claim is preserved and exposed on `Claims.Scopes()` so that
+per-route scope enforcement (`read:projects`, `read:rewards`, etc.)
+can be added without changing the token format. Today, every minted
+token should carry at minimum `read`.
+
+## Rotation
+
+HS256 uses a single shared secret — there is no key-ID field. To
+rotate:
+
+1. Generate a new secret: `openssl rand -base64 48`.
+2. Restart the API with `API_JWT_SECRET` set to the new value.
+3. Re-issue every active token (the old ones immediately become
+   invalid; clients will see 401 until they pick up new tokens).
+
+For zero-downtime rotation, run a second replica on the new secret
+behind a load balancer and bleed traffic over as you re-issue tokens.
+
+## Failure responses
+
+| Condition | Status | `code` field |
+|---|---|---|
+| Missing `Authorization` header | 401 | `missing_token` |
+| Malformed Bearer header | 401 | `invalid_token` |
+| Bad signature | 401 | `invalid_token` |
+| Expired token | 401 | `expired_token` |
+| Wrong algorithm (e.g. `alg=none`) | 401 | `invalid_token` |
+| Rate limit hit | 429 | `rate_limited` |
+
+All failures are returned as `application/problem+json` per
+[RFC 7807](https://www.rfc-editor.org/rfc/rfc7807).
+
+### Rate limiting and unauthenticated requests
+
+Rate limiting only applies after Auth — the middleware chain runs
+`Auth → RateLimit`, so a request with no token never reaches the
+rate limiter. The bucket is keyed by JWT `sub`. (`/healthz`,
+`/readyz`, and `/metrics` are outside `/api/v1` entirely, so they
+are unauthenticated and unrate-limited by design.)
+
+## Local development
+
+```bash
+export API_JWT_SECRET=$(openssl rand -base64 48)
+go run ./cmd/api &
+
+TOKEN=$(API_JWT_SECRET="$API_JWT_SECRET" \
+        go run ./cmd/jwt-issue --sub dev --ttl 30m)
+curl -s -H "Authorization: Bearer $TOKEN" \
+     http://localhost:8080/api/v1/status | jq
+```
+
+Pair the same `API_JWT_SECRET` on both processes — that's the entire
+trust boundary.
+
+
+=== docs/api/endpoints/account_blocks.md ===
+
+# Account blocks (transactions)
+
+Account-blocks are Zenon's dual-ledger transactions: one block is
+either a send (`block_type` 1–4) or a receive (5–8); a complete
+transfer is the matched (send, receive) pair.
+
+## List — `GET /api/v1/account_blocks`
+
+Paginated. Sort by `momentum_height`; default `desc`.
+
+```bash
+curl -s -H "Authorization: Bearer $TOKEN" \
+     'http://localhost:8080/api/v1/account_blocks?page=1&page_size=20' | jq
+```
+
+## By hash — `GET /api/v1/account_blocks/{hash}`
+
+```bash
+curl -s -H "Authorization: Bearer $TOKEN" \
+     http://localhost:8080/api/v1/account_blocks/<block-hash> | jq
+```
+
+## Transactions for an address
+
+`GET /api/v1/accounts/{address}/transactions` — see [Accounts](accounts.md).
+
+## On the `amount` field
+
+`amount` is a JSON string (see [API conventions](../index.md#amounts-are-json-strings)).
+A 1 ZNN transfer is represented as `"100000000"` (8 decimals).
+
+
+=== docs/api/endpoints/accounts.md ===
+
+# Accounts
+
+`address` is the account's Zenon address (`z1q…`).
+
+## Get account — `GET /api/v1/accounts/{address}`
+
+Returns flow metrics (lifetime ZNN/QSR sent/received), delegation
+state, and first/last activity timestamps. `404` if the indexer has
+never observed the address.
+
+```bash
+curl -s -H "Authorization: Bearer $TOKEN" \
+     http://localhost:8080/api/v1/accounts/z1qq... | jq
+```
+
+## Balances — `GET /api/v1/accounts/{address}/balances`
+
+Every `(token_standard, balance)` row for the address, sorted by
+balance descending. Not paginated — accounts typically hold a
+handful of tokens. Returns `{"data": []}` for an unknown address.
+
+## Transactions — `GET /api/v1/accounts/{address}/transactions`
+
+Paginated. Matches the address on either the sender (`address`) or
+recipient (`to_address`) side, mirroring the repository's
+`WHERE address = $1 OR to_address = $1` clause.
+
+## Stakes / Fusions — `/stakes`, `/fusions`
+
+See [Stakes & Fusions](stakes_fusions.md) for the address-scoped
+variants. Both default to `is_active = true`; pass
+`?include_inactive=true` to widen the set.
+
+## Rewards — `/rewards`, `/rewards/cumulative`
+
+See [Rewards](rewards.md).
+
+## Bridge wraps / unwraps — `/bridge/wraps`, `/bridge/unwraps`
+
+See [Bridge](bridge.md) for the address-scoped variants. Filters
+on `to_address` (the destination of the cross-chain transfer).
+
+
+=== docs/api/endpoints/bridge.md ===
+
+# Bridge
+
+Cross-chain wrap/unwrap requests handled by the Zenon bridge.
+
+## Wraps — Zenon → external chain
+
+```bash
+curl -s -H "Authorization: Bearer $TOKEN" \
+     http://localhost:8080/api/v1/bridge/wraps | jq
+
+# Wraps with a specific destination address
+curl -s -H "Authorization: Bearer $TOKEN" \
+     http://localhost:8080/api/v1/accounts/0xabc.../bridge/wraps | jq
+```
+
+| Route | Notes |
+|---|---|
+| `GET /api/v1/bridge/wraps` | Paginated; ordered by `creation_momentum_height DESC`. |
+| `GET /api/v1/accounts/{address}/bridge/wraps` | Filters on `to_address` (the external destination). |
+
+## Unwraps — external chain → Zenon
+
+```bash
+curl -s -H "Authorization: Bearer $TOKEN" \
+     http://localhost:8080/api/v1/bridge/unwraps | jq
+
+curl -s -H "Authorization: Bearer $TOKEN" \
+     http://localhost:8080/api/v1/accounts/z1qq.../bridge/unwraps | jq
+```
+
+| Route | Notes |
+|---|---|
+| `GET /api/v1/bridge/unwraps` | Paginated; ordered by `registration_momentum_height DESC`. |
+| `GET /api/v1/accounts/{address}/bridge/unwraps` | Filters on `to_address` (the Zenon destination). |
+
+## Finalization state
+
+A wrap is finalized when `confirmations_to_finality = 0`. An unwrap
+is finalized when `redeemed = true` or `revoked = true`. The
+indexer keeps both states fresh as the bridge orchestrator
+progresses.
+
+
+=== docs/api/endpoints/index.md ===
+
+# Endpoints
+
+Read the full machine-readable contract in
+[`openapi.yaml`](../openapi.yaml) or interactively in the
+[Swagger UI on the API overview page](../index.md#interactive-swagger-ui).
+
+Per-domain pages below pair the OpenAPI section with curl examples
+for the common workflows.
+
+| Domain | Routes |
+|---|---|
+| [Meta](meta.md) | `/healthz`, `/readyz`, `/api/v1/status` |
+| [Momentums](momentums.md) | `/api/v1/momentums*` |
+| [Accounts](accounts.md) | `/api/v1/accounts/{address}*` |
+| [Account blocks](account_blocks.md) | `/api/v1/account_blocks*` |
+| [Tokens](tokens.md) | `/api/v1/tokens*` |
+| [Pillars](pillars.md) | `/api/v1/pillars*` |
+| [Sentinels](sentinels.md) | `/api/v1/sentinels` |
+| [Stakes & Fusions](stakes_fusions.md) | `/api/v1/stakes*`, `/api/v1/fusions*` |
+| [Projects & Votes](projects.md) | `/api/v1/projects*` |
+| [Rewards](rewards.md) | `/api/v1/accounts/{address}/rewards*` |
+| [Bridge](bridge.md) | `/api/v1/bridge/*` |
+
+
+=== docs/api/endpoints/meta.md ===
+
+# Meta endpoints
+
+Liveness, readiness, and indexer sync state.
+
+## Liveness — `GET /healthz`
+
+Always returns `200 OK` if the process is up. Suitable for k8s
+liveness probes. Does **not** check the database.
+
+```bash
+curl -s http://localhost:8080/healthz
+# {"status":"ok"}
+```
+
+## Readiness — `GET /readyz`
+
+Two checks:
+
+1. Pings the Postgres pool.
+2. Reads golang-migrate's `schema_migrations` and asserts
+   `version >= minSchemaVersion` (currently `11`) AND `dirty = false`.
+
+Returns `200 {"status":"ready"}` when both pass. Returns `503` with a
+problem+json body on any failure mode below. Safe for k8s readiness
+probes — `/readyz` reports not-ready on a fresh cluster, a partially
+migrated DB, or a migration that crashed mid-run.
+
+```bash
+curl -s http://localhost:8080/readyz
+# {"status":"ready"}
+```
+
+Failure shapes:
+
+| `code` | Status | When |
+|---|---|---|
+| `db_unavailable` | 503 | Pool ping or query failed (network, pool exhausted). |
+| `schema_not_migrated` | 503 | `schema_migrations` missing, or its `version` < `minSchemaVersion`. Start the indexer container so migrations run. |
+| `schema_dirty` | 503 | `schema_migrations.dirty = true`. The last migration crashed mid-run; manual repair required. |
+
+`minSchemaVersion` is pinned in `internal/api/router/router.go` and
+must be bumped whenever a new migration touches a table the API
+reads. The constant is intentionally separate from the indexer's
+migration tooling so a deploy that ships the API without the matching
+migration cleanly reports `schema_not_migrated` instead of 500ing on
+the first request.
+
+## Indexer sync state — `GET /api/v1/status`
+
+Returns the latest indexed momentum height, its timestamp, and the
+current indexer lag (server clock minus the latest momentum's
+timestamp). All derived from the database — no node round-trip.
+
+```bash
+curl -s -H "Authorization: Bearer $TOKEN" \
+     http://localhost:8080/api/v1/status | jq
+```
+
+```json
+{
+  "latest_height": 12345,
+  "latest_timestamp": 1700000000,
+  "indexer_lag_seconds": 5,
+  "version": "v1.0.0"
+}
+```
+
+`indexer_lag_seconds > 10` typically indicates the indexer is
+falling behind the chain head.
+
+
+=== docs/api/endpoints/momentums.md ===
+
+# Momentums
+
+A momentum is a block header in Zenon's dual-ledger model. See the
+[schema reference](../../schema/index.md) for column-level meaning.
+
+## List — `GET /api/v1/momentums`
+
+Paginated. Sort by `height`; default `desc` (newest first).
+
+```bash
+curl -s -H "Authorization: Bearer $TOKEN" \
+     'http://localhost:8080/api/v1/momentums?page=1&page_size=10' | jq
+```
+
+## Latest — `GET /api/v1/momentums/latest`
+
+The highest-height momentum. Returns `404` if the indexer has not
+processed any blocks yet.
+
+```bash
+curl -s -H "Authorization: Bearer $TOKEN" \
+     http://localhost:8080/api/v1/momentums/latest | jq
+```
+
+## By height — `GET /api/v1/momentums/{height}`
+
+```bash
+curl -s -H "Authorization: Bearer $TOKEN" \
+     http://localhost:8080/api/v1/momentums/12345 | jq
+```
+
+| Path param | Type | Notes |
+|---|---|---|
+| `height` | uint64 | Non-numeric / negative input → `400 invalid_height`. Unknown height → `404`. |
+
+
+=== docs/api/endpoints/pillars.md ===
+
+# Pillars
+
+Pillars are Zenon's validator nodes.
+
+## List — `GET /api/v1/pillars`
+
+Ordered by `rank ASC`. Excludes revoked pillars by default.
+
+```bash
+curl -s -H "Authorization: Bearer $TOKEN" \
+     'http://localhost:8080/api/v1/pillars?page=1&page_size=50' | jq
+
+# Include revoked pillars
+curl -s -H "Authorization: Bearer $TOKEN" \
+     'http://localhost:8080/api/v1/pillars?include_revoked=true' | jq
+```
+
+## By name — `GET /api/v1/pillars/{name}`
+
+Pillar names are unique in Zenon.
+
+```bash
+curl -s -H "Authorization: Bearer $TOKEN" \
+     http://localhost:8080/api/v1/pillars/alphanet-1 | jq
+```
+
+## Delegators — `GET /api/v1/pillars/{name}/delegators`
+
+Looks up the pillar by name first, then queries `accounts.delegate`.
+Sorted by `delegation_start_timestamp ASC` (longest-tenured first).
+Returns `404` if the pillar name is unknown.
+
+```bash
+curl -s -H "Authorization: Bearer $TOKEN" \
+     'http://localhost:8080/api/v1/pillars/alphanet-1/delegators?page=1&page_size=20' | jq
+```
+
+
+=== docs/api/endpoints/projects.md ===
+
+# Projects & Votes
+
+Accelerator-Z projects, phases, and pillar votes.
+
+## List projects — `GET /api/v1/projects`
+
+Paginated; ordered by `creation_timestamp DESC`.
+
+```bash
+curl -s -H "Authorization: Bearer $TOKEN" \
+     http://localhost:8080/api/v1/projects | jq
+```
+
+## Get project — `GET /api/v1/projects/{id}`
+
+```bash
+curl -s -H "Authorization: Bearer $TOKEN" \
+     http://localhost:8080/api/v1/projects/<project-id> | jq
+```
+
+## Project phases — `GET /api/v1/projects/{id}/phases`
+
+Returns every phase in creation order (ascending). Not paginated.
+
+```bash
+curl -s -H "Authorization: Bearer $TOKEN" \
+     http://localhost:8080/api/v1/projects/<project-id>/phases | jq
+```
+
+## Project votes — `GET /api/v1/projects/{id}/votes`
+
+Paginated. Returns votes targeting either the project directly or
+any of its phases, ordered by `momentum_height DESC`.
+
+```bash
+curl -s -H "Authorization: Bearer $TOKEN" \
+     http://localhost:8080/api/v1/projects/<project-id>/votes | jq
+```
+
+`vote` values: `0` = yes, `1` = no, `2` = abstain.
+
+
+=== docs/api/endpoints/rewards.md ===
+
+# Rewards
+
+Per-account reward surfaces.
+
+## Per-event history — `GET /api/v1/accounts/{address}/rewards`
+
+Paginated. Returns each reward-receive transaction the indexer
+classified for the address, ordered by `momentum_height DESC`.
+
+```bash
+curl -s -H "Authorization: Bearer $TOKEN" \
+     'http://localhost:8080/api/v1/accounts/z1qq.../rewards?page=1&page_size=50' | jq
+```
+
+## Cumulative totals — `GET /api/v1/accounts/{address}/rewards/cumulative`
+
+Not paginated. Returns one row per `(reward_type, token_standard)`
+bucket — the lifetime sum the indexer rolled up.
+
+```bash
+curl -s -H "Authorization: Bearer $TOKEN" \
+     http://localhost:8080/api/v1/accounts/z1qq.../rewards/cumulative | jq
+```
+
+`reward_type` values: `Pillar`, `Sentinel`, `Stake`, `Delegation`,
+`Liquidity`, `Unknown`.
+
+
+=== docs/api/endpoints/sentinels.md ===
+
+# Sentinels
+
+Sentinels are Zenon's secondary network nodes (lighter-stake than
+pillars). Paginated; default sorted by `registration_timestamp DESC`
+(newest first).
+
+## List — `GET /api/v1/sentinels`
+
+```bash
+# Active sentinels only (default)
+curl -s -H "Authorization: Bearer $TOKEN" \
+     http://localhost:8080/api/v1/sentinels | jq
+
+# Include retired sentinels
+curl -s -H "Authorization: Bearer $TOKEN" \
+     'http://localhost:8080/api/v1/sentinels?include_inactive=true' | jq
+```
+
+
+=== docs/api/endpoints/stakes_fusions.md ===
+
+# Stakes & Fusions
+
+Both default to `is_active = true`; pass `?include_inactive=true`
+to include cancelled / expired entries.
+
+## Stakes
+
+ZNN staked for delegation/voting weight.
+
+```bash
+curl -s -H "Authorization: Bearer $TOKEN" \
+     http://localhost:8080/api/v1/stakes | jq
+
+curl -s -H "Authorization: Bearer $TOKEN" \
+     http://localhost:8080/api/v1/accounts/z1qq.../stakes | jq
+```
+
+| Route | Notes |
+|---|---|
+| `GET /api/v1/stakes` | Paginated list, all addresses. |
+| `GET /api/v1/accounts/{address}/stakes` | Paginated, filtered to one address. |
+
+## Fusions
+
+QSR fused to provide plasma (compute) for an address.
+
+```bash
+curl -s -H "Authorization: Bearer $TOKEN" \
+     http://localhost:8080/api/v1/fusions | jq
+
+curl -s -H "Authorization: Bearer $TOKEN" \
+     http://localhost:8080/api/v1/accounts/z1qq.../fusions | jq
+```
+
+| Route | Notes |
+|---|---|
+| `GET /api/v1/fusions` | Paginated list, all entries. |
+| `GET /api/v1/accounts/{address}/fusions` | Paginated; address matches the funder OR beneficiary side. |
+
+
+=== docs/api/endpoints/tokens.md ===
+
+# Tokens
+
+ZTS tokens registered on the Zenon Network.
+
+## List — `GET /api/v1/tokens`
+
+Ordered by `holder_count DESC` then `token_standard ASC`
+(most-held first; deterministic ties). Paginated. Sort param is
+intentionally not honored — the order is fixed.
+
+```bash
+curl -s -H "Authorization: Bearer $TOKEN" \
+     'http://localhost:8080/api/v1/tokens?page=1&page_size=20' | jq
+```
+
+## By standard — `GET /api/v1/tokens/{token_standard}`
+
+```bash
+# ZNN token
+curl -s -H "Authorization: Bearer $TOKEN" \
+     http://localhost:8080/api/v1/tokens/zts1znnxxxxxxxxxxxxx9z4ulx | jq
+```
+
+## Holders — `GET /api/v1/tokens/{token_standard}/holders`
+
+Paginated richlist. Sorted by balance DESC. Excludes zero balances
+via the existing partial index.
+
+```bash
+curl -s -H "Authorization: Bearer $TOKEN" \
+     'http://localhost:8080/api/v1/tokens/zts1znnxxxxxxxxxxxxx9z4ulx/holders?page=1&page_size=10' | jq
+```
 
 
 === docs/api/index.md ===
 
-# API (forthcoming)
+# REST API
 
-A REST API for the indexer is planned. This page is a stub; endpoint references
-will live under `docs/api/endpoints/` once the server ships.
+The nom-indexer-go HTTP API is a read-only layer over the indexed
+Postgres database. The OpenAPI 3.1 contract at
+[`openapi.yaml`](openapi.yaml) is the source of truth; this section
+documents the conventions that wrap it.
 
-## Status
+## Quick start
 
-| Item | State |
+```bash
+# 1. Start the full stack. The indexer container runs schema
+#    migrations on startup; until those finish, /readyz returns 503
+#    schema_not_migrated, so don't start `api` in isolation against
+#    an empty database.
+docker compose up -d
+# (Requires POSTGRES_PASSWORD and API_JWT_SECRET in .env.)
+
+# 2. Wait for migrations + initial sync, then mint a token (admin
+#    runs this — there is no token endpoint).
+docker compose exec api /app/jwt-issue \
+    --sub frontend-dev --ttl 24h --scope read
+
+# 3. Call any endpoint.
+TOKEN="paste the token here"
+curl -s -H "Authorization: Bearer $TOKEN" \
+     http://localhost:8080/api/v1/status | jq
+
+curl -s -H "Authorization: Bearer $TOKEN" \
+     'http://localhost:8080/api/v1/momentums?page=1&page_size=10' | jq
+```
+
+`/healthz` and `/readyz` do not require a token; everything under
+`/api/v1/` does. `/readyz` returns 503 until the database is
+reachable **and** the indexer schema has been applied — so it is
+safe to use as a Kubernetes readiness probe even on a cold cluster.
+
+## Interactive Swagger UI
+
+<swagger-ui src="openapi.yaml"/>
+
+## Conventions
+
+### Response shape
+
+* **Collection endpoints** return an envelope:
+
+  ```json
+  {
+    "data": [...],
+    "pagination": { "page": 1, "page_size": 50, "total": 12345 }
+  }
+  ```
+
+* **Single-object endpoints** return the object directly (no envelope).
+* **Errors** are RFC 7807 `application/problem+json`. The `code`
+  field is a stable application-level identifier — see
+  [Authentication](auth.md#failure-responses) for the full enum.
+
+  ```json
+  { "type": "about:blank", "title": "Unauthorized",
+    "status": 401, "detail": "missing Authorization header (want: Bearer <token>)",
+    "code": "missing_token" }
+  ```
+
+### Amounts are JSON strings
+
+Token amounts (`balance`, `total_supply`, `znn_amount`, etc.) ship as
+**JSON strings** rather than numbers. The raw int64 values stored by
+the indexer regularly exceed `Number.MAX_SAFE_INTEGER` (`2^53 - 1`),
+so a numeric JSON field would silently lose precision in JavaScript
+clients. Convert with `BigInt(value)` (JS) or `int.Parse(value)` (Go).
+
+### Pagination
+
+See [Pagination](pagination.md) for the offset/limit contract.
+
+### Authentication
+
+See [Authentication](auth.md) for token issuance, headers, and rotation.
+
+### Rate limit
+
+In-process sliding window: **60 requests/minute** per JWT subject,
+tunable via `API_RATE_LIMIT_PER_MINUTE`. Returns `429` with a
+problem+json body (`code: "rate_limited"`) when exceeded. The
+middleware chain runs `Auth → RateLimit`, so unauthenticated
+requests are rejected at Auth before the limiter sees them — see
+[Authentication → Rate limiting](auth.md#rate-limiting-and-unauthenticated-requests).
+The limit is per-replica; multi-replica deployments multiply the
+effective ceiling.
+
+### Versioning
+
+All current endpoints live under `/api/v1/`. A future v2 will be added
+as a sibling subtree; v1 will continue to receive bug fixes.
+
+## Where to look next
+
+| You want… | Page |
 |---|---|
-| Server implementation | Not started |
-| Draft implementation brief | [`specs/API_SPECIFICATION.md`](https://github.com/0x3639/nom-indexer-go/blob/main/specs/API_SPECIFICATION.md) (973-line spec) |
-| OpenAPI 3.1 contract | [`openapi.yaml`](openapi.yaml) (placeholder skeleton) |
-| Rendered Swagger UI | Will load automatically here when `openapi.yaml` is filled in. |
+| The full endpoint catalog | [Endpoints overview](endpoints/index.md) |
+| To issue or rotate tokens | [Authentication](auth.md) |
+| The pagination + sort contract | [Pagination](pagination.md) |
+| Schema-level column meanings | [Schema reference](../schema/index.md) |
+| What's deferred to a future release | [Known issues](../reference/known-issues.md) |
 
-## What this API will surface
+## LLM-friendly access
 
-The API is a **read-only HTTP layer over the database tables this indexer
-fills**. There is no application logic on top — the schema is the contract.
-
-If you're designing a query, start in the [schema reference](../schema/index.md)
-and identify the relevant table(s). The API will map endpoints onto those
-tables.
-
-## Where the contract lives
-
-- **Tables and columns:** [`docs/schema/`](../schema/index.md)
-- **Schema-wide conventions** (int64 cap, timestamps, hash encoding):
-  [`docs/schema/conventions.md`](../schema/conventions.md)
-- **Implementation brief (draft):**
-  [`specs/API_SPECIFICATION.md`](https://github.com/0x3639/nom-indexer-go/blob/main/specs/API_SPECIFICATION.md)
-- **Glossary of Zenon terms:** [`docs/reference/glossary.md`](../reference/glossary.md)
-
-## Future structure of this section
-
-```
-docs/api/
-  index.md               # this file — overview + status
-  openapi.yaml           # the OpenAPI 3.1 contract (rendered inline as Swagger UI)
-  auth.md                # authentication scheme
-  pagination.md          # pagination conventions
-  endpoints/
-    <one-file-per-endpoint-or-group>.md
-```
-
-The directory layout is in place now so that filling in the API docs is purely
-additive: no nav reshuffle, no cross-link breakage.
+This site exposes [`/llms.txt`](https://0x3639.github.io/nom-indexer-go/llms.txt)
+and [`/llms-full.txt`](https://0x3639.github.io/nom-indexer-go/llms-full.txt)
+following the [llms.txt convention](https://llmstxt.org). The API
+contract itself is at [`/api/openapi.yaml`](openapi.yaml) — point any
+OpenAPI-aware tool at it.
 
 
 === docs/api/pagination.md ===
 
 # Pagination
 
-The REST API has not been implemented yet, so pagination parameters and
-response envelopes are not part of the public contract.
+Collection endpoints use **offset/limit** pagination with a fixed
+envelope. Single-object endpoints (`GET /api/v1/momentums/{height}`,
+`GET /api/v1/tokens/{token_standard}`, etc.) return the object
+directly with no envelope.
 
-When endpoints are added, define pagination in `docs/api/openapi.yaml`
-first and mirror the rules here. Until then, consumers should query the
-database tables directly and use the indexes documented in
-[`docs/schema/`](../schema/index.md).
+## Query parameters
+
+| Param | Default | Bounds | Notes |
+|---|---|---|---|
+| `page` | `1` | ≥ 1 | 1-based. Out-of-range silently clamped to 1. |
+| `page_size` | `50` | 1 ≤ n ≤ 200 | Out-of-range silently clamped into bounds. |
+| `sort` | depends on endpoint | `asc` \| `desc` | Honored only by endpoints with a documented sort column. Invalid values fall back to the endpoint's default. |
+
+The API never returns 400 on pagination misuse — bad values are
+clamped instead. This keeps consumer code that builds query strings
+defensively from breaking.
+
+## Response envelope
+
+```json
+{
+  "data": [ { ... }, { ... } ],
+  "pagination": {
+    "page": 1,
+    "page_size": 50,
+    "total": 12345
+  }
+}
+```
+
+| Field | Type | Meaning |
+|---|---|---|
+| `data` | array | The page's rows. Always present — empty page returns `[]`, never `null`. |
+| `pagination.page` | int | Echo of the requested page (after clamping). |
+| `pagination.page_size` | int | Echo of the requested page_size (after clamping). |
+| `pagination.total` | int64 | Total rows matching the query across all pages, not just the current page. |
+
+`total` is computed in the same SQL statement via `COUNT(*) OVER ()`
+— one round trip per request, but the count is exact (no
+LIMIT/OFFSET drift).
+
+## Honest tradeoff: deep pagination on large tables
+
+`account_blocks` is the largest table the indexer fills (tens of
+millions of rows). Offset pagination requires Postgres to scan and
+discard `OFFSET` rows before returning `LIMIT` — at page 10,000 of
+50 that's 500,000 rows skipped per request. Performance degrades
+linearly with offset.
+
+**For now:** clients fetching deep history should narrow with
+filters (e.g. `?from_height=...&to_height=...` once those filters
+land) rather than paging blindly to the end.
+
+**Future:** the plan reserves cursor pagination for v2. When that
+ships, the envelope will gain a `next_cursor` field while keeping the
+existing offset/limit shape for compatibility.
+
+## Sort
+
+Endpoints with a `sort` parameter document the column they sort by.
+Typical defaults:
+
+| Endpoint | Default sort |
+|---|---|
+| `/api/v1/momentums` | `desc` by `height` |
+| `/api/v1/account_blocks` | `desc` by `momentum_height` |
+| `/api/v1/accounts/{address}/transactions` | `desc` by `momentum_height` |
+
+Endpoints with implicit ordering (e.g. `/api/v1/tokens` is always
+sorted by `holder_count DESC`) intentionally do not accept `sort`.
+
+## Total count cost
+
+`COUNT(*) OVER ()` is one query, but the planner still scans the
+matching set to compute it. On filtered queries against indexed
+columns this is fast; on unfiltered scans of the largest tables it
+matches the cost of the `LIMIT` query. If you only need the next
+page and don't care about the total, that's still cheap — the count
+is computed once and returned alongside the rows.
 
 
 === docs/architecture/bridge-sync.md ===
@@ -536,25 +1235,26 @@ title: Architecture overview
 
 # Architecture overview
 
-The big picture: one process, one Postgres database, several
-independent work lanes, and two forthcoming consumer surfaces.
+The big picture: one indexer process, one read-only HTTP API
+process, one Postgres database, several independent work lanes, and
+one future consumer surface (MCP).
 
 ## System context
 
 ```mermaid
 flowchart LR
     node["Zenon node<br/>(WebSocket RPC)"]:::external
-    idx["nom-indexer-go<br/>(this service)"]:::core
+    idx["nom-indexer-go<br/>(cmd/indexer)"]:::core
     pg[(PostgreSQL<br/>30 tables)]:::core
-    api["REST API<br/>(forthcoming)"]:::future
+    api["REST API<br/>(cmd/api)"]:::core
     mcp["MCP server<br/>(forthcoming)"]:::future
     web["explorer UI / SDK<br/>consumers"]:::external
 
     node -- "Subscriber + Ledger + Embedded RPCs" --> idx
     idx -- "writes" --> pg
-    pg -. "reads" .-> api
+    pg -- "reads" --> api
     pg -. "reads" .-> mcp
-    api -. "HTTP" .-> web
+    api -- "HTTP + JWT" --> web
     mcp -. "MCP" .-> web
 
     classDef core fill:#3949ab,stroke:#1a237e,color:#fff;
@@ -562,14 +1262,11 @@ flowchart LR
     classDef future stroke-dasharray:5 5,fill:#fafafa,stroke:#9e9e9e;
 ```
 
-Two boxes are dashed because they don't exist yet:
-
-- The REST API server will live next to the indexer (`cmd/api`).
-- The MCP server will live next to it (`cmd/mcp`).
-
-Both consume the same Postgres tables this indexer fills. Adding them
-later does not require restructuring the existing tree — `docs/api/`
-and `docs/mcp/` are reserved.
+- The REST API server lives at `cmd/api` with HS256 JWT auth and
+  Prometheus `/metrics` on a sidecar port. See [API](../api/index.md).
+- The MCP server (dashed) is still future work; it will live at
+  `cmd/mcp` and share `internal/api/dto` + `internal/repository`
+  with the REST API.
 
 ## Process layout
 
@@ -619,9 +1316,9 @@ flowchart LR
     db --> cfg
 ```
 
-`internal/models` is the leaf — it imports stdlib only. That makes
-it safe for the future API and MCP packages to depend on (they'll need
-the structs to serialize responses).
+`internal/models` is the leaf — it imports stdlib only. That keeps
+it safe for `internal/api/dto` to depend on without dragging in pgx,
+and reserves the same property for the future MCP package.
 
 ## Data flow at a glance
 
@@ -1071,8 +1768,9 @@ Source: [`internal/models/`](https://github.com/0x3639/nom-indexer-go/tree/main/
 
 Go struct mirrors of every table in the schema, plus enum types and
 address constants. The leaf of the import graph — stdlib only — which
-is intentional: the forthcoming API and MCP packages depend on it
-without pulling in pgx, viper, zap, or the SDK.
+is intentional: `internal/api/dto` already depends on it (and the
+future MCP package will too) without pulling in pgx, viper, zap, or
+the SDK.
 
 See the [`doc.go`](https://github.com/0x3639/nom-indexer-go/blob/main/internal/models/doc.go)
 package docstring.
@@ -1403,6 +2101,7 @@ explicit overrides listed below.
 | Field | Type | Env var | Default | Description |
 |---|---|---|---|---|
 | `database.password` | string | `DATABASE_PASSWORD` (or `POSTGRES_PASSWORD` in compose) | — | Postgres password. Validation fails if empty. |
+| `api.jwt_secret` | string | `API_JWT_SECRET` | — | HS256 signing secret. **Required only when the `cmd/api` HTTP API runs** — the indexer ignores this field. `cmd/api` refuses to start if empty. Generate with `openssl rand -base64 48`. |
 
 ## Node
 
@@ -1454,6 +2153,20 @@ each.
 |---|---|---|---|---|
 | `backfill_on_startup` | bool | `BACKFILL_ON_STARTUP` | `false` | If true, fill gaps in `momentums` / `account_blocks` before live sync. Adds startup time proportional to the gap size. |
 
+## API (`cmd/api` only)
+
+The fields below are read only by the `cmd/api` HTTP API binary; the
+indexer binary ignores them. See the [API reference](../api/index.md)
+for the on-wire contract.
+
+| Field | Type | Env var | Default | Description |
+|---|---|---|---|---|
+| `api.port` | int | `API_PORT` | `8080` | Public listener port. The docker-compose api service publishes this 1:1 to the host. |
+| `api.metrics_port` | int | `API_METRICS_PORT` | `9090` | Separate listener for Prometheus `/metrics`. Bound to `0.0.0.0`; scope to a private network in production. |
+| `api.jwt_secret` | string | `API_JWT_SECRET` | — | **Required for `cmd/api`.** HS256 signing secret. See [Required](#required) above. |
+| `api.cors_allowed_origins` | string | `API_CORS_ALLOWED_ORIGINS` | `""` (deny) | Comma-separated origin allowlist. Empty disables CORS entirely (browsers will block cross-origin requests). |
+| `api.rate_limit_per_minute` | int | `API_RATE_LIMIT_PER_MINUTE` | `60` | Per-JWT-subject sliding-window limit. `0` or negative disables rate limiting. |
+
 ## Migrations
 
 | Variable | Default | Description |
@@ -1470,6 +2183,11 @@ forwards them to the Postgres container:
 | `POSTGRES_USER` | `postgres` | Owner role inside the container. |
 | `POSTGRES_PASSWORD` | — | **Required.** Same value the indexer's `DATABASE_PASSWORD` should use. |
 | `POSTGRES_DB` | `nom_indexer` | Initial database name. |
+
+The `api` compose service additionally requires `API_JWT_SECRET` in
+`.env` (the container refuses to start without it). It does **not**
+fail at compose interpolation time, so `docker compose up postgres
+indexer` works without setting it.
 
 ## Validation
 
@@ -2392,9 +3110,10 @@ cmd/* → internal/indexer → internal/repository → internal/models
 ## Why `internal/`
 
 Every non-leaf package lives under `internal/` so external Go callers
-can't import them. The forthcoming API + MCP server will be siblings
-of `cmd/indexer/` and they too will live under `internal/api/` /
-`internal/mcp/`; nothing outside this module gets to import them.
+can't import them. The shipped API service lives at `cmd/api/` with
+its packages under `internal/api/{dto,handlers,httpx,metrics,middleware,oapi,router}`;
+the future MCP server will follow the same pattern under
+`internal/mcp/`. Nothing outside this module gets to import them.
 
 ## What's *not* a package
 
@@ -2424,8 +3143,9 @@ How to get a local checkout building and tests running.
 
 ## Prerequisites
 
-- Go **1.24+**. The SDK requires Go 1.24; older toolchains will refuse
-  to compile.
+- Go **1.25+**. `go.mod` declares 1.25 (the prometheus + kin-openapi
+  upgrades pulled the floor up from 1.24); older toolchains will
+  refuse to compile.
 - A working C toolchain. CGO is required for `secp256k1`:
     - macOS: Xcode command-line tools (`xcode-select --install`).
     - Linux: `gcc` + `libc-dev` (usually `apt install build-essential`).
@@ -2545,8 +3265,9 @@ See [`docs.md`](docs.md) for the doc authoring workflow.
 
 A Go service that indexes the Zenon Network blockchain (NoM) into PostgreSQL.
 It listens to a Zenon node over WebSocket, decodes embedded-contract activity,
-and writes a normalized relational schema that downstream consumers — including
-the forthcoming REST API and MCP server — can query directly.
+and writes a normalized relational schema. A read-only HTTP API (`cmd/api`,
+documented at [API](api/index.md)) reads those tables behind HS256 JWT auth;
+the future MCP server will share the same DTO + repository layer.
 
 ## Where to start
 
@@ -2573,11 +3294,14 @@ the forthcoming REST API and MCP server — can query directly.
 
     You query the database that this indexer fills.
 
-    1. [Schema overview](schema/index.md) — table-by-table reference.
-    2. [Schema conventions](schema/conventions.md) — int64 cap, timestamp,
+    1. [API overview](api/index.md) — quick start, auth, conventions, Swagger UI.
+    2. [Endpoint catalog](api/endpoints/index.md) — per-domain curl examples.
+    3. [Schema overview](schema/index.md) — table-by-table reference for
+       direct SQL access or future MCP consumers.
+    4. [Schema conventions](schema/conventions.md) — int64 cap, timestamp,
        hash encoding rules that every table follows.
-    3. [Glossary](reference/glossary.md) — Zenon-specific terms.
-    4. [API (forthcoming)](api/index.md) · [MCP (forthcoming)](mcp/index.md)
+    5. [Glossary](reference/glossary.md) — Zenon-specific terms.
+    6. [MCP (forthcoming)](mcp/index.md)
 
 ## What's in the docs
 
@@ -2593,7 +3317,7 @@ the forthcoming REST API and MCP server — can query directly.
 | [Migrations](migrations/guide.md) | Writing migrations, rollback discipline, narrative history. |
 | [Code reference](code-reference/index.md) | Go package summaries pulled from `doc.go`. |
 | [Reference](reference/glossary.md) | Glossary, addresses, FAQ, known issues. |
-| [API](api/index.md) | (Stub — fills in when the API server ships.) |
+| [API](api/index.md) | HTTP endpoints, HS256 JWT auth, Swagger UI, per-domain pages. |
 | [MCP](mcp/index.md) | (Stub — fills in when the MCP server ships.) |
 
 ## Documentation conventions
@@ -3679,7 +4403,7 @@ Adds bridge configuration cache tables:
 [`bridge_guardians`](../schema/bridge_guardians.md),
 [`bridge_orchestrator_info`](../schema/bridge_orchestrator_info.md),
 [`bridge_security_info`](../schema/bridge_security_info.md). Mirrors the
-zenonhub bridge schema so the future API / MCP server can answer
+zenonhub bridge schema so the API (and future MCP server) can answer
 "what's the current bridge admin?" without an RPC round-trip.
 
 ## 009 — `account_flow_and_balance_timestamp`
@@ -4079,8 +4803,14 @@ cd nom-indexer-go
 
 # Local credentials. .env is gitignored.
 cp .env.example .env
-# Edit .env and set POSTGRES_PASSWORD (and other overrides if needed).
+# Edit .env. Required: POSTGRES_PASSWORD.
+# Required only if you bring up the api service: API_JWT_SECRET (any
+# strong random string; openssl rand -base64 48).
 
+# Indexer + Postgres only (most common — read directly from the DB):
+docker compose up -d postgres indexer
+
+# Or the full stack including the read-only HTTP API container:
 docker compose up -d
 ```
 
@@ -4090,19 +4820,24 @@ The compose file:
 - Wires the indexer to talk to the `postgres` service via the
   `nom-indexer` user network.
 - Exposes Postgres on host port 5432 for local introspection.
+- Defines an optional `api` service (built from `Dockerfile.api`) that
+  exposes the read-only HTTP API on `${API_PORT:-8080}` and
+  Prometheus `/metrics` on `${API_METRICS_PORT:-9090}`. The api
+  container refuses to start without `API_JWT_SECRET` in `.env`.
 
 ## Environment variables
 
 See [`config/reference.md`](../config/reference.md) for the full table.
 The compose-specific ones are `POSTGRES_USER`, `POSTGRES_PASSWORD`,
-`POSTGRES_DB`. The indexer service forwards them as
-`DATABASE_USERNAME`, `DATABASE_PASSWORD`, `DATABASE_NAME`.
+`POSTGRES_DB` (Postgres + indexer + API) plus `API_JWT_SECRET`,
+`API_PORT`, `API_METRICS_PORT`, `API_CORS_ALLOWED_ORIGINS`, and
+`API_RATE_LIMIT_PER_MINUTE` (API only).
 
 ## Image build
 
 The Dockerfile is multi-stage:
 
-- **Stage 1** — `golang:1.24-alpine` with CGO toolchain (`gcc musl-dev`)
+- **Stage 1** — `golang:1.25-alpine` with CGO toolchain (`gcc musl-dev`)
   for secp256k1. `go mod tidy && go build -o /app/indexer ./cmd/indexer`.
 - **Stage 2** — `alpine:3.19` runtime with `ca-certificates` + `tzdata`.
   Runs as non-root user `indexer:1000`.
@@ -4450,11 +5185,19 @@ docker logs nom-indexer 2>&1 | grep -vE 'INFO|MERMAID' | tail -50
 | `gaps > 0` after a steady-state window | Backfill needed. | See [`backfill.md`](backfill.md). |
 | Reward tables empty for a recent day | Reward indexing broken or no rewards. | Spot-check the receive paths. |
 
-## Future: Prometheus / metrics
+## Prometheus / metrics
 
-The indexer does not currently expose Prometheus metrics. The API
-service (forthcoming) is the natural place to add `/metrics`; see
-[`scaling.md`](scaling.md).
+The indexer binary does not expose Prometheus metrics today —
+operators read sync state from Postgres (see the canonical liveness
+query above).
+
+The `cmd/api` HTTP service does ship Prometheus metrics on a
+separate listener (port 9090 by default) exposing
+`nom_api_http_requests_total` and `nom_api_http_request_duration_seconds`
+labeled by method/route/status. See the
+[API overview](../api/index.md). The route label uses the chi
+template (e.g. `/api/v1/momentums/{height}`) so label cardinality
+stays bounded.
 
 
 === docs/operations/runbook.md ===
@@ -4657,8 +5400,9 @@ config_file=/etc/postgresql/postgresql.conf` if you want tuned config.
 
 `database.pool_size` (default 10) is the indexer's max pgxpool size.
 Under steady-state load, the indexer typically holds 2–4 connections.
-Raise to 20–30 if you're running additional consumers (the future API
-and MCP server will share this DB).
+The `cmd/api` service opens its own pgxpool against the same DB
+(its `database.pool_size` knob is independent). Raise either pool to
+20–30 if you're running more replicas or expect heavy API traffic.
 
 ## Vertical: indexer
 
@@ -4677,8 +5421,9 @@ tax dramatically.
 
 ## Read replica (for API / MCP consumers)
 
-The forthcoming API and MCP server are pure read consumers — they
-should not contend with the indexer's writes. Two options:
+The `cmd/api` service and the future MCP server are pure read
+consumers — they should not contend with the indexer's writes.
+Two options:
 
 1. **Postgres streaming replica.** Point read consumers at the replica.
    Lag is typically sub-second; fine for an explorer UI.
@@ -4686,8 +5431,9 @@ should not contend with the indexer's writes. Two options:
    QPS stays modest. The indexer already runs at low transaction
    rates.
 
-For now, the API will read from the same DB as the indexer until
-contention becomes visible.
+The default `docker-compose.yml` API service uses option 2 (same
+primary). Switch to option 1 once contention becomes visible —
+nothing in the API code path is replica-incompatible.
 
 ## Partitioning
 
@@ -4734,11 +5480,11 @@ double that for production.
 
 ## Observability
 
-The current liveness signal is `MAX(momentums.timestamp)` advancing.
-The future API exposes a `/metrics` endpoint; the indexer itself does
-not export Prometheus today. Adding `/metrics` to the indexer is a
-plausible follow-up — see
-[`monitoring.md`](monitoring.md).
+The indexer's liveness signal is `MAX(momentums.timestamp)` advancing
+— the indexer binary does not export Prometheus today. The
+`cmd/api` service does, on a separate listener (`API_METRICS_PORT`,
+default 9090), with request count + latency histograms labeled by
+chi route pattern. See [`monitoring.md`](monitoring.md).
 
 
 === docs/reference/addresses.md ===
@@ -4978,13 +5724,14 @@ See the recipes in [`docs/development/`](../development/setup.md):
 - [Add a table](../development/add-table.md)
 - [Add a cron job](../development/add-cron-job.md)
 
-## Where does the future REST API fit?
+## Where does the REST API fit?
 
-It will live alongside the indexer (`cmd/api`) and read from the same
-Postgres. The schema is the contract. See
-[`docs/api/index.md`](../api/index.md) for the stub and
+It ships at `cmd/api` and reads from the same Postgres. The schema
+is the contract. See [`docs/api/index.md`](../api/index.md) for the
+quick-start + Swagger UI, [`docs/api/endpoints/`](../api/endpoints/index.md)
+for per-domain curl examples, and
 [`specs/API_SPECIFICATION.md`](https://github.com/0x3639/nom-indexer-go/blob/main/specs/API_SPECIFICATION.md)
-for the draft implementation brief.
+for the architecture decision record that produced the v1 API.
 
 ## Where does the future MCP server fit?
 
@@ -5340,13 +6087,14 @@ intervals.
 plausible but not written. The current state (`accounts.delegate`)
 remains correct for "who is X delegated to right now?".
 
-## No HTTP `/metrics` endpoint
+## Indexer has no HTTP `/metrics` endpoint
 
-**What:** The indexer doesn't expose Prometheus metrics.
+**What:** The indexer binary doesn't expose Prometheus metrics.
 
-**Status:** Planned alongside the forthcoming REST API. The
-canonical liveness signal today is "`MAX(momentums.timestamp)` is
-advancing".
+**Status:** Won't fix in the indexer for now — operators read sync
+state from Postgres (`MAX(momentums.timestamp)` advancing). The
+`cmd/api` HTTP service does expose Prometheus metrics on `:9090`
+(see [API → Metrics](../api/index.md)) if you run it alongside.
 
 ## Dagger CI doesn't run integration tests
 

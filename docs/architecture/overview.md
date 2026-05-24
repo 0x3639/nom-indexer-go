@@ -4,25 +4,26 @@ title: Architecture overview
 
 # Architecture overview
 
-The big picture: one process, one Postgres database, several
-independent work lanes, and two forthcoming consumer surfaces.
+The big picture: one indexer process, one read-only HTTP API
+process, one Postgres database, several independent work lanes, and
+one future consumer surface (MCP).
 
 ## System context
 
 ```mermaid
 flowchart LR
     node["Zenon node<br/>(WebSocket RPC)"]:::external
-    idx["nom-indexer-go<br/>(this service)"]:::core
+    idx["nom-indexer-go<br/>(cmd/indexer)"]:::core
     pg[(PostgreSQL<br/>30 tables)]:::core
-    api["REST API<br/>(forthcoming)"]:::future
+    api["REST API<br/>(cmd/api)"]:::core
     mcp["MCP server<br/>(forthcoming)"]:::future
     web["explorer UI / SDK<br/>consumers"]:::external
 
     node -- "Subscriber + Ledger + Embedded RPCs" --> idx
     idx -- "writes" --> pg
-    pg -. "reads" .-> api
+    pg -- "reads" --> api
     pg -. "reads" .-> mcp
-    api -. "HTTP" .-> web
+    api -- "HTTP + JWT" --> web
     mcp -. "MCP" .-> web
 
     classDef core fill:#3949ab,stroke:#1a237e,color:#fff;
@@ -30,14 +31,11 @@ flowchart LR
     classDef future stroke-dasharray:5 5,fill:#fafafa,stroke:#9e9e9e;
 ```
 
-Two boxes are dashed because they don't exist yet:
-
-- The REST API server will live next to the indexer (`cmd/api`).
-- The MCP server will live next to it (`cmd/mcp`).
-
-Both consume the same Postgres tables this indexer fills. Adding them
-later does not require restructuring the existing tree — `docs/api/`
-and `docs/mcp/` are reserved.
+- The REST API server lives at `cmd/api` with HS256 JWT auth and
+  Prometheus `/metrics` on a sidecar port. See [API](../api/index.md).
+- The MCP server (dashed) is still future work; it will live at
+  `cmd/mcp` and share `internal/api/dto` + `internal/repository`
+  with the REST API.
 
 ## Process layout
 
@@ -87,9 +85,9 @@ flowchart LR
     db --> cfg
 ```
 
-`internal/models` is the leaf — it imports stdlib only. That makes
-it safe for the future API and MCP packages to depend on (they'll need
-the structs to serialize responses).
+`internal/models` is the leaf — it imports stdlib only. That keeps
+it safe for `internal/api/dto` to depend on without dragging in pgx,
+and reserves the same property for the future MCP package.
 
 ## Data flow at a glance
 

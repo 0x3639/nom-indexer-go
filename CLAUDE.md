@@ -30,16 +30,17 @@ For one-shot ingestion: [`llms-full.txt`](llms-full.txt) concatenates every page
   `docs/reference/known-issues.md` for the historical accelerator-types panic.
 - **`reference/`** contains the original Dart `nom_indexer` for comparison.
   Read it; never edit it.
-- **`specs/API_SPECIFICATION.md`** is a draft implementation brief, not the
-  API reference. The API server has not been built yet. When it is, the
-  doc lives in `docs/api/`.
+- **`specs/API_SPECIFICATION.md`** is the architecture decision record
+  that produced the v1 API. The live API reference lives at
+  [`docs/api/`](docs/api/index.md) (OpenAPI 3.1 + Swagger UI).
 - **No CGO-free builds.** `secp256k1` and `go-zenon` require CGO. Use the
   multi-stage Docker build for production.
 
 ## When in doubt, follow these rules
 
-1. **Schema is the contract.** Both the future REST API and the future MCP
-   server read these tables directly. Any column change is a public API
+1. **Schema is the contract.** The shipped REST API (`cmd/api`,
+   reading from `internal/repository`) and the future MCP server both
+   read these tables directly. Any column change is a public API
    change. Match the migrations/SQL files exactly when editing models or
    repositories.
 2. **`safeBigIntToInt64`** is the single overflow path for `*big.Int` →

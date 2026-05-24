@@ -28,3 +28,18 @@ cron:
   voting_activity_interval: "10m"
   # Interval for updating token holder counts
   token_holders_interval: "10m"
+
+# Used only by cmd/api (the HTTP API service). The indexer ignores this block.
+api:
+  # Public API port.
+  port: 8080
+  # Prometheus /metrics port (separate listener so the public API does
+  # not leak operational data).
+  metrics_port: 9090
+  # HS256 secret. Prefer the API_JWT_SECRET env var; never commit a
+  # real value here. Required — the API refuses to start without it.
+  jwt_secret: ""
+  # Comma-separated origin allowlist. Empty = CORS disabled.
+  cors_allowed_origins: ""
+  # Per-subject (or per-IP) rate limit, requests/minute.
+  rate_limit_per_minute: 60

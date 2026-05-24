@@ -2,8 +2,9 @@
 
 A Go service that indexes the Zenon Network blockchain (NoM) into PostgreSQL.
 It listens to a Zenon node over WebSocket, decodes embedded-contract activity,
-and writes a normalized relational schema that downstream consumers — including
-the forthcoming REST API and MCP server — can query directly.
+and writes a normalized relational schema. A read-only HTTP API (`cmd/api`,
+documented at [API](api/index.md)) reads those tables behind HS256 JWT auth;
+the future MCP server will share the same DTO + repository layer.
 
 ## Where to start
 
@@ -30,11 +31,14 @@ the forthcoming REST API and MCP server — can query directly.
 
     You query the database that this indexer fills.
 
-    1. [Schema overview](schema/index.md) — table-by-table reference.
-    2. [Schema conventions](schema/conventions.md) — int64 cap, timestamp,
+    1. [API overview](api/index.md) — quick start, auth, conventions, Swagger UI.
+    2. [Endpoint catalog](api/endpoints/index.md) — per-domain curl examples.
+    3. [Schema overview](schema/index.md) — table-by-table reference for
+       direct SQL access or future MCP consumers.
+    4. [Schema conventions](schema/conventions.md) — int64 cap, timestamp,
        hash encoding rules that every table follows.
-    3. [Glossary](reference/glossary.md) — Zenon-specific terms.
-    4. [API (forthcoming)](api/index.md) · [MCP (forthcoming)](mcp/index.md)
+    5. [Glossary](reference/glossary.md) — Zenon-specific terms.
+    6. [MCP (forthcoming)](mcp/index.md)
 
 ## What's in the docs
 
@@ -50,7 +54,7 @@ the forthcoming REST API and MCP server — can query directly.
 | [Migrations](migrations/guide.md) | Writing migrations, rollback discipline, narrative history. |
 | [Code reference](code-reference/index.md) | Go package summaries pulled from `doc.go`. |
 | [Reference](reference/glossary.md) | Glossary, addresses, FAQ, known issues. |
-| [API](api/index.md) | (Stub — fills in when the API server ships.) |
+| [API](api/index.md) | HTTP endpoints, HS256 JWT auth, Swagger UI, per-domain pages. |
 | [MCP](mcp/index.md) | (Stub — fills in when the MCP server ships.) |
 
 ## Documentation conventions

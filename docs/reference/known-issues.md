@@ -129,13 +129,14 @@ intervals.
 plausible but not written. The current state (`accounts.delegate`)
 remains correct for "who is X delegated to right now?".
 
-## No HTTP `/metrics` endpoint
+## Indexer has no HTTP `/metrics` endpoint
 
-**What:** The indexer doesn't expose Prometheus metrics.
+**What:** The indexer binary doesn't expose Prometheus metrics.
 
-**Status:** Planned alongside the forthcoming REST API. The
-canonical liveness signal today is "`MAX(momentums.timestamp)` is
-advancing".
+**Status:** Won't fix in the indexer for now — operators read sync
+state from Postgres (`MAX(momentums.timestamp)` advancing). The
+`cmd/api` HTTP service does expose Prometheus metrics on `:9090`
+(see [API → Metrics](../api/index.md)) if you run it alongside.
 
 ## Dagger CI doesn't run integration tests
 
