@@ -1,6 +1,7 @@
 package stream
 
 import (
+	"errors"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -12,12 +13,23 @@ import (
 )
 
 func newTestHub() *Hub {
-	return New(Config{Logger: zap.NewNop(), ClientBuf: 4})
+	h := New(Config{Logger: zap.NewNop(), ClientBuf: 4, PerSubjectMax: 100})
+	MarkRunningForTest(h)
+	return h
+}
+
+func mustSubscribe(t *testing.T, h *Hub, subject string) *Subscriber {
+	t.Helper()
+	s, err := h.Subscribe(subject)
+	if err != nil {
+		t.Fatalf("Subscribe(%q): %v", subject, err)
+	}
+	return s
 }
 
 func TestHub_SubscribeAndDispatch(t *testing.T) {
 	h := newTestHub()
-	s := h.Subscribe()
+	s := mustSubscribe(t, h, "alice")
 	defer s.Close()
 
 	want := &dto.Momentum{Height: 42, Hash: "abc"}
@@ -37,7 +49,7 @@ func TestHub_FanOutAcrossSubscribers(t *testing.T) {
 	h := newTestHub()
 	subs := make([]*Subscriber, 5)
 	for i := range subs {
-		subs[i] = h.Subscribe()
+		subs[i] = mustSubscribe(t, h, "alice")
 		defer subs[i].Close()
 	}
 
@@ -58,7 +70,7 @@ func TestHub_FanOutAcrossSubscribers(t *testing.T) {
 
 func TestHub_SlowSubscriberLagsRatherThanBlocks(t *testing.T) {
 	h := newTestHub() // ClientBuf=4
-	slow := h.Subscribe()
+	slow := mustSubscribe(t, h, "alice")
 	defer slow.Close()
 
 	// Fill the buffer + drop 6 more — slow never reads.
@@ -69,7 +81,6 @@ func TestHub_SlowSubscriberLagsRatherThanBlocks(t *testing.T) {
 	if got := slow.Lagged(); got != 6 {
 		t.Errorf("lagged = %d, want 6 (10 dispatched, buffer=4)", got)
 	}
-	// Now drain the buffer and confirm we got the first 4 in order.
 	for i := 0; i < 4; i++ {
 		m := <-slow.Recv()
 		if m.Height != uint64(i) {
@@ -80,12 +91,11 @@ func TestHub_SlowSubscriberLagsRatherThanBlocks(t *testing.T) {
 
 func TestHub_FastSubscriberNotPenalizedBySlowOne(t *testing.T) {
 	h := newTestHub()
-	slow := h.Subscribe()
+	slow := mustSubscribe(t, h, "slow-sub")
 	defer slow.Close()
-	fast := h.Subscribe()
+	fast := mustSubscribe(t, h, "fast-sub")
 	defer fast.Close()
 
-	// Drain fast in a goroutine.
 	var received atomic.Uint64
 	var wg sync.WaitGroup
 	wg.Add(1)
@@ -96,18 +106,12 @@ func TestHub_FastSubscriberNotPenalizedBySlowOne(t *testing.T) {
 		}
 	}()
 
-	// Dispatch with a tiny pause so the goroutine has a chance to drain
-	// between sends — the goal of this test is to prove the dispatch
-	// loop doesn't block the fast subscriber on the slow one, NOT to
-	// stress the buffer (TestHub_SlowSubscriberLagsRatherThanBlocks
-	// covers that case).
 	const n = 50
 	for i := uint64(0); i < n; i++ {
 		h.dispatch(&dto.Momentum{Height: i})
 		time.Sleep(200 * time.Microsecond)
 	}
 
-	// Wait for the goroutine to drain everything dispatched.
 	deadline := time.Now().Add(500 * time.Millisecond)
 	for received.Load() < n && time.Now().Before(deadline) {
 		time.Sleep(time.Millisecond)
@@ -121,8 +125,6 @@ func TestHub_FastSubscriberNotPenalizedBySlowOne(t *testing.T) {
 	if fast.Lagged() != 0 {
 		t.Errorf("fast subscriber Lagged() = %d, want 0 (slow client should not block fast)", fast.Lagged())
 	}
-	// slow lagged because nobody drained it — proof the dispatch loop
-	// did not block waiting for slow.
 	if slow.Lagged() == 0 {
 		t.Error("slow subscriber should have lagged but Lagged() = 0")
 	}
@@ -130,24 +132,108 @@ func TestHub_FastSubscriberNotPenalizedBySlowOne(t *testing.T) {
 
 func TestHub_CloseRemovesFromSet(t *testing.T) {
 	h := newTestHub()
-	s := h.Subscribe()
+	s := mustSubscribe(t, h, "alice")
 	if h.SubscriberCount() != 1 {
 		t.Fatalf("count = %d, want 1", h.SubscriberCount())
+	}
+	if h.SubjectCount("alice") != 1 {
+		t.Errorf("SubjectCount(alice) = %d, want 1", h.SubjectCount("alice"))
 	}
 	s.Close()
 	if h.SubscriberCount() != 0 {
 		t.Errorf("count after Close = %d, want 0", h.SubscriberCount())
 	}
-	// Channel is closed — recv yields zero value with ok=false.
+	if h.SubjectCount("alice") != 0 {
+		t.Errorf("SubjectCount(alice) after Close = %d, want 0", h.SubjectCount("alice"))
+	}
 	if _, ok := <-s.Recv(); ok {
 		t.Error("expected closed channel after Close()")
 	}
-	// Double-close must not panic.
+	// Double-close must not panic or affect counters.
 	s.Close()
 }
 
 func TestHub_DispatchWithNoSubscribersIsHarmless(t *testing.T) {
 	h := newTestHub()
-	// No subscribers — dispatch should be a no-op, no panic.
 	h.dispatch(&dto.Momentum{Height: 1})
+}
+
+func TestHub_PerSubjectCap(t *testing.T) {
+	h := New(Config{Logger: zap.NewNop(), ClientBuf: 4, PerSubjectMax: 3})
+	MarkRunningForTest(h)
+
+	subs := make([]*Subscriber, 3)
+	for i := range subs {
+		s, err := h.Subscribe("alice")
+		if err != nil {
+			t.Fatalf("Subscribe alice #%d: %v", i, err)
+		}
+		subs[i] = s
+	}
+	defer func() {
+		for _, s := range subs {
+			s.Close()
+		}
+	}()
+
+	// 4th alice connection should fail.
+	if _, err := h.Subscribe("alice"); !errors.Is(err, ErrTooManyForSubject) {
+		t.Errorf("expected ErrTooManyForSubject; got %v", err)
+	}
+
+	// bob is a different subject — fine.
+	bob, err := h.Subscribe("bob")
+	if err != nil {
+		t.Fatalf("Subscribe bob: %v", err)
+	}
+	defer bob.Close()
+
+	// After closing one alice, a new alice should succeed.
+	subs[0].Close()
+	alice4, err := h.Subscribe("alice")
+	if err != nil {
+		t.Fatalf("Subscribe alice after Close: %v", err)
+	}
+	defer alice4.Close()
+}
+
+func TestHub_StatePending_RejectsSubscribe(t *testing.T) {
+	h := New(Config{Logger: zap.NewNop()})
+	// Don't call MarkRunningForTest — hub is pending.
+	if _, err := h.Subscribe("alice"); !errors.Is(err, ErrHubNotRunning) {
+		t.Errorf("Subscribe on pending hub: got %v, want ErrHubNotRunning", err)
+	}
+	if h.Running() {
+		t.Error("Running() = true on a pending hub")
+	}
+}
+
+func TestHub_StateStopped_DrainsExistingAndRejectsNew(t *testing.T) {
+	h := newTestHub()
+	a := mustSubscribe(t, h, "alice")
+	b := mustSubscribe(t, h, "alice")
+	defer a.Close()
+	defer b.Close()
+
+	MarkStoppedForTest(h) // simulates Run exit
+
+	// Both existing subscribers should see their channels closed.
+	for i, s := range []*Subscriber{a, b} {
+		select {
+		case _, ok := <-s.Recv():
+			if ok {
+				t.Errorf("sub %d: expected closed channel, got value", i)
+			}
+		case <-time.After(100 * time.Millisecond):
+			t.Errorf("sub %d: Recv() did not unblock after hub stopped", i)
+		}
+	}
+
+	// New subscribes are rejected.
+	if _, err := h.Subscribe("alice"); !errors.Is(err, ErrHubNotRunning) {
+		t.Errorf("Subscribe after stop: got %v, want ErrHubNotRunning", err)
+	}
+	if h.Running() {
+		t.Error("Running() = true after MarkStoppedForTest")
+	}
 }

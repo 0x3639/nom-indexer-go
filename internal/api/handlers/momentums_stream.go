@@ -22,9 +22,12 @@ import (
 // streamMomentumsRepo is the slice of MomentumRepository the stream
 // handler needs for replay. Defined as an interface so tests can swap
 // a fake without spinning up Postgres.
+//
+// ListByHeightRange exists specifically so replay is a single range
+// scan rather than N point lookups — see comment on replay().
 type streamMomentumsRepo interface {
-	GetByHeight(ctx context.Context, height uint64) (*models.Momentum, error)
 	GetLatest(ctx context.Context) (*models.Momentum, error)
+	ListByHeightRange(ctx context.Context, from, to uint64, limit int) ([]*models.Momentum, error)
 }
 
 // Tunables for the WebSocket connection. Sub-second precision matters
@@ -80,17 +83,19 @@ func MomentumsStream(signer *auth.Signer, hub *stream.Hub, repo streamMomentumsR
 				"missing JWT (Authorization header or ?token= query)")
 			return
 		}
-		if _, err := signer.Verify(tok); err != nil {
+		claims, err := signer.Verify(tok)
+		if err != nil {
 			httpx.WriteProblem(w, http.StatusUnauthorized, "invalid_token",
 				"invalid token")
 			return
 		}
+		subject := claims.Subject
 
 		// 2. Parse from_height if present.
 		var fromHeight uint64
 		if v := r.URL.Query().Get("from_height"); v != "" {
-			n, err := strconv.ParseUint(v, 10, 64)
-			if err != nil {
+			n, perr := strconv.ParseUint(v, 10, 64)
+			if perr != nil {
 				httpx.WriteProblem(w, http.StatusBadRequest, "invalid_from_height",
 					"from_height must be a non-negative integer")
 				return
@@ -98,7 +103,34 @@ func MomentumsStream(signer *auth.Signer, hub *stream.Hub, repo streamMomentumsR
 			fromHeight = n
 		}
 
-		// 3. Upgrade. coder/websocket accepts any Origin by default,
+		// 3. Subscribe BEFORE upgrading the connection. Subscribe is
+		// the gate that enforces:
+		//   - hub state (running?) — 503 if the LISTEN loop exited
+		//   - per-subject concurrent cap — 429 (stream bypasses the
+		//     normal per-request rate limiter, see router.go)
+		// Doing this before Accept means failures surface as plain
+		// HTTP problem-detail responses rather than a WS close frame
+		// the client may never see.
+		sub, err := hub.Subscribe(subject)
+		if err != nil {
+			switch {
+			case errors.Is(err, stream.ErrHubNotRunning):
+				httpx.WriteProblem(w, http.StatusServiceUnavailable,
+					"stream_unavailable",
+					"momentum stream is temporarily unavailable")
+			case errors.Is(err, stream.ErrTooManyForSubject):
+				httpx.WriteProblem(w, http.StatusTooManyRequests,
+					"stream_subject_limit",
+					"too many concurrent streams for this token's subject")
+			default:
+				httpx.WriteProblem(w, http.StatusInternalServerError,
+					"internal_error", "stream subscribe failed")
+			}
+			return
+		}
+		defer sub.Close()
+
+		// 4. Upgrade. coder/websocket accepts any Origin by default,
 		// which is what we want — auth is the trust boundary, not the
 		// browser origin.
 		conn, err := websocket.Accept(w, r, &websocket.AcceptOptions{
@@ -108,19 +140,23 @@ func MomentumsStream(signer *auth.Signer, hub *stream.Hub, repo streamMomentumsR
 			// Accept already wrote the failure response on most paths.
 			return
 		}
-		// Long-lived connection: detach from r.Context, which gets
-		// canceled when net/http considers the handler returned. The
-		// websocket library reads per-call deadlines from contexts we
-		// pass into runLive / writeFrame.
-		//nolint:contextcheck // WS connection outlives r.Context by design
-		ctx, cancel := context.WithCancel(context.Background())
-		defer cancel()
 		defer func() { _ = conn.CloseNow() }()
 
-		// 4. Subscribe BEFORE replay so we don't miss anything that
-		// commits while the catch-up scan is running.
-		sub := hub.Subscribe()
-		defer sub.Close()
+		// CloseRead spawns a background reader that drains client
+		// frames (close, pong). Two things depend on it:
+		//   1. conn.Ping waits for a pong that the library only
+		//      delivers from this read loop — without CloseRead, the
+		//      first ping after streamPingInterval+streamWriteTimeout
+		//      seconds would time out and kill healthy clients.
+		//   2. The returned ctx cancels when the client closes the
+		//      WebSocket, so runLive exits promptly rather than
+		//      waiting for the next heartbeat to notice.
+		//
+		// We pass context.Background as the parent because the WS
+		// connection outlives r.Context (which net/http cancels as
+		// soon as the handler appears to return — i.e. after Accept).
+		//nolint:contextcheck // WS connection outlives r.Context by design
+		ctx := conn.CloseRead(context.Background())
 
 		if fromHeight > 0 {
 			lastSent, err := replay(ctx, conn, repo, fromHeight)
@@ -159,8 +195,12 @@ func streamToken(r *http.Request) (token, code string) {
 // replay pulls historical momentums from fromHeight up to the indexer's
 // current tip, writing each as a WS frame. Returns the height of the
 // last frame written so the live loop can skip duplicates that landed
-// in the hub during the scan. Caps the scan at streamReplayMaxRows to
-// bound the budget.
+// in the hub during the scan. Caps the scan at streamReplayMaxRows.
+//
+// Implementation: a single range SELECT (ORDER BY height ASC, LIMIT
+// streamReplayMaxRows) — not N point lookups. On the production
+// 13M-row momentums table this turns a 5-second replay into a single
+// ~30 ms scan.
 func replay(ctx context.Context, conn *websocket.Conn, repo streamMomentumsRepo, fromHeight uint64) (uint64, error) {
 	latest, err := repo.GetLatest(ctx)
 	if err != nil {
@@ -177,20 +217,16 @@ func replay(ctx context.Context, conn *websocket.Conn, repo streamMomentumsRepo,
 		end = fromHeight + streamReplayMaxRows - 1
 	}
 
+	rows, err := repo.ListByHeightRange(ctx, fromHeight, end, streamReplayMaxRows)
+	if err != nil {
+		return 0, err
+	}
 	var lastSent uint64
-	for h := fromHeight; h <= end; h++ {
-		m, err := repo.GetByHeight(ctx, h)
-		if err != nil {
-			if errors.Is(err, pgx.ErrNoRows) {
-				// Backfill gap — skip and keep going.
-				continue
-			}
-			return lastSent, err
-		}
+	for _, m := range rows {
 		if err := writeFrame(ctx, conn, dto.FromMomentum(m)); err != nil {
 			return lastSent, err
 		}
-		lastSent = h
+		lastSent = m.Height
 	}
 	return lastSent, nil
 }

@@ -867,8 +867,22 @@ paths:
                 $ref: '#/components/schemas/Problem'
         '401':
           $ref: '#/components/responses/Unauthorized'
+        '429':
+          description: |
+            Per-subject connection cap reached. The hub limits concurrent
+            stream connections per JWT subject (default 8) so a single
+            token cannot monopolize the stream — long-lived WebSockets
+            bypass the standard per-request rate limiter. Reconnect once
+            an existing connection from this subject closes.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
         '503':
-          description: Stream hub is not configured on this API instance.
+          description: |
+            Stream is unavailable. Either the hub is not configured on
+            this API instance (`code: stream_disabled`) or the LISTEN
+            loop has exited / not yet started (`code: stream_unavailable`).
           content:
             application/problem+json:
               schema:

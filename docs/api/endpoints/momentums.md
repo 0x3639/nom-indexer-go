@@ -70,7 +70,19 @@ for the historical gap and reconnect for live.
 | `4000` | `slow_consumer`: dispatch dropped frames. Reconnect with `from_height` of the last height you saw. |
 
 Auth failures during the HTTP upgrade come back as
-`401 application/problem+json`, not as a close code.
+`401 application/problem+json`, not as a close code. Two more
+HTTP-side rejections are possible at upgrade time:
+
+- **`429 stream_subject_limit`** — your JWT subject already has the
+  maximum number of concurrent streams open (default 8). Reconnect
+  once one of your existing connections closes.
+- **`503 stream_unavailable`** — the API process's LISTEN/NOTIFY hub
+  isn't running (DB connectivity blip, indexer not yet migrated).
+  Same payload shape as other problem-detail responses; retry with
+  backoff.
+
+These hit at the HTTP upgrade so the client sees a normal HTTP
+problem body, not a WebSocket close frame.
 
 ### Examples
 

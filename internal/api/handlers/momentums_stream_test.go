@@ -32,11 +32,18 @@ func (f *fakeStreamRepo) GetLatest(_ context.Context) (*models.Momentum, error) 
 	}
 	return f.latest, nil
 }
-func (f *fakeStreamRepo) GetByHeight(_ context.Context, h uint64) (*models.Momentum, error) {
-	if m, ok := f.byH[h]; ok {
-		return m, nil
+
+func (f *fakeStreamRepo) ListByHeightRange(_ context.Context, from, to uint64, limit int) ([]*models.Momentum, error) {
+	var out []*models.Momentum
+	for h := from; h <= to; h++ {
+		if m, ok := f.byH[h]; ok {
+			out = append(out, m)
+			if limit > 0 && len(out) >= limit {
+				break
+			}
+		}
 	}
-	return nil, pgx.ErrNoRows
+	return out, nil
 }
 
 func newStreamHarness(t *testing.T, repo *fakeStreamRepo) (string, *auth.Signer, *stream.Hub, func()) {
@@ -46,6 +53,7 @@ func newStreamHarness(t *testing.T, repo *fakeStreamRepo) (string, *auth.Signer,
 		t.Fatalf("signer: %v", err)
 	}
 	hub := stream.New(stream.Config{Logger: zap.NewNop()})
+	stream.MarkRunningForTest(hub) // bypass the LISTEN loop for handler tests
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("/api/v1/momentums/stream", MomentumsStream(signer, hub, repo))
@@ -225,6 +233,69 @@ func TestStream_ServerShutdownClosesClients(t *testing.T) {
 	// Don't assert the specific error: kernel-level peer reset vs WS
 	// close frame depends on shutdown timing.
 	_ = errors.Is // imports keepalive
+}
+
+// TestStream_HubNotRunningReturns503 covers the case where the LISTEN
+// loop has not started (or has exited). The handler must surface the
+// hub state as a plain HTTP 503 problem-detail, NOT as a successful
+// upgrade that hangs forever.
+func TestStream_HubNotRunningReturns503(t *testing.T) {
+	signer, _ := auth.NewSigner("test-secret-32-bytes-or-longer-okok")
+	hub := stream.New(stream.Config{Logger: zap.NewNop()})
+	// Deliberately do NOT call MarkRunningForTest — hub is pending.
+
+	mux := http.NewServeMux()
+	mux.HandleFunc("/api/v1/momentums/stream", MomentumsStream(signer, hub, &fakeStreamRepo{}))
+	srv := httptest.NewServer(mux)
+	defer srv.Close()
+
+	tok, _ := signer.Issue("anyone", time.Hour, []string{"read"})
+	resp := mustGet(t, srv.URL+"/api/v1/momentums/stream?token="+tok)
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusServiceUnavailable {
+		t.Errorf("status = %d, want 503", resp.StatusCode)
+	}
+}
+
+// TestStream_PerSubjectLimitReturns429 confirms that once a JWT
+// subject hits the hub's per-subject cap, further upgrade requests
+// are rejected with 429 instead of being accepted.
+func TestStream_PerSubjectLimitReturns429(t *testing.T) {
+	signer, _ := auth.NewSigner("test-secret-32-bytes-or-longer-okok")
+	hub := stream.New(stream.Config{Logger: zap.NewNop(), PerSubjectMax: 2})
+	stream.MarkRunningForTest(hub)
+
+	mux := http.NewServeMux()
+	mux.HandleFunc("/api/v1/momentums/stream", MomentumsStream(signer, hub, &fakeStreamRepo{}))
+	srv := httptest.NewServer(mux)
+	defer srv.Close()
+	wsURL := "ws" + strings.TrimPrefix(srv.URL, "http") + "/api/v1/momentums/stream"
+
+	tok, _ := signer.Issue("greedy", time.Hour, []string{"read"})
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+
+	// First two opens succeed.
+	var conns []*websocket.Conn
+	defer func() {
+		for _, c := range conns {
+			c.CloseNow()
+		}
+	}()
+	for i := 0; i < 2; i++ {
+		c, _, err := websocket.Dial(ctx, wsURL+"?token="+tok, nil)
+		if err != nil {
+			t.Fatalf("dial %d: %v", i, err)
+		}
+		conns = append(conns, c)
+	}
+
+	// Third one must be rejected with 429 from the HTTP upgrade.
+	resp := mustGet(t, srv.URL+"/api/v1/momentums/stream?token="+tok)
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusTooManyRequests {
+		t.Errorf("status = %d, want 429", resp.StatusCode)
+	}
 }
 
 // hubDispatch synthesizes a NOTIFY without the postgres round-trip.
