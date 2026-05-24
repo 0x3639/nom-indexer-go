@@ -25,11 +25,12 @@ caller can move between transports without re-learning the data.
   ships as a JSON string. The underlying int64 values regularly exceed
   2^53, so a JS Number would lose precision.
 
-## Status
+## Status + schema
 
 | Tool | Input | Output |
 |---|---|---|
 | `get_status` | — | `dto.Status` — `{latest_height, latest_timestamp, indexer_lag_seconds, version}` |
+| `get_schema_overview` | — | `{version, tables: [{name, domain, purpose, tools}], notes: [string]}` — compact catalog of every indexed table with the tools that read it. Call first to ground tool selection when the question doesn't map to one tool. |
 
 ## Momentums (block headers)
 

@@ -128,7 +128,7 @@ On failure the server returns HTTP 401 with a JSON-RPC error envelope:
 ## Tool catalog
 
 Tools are one-per-logical-query and mirror the REST endpoints — see
-[Tools](tools.md) for the full list. As of v1 there are 30 tools across
+[Tools](tools.md) for the full list. As of v1 there are 31 tools across
 the same domains the REST API surfaces (momentums, accounts, tokens,
 pillars, sentinels, stakes, fusions, projects, rewards, bridge).
 
@@ -138,9 +138,12 @@ transports doesn't require re-learning the data.
 
 ## Resources
 
-v1 ships one resource: [`schema://overview`](resources.md) — a compact
-JSON catalog of every indexed table with the MCP tools that read it.
-LLMs reach for it before choosing a tool.
+v1 advertises **no MCP resources**. The schema catalog formerly served
+at `schema://overview` is now the `get_schema_overview` tool — same
+payload, called by the LLM on demand rather than surfaced as a
+manual-attach affordance in the client UI. See
+[Resources](resources.md) for the rationale and
+[Tools](tools.md#status--schema) for the tool entry.
 
 ## Observability
 

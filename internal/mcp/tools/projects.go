@@ -46,8 +46,8 @@ func registerProjects(srv *mcp.Server, repos *repository.Repositories) {
 	}, listProjectVotes(repos))
 }
 
-func listProjects(repos *repository.Repositories) func(context.Context, *mcp.CallToolRequest, *ListMomentumsParams) (*mcp.CallToolResult, *dto.Page, error) {
-	return func(ctx context.Context, _ *mcp.CallToolRequest, p *ListMomentumsParams) (*mcp.CallToolResult, *dto.Page, error) {
+func listProjects(repos *repository.Repositories) func(context.Context, *mcp.CallToolRequest, *ListMomentumsParams) (*mcp.CallToolResult, any, error) {
+	return func(ctx context.Context, _ *mcp.CallToolRequest, p *ListMomentumsParams) (*mcp.CallToolResult, any, error) {
 		page := pagination(p.pageParams)
 		rows, total, err := repos.Project.List(ctx, repository.ListOpts{
 			Limit:  page.PageSize,
@@ -60,8 +60,8 @@ func listProjects(repos *repository.Repositories) func(context.Context, *mcp.Cal
 	}
 }
 
-func getProject(repos *repository.Repositories) func(context.Context, *mcp.CallToolRequest, *ProjectIDParams) (*mcp.CallToolResult, *dto.Project, error) {
-	return func(ctx context.Context, _ *mcp.CallToolRequest, p *ProjectIDParams) (*mcp.CallToolResult, *dto.Project, error) {
+func getProject(repos *repository.Repositories) func(context.Context, *mcp.CallToolRequest, *ProjectIDParams) (*mcp.CallToolResult, any, error) {
+	return func(ctx context.Context, _ *mcp.CallToolRequest, p *ProjectIDParams) (*mcp.CallToolResult, any, error) {
 		pr, err := repos.Project.GetByID(ctx, p.ID)
 		if err != nil {
 			return nil, nil, err
@@ -75,8 +75,8 @@ type projectPhasesResult struct {
 	Data []*dto.ProjectPhase `json:"data"`
 }
 
-func listProjectPhases(repos *repository.Repositories) func(context.Context, *mcp.CallToolRequest, *ProjectIDParams) (*mcp.CallToolResult, *projectPhasesResult, error) {
-	return func(ctx context.Context, _ *mcp.CallToolRequest, p *ProjectIDParams) (*mcp.CallToolResult, *projectPhasesResult, error) {
+func listProjectPhases(repos *repository.Repositories) func(context.Context, *mcp.CallToolRequest, *ProjectIDParams) (*mcp.CallToolResult, any, error) {
+	return func(ctx context.Context, _ *mcp.CallToolRequest, p *ProjectIDParams) (*mcp.CallToolResult, any, error) {
 		rows, err := repos.ProjectPhase.ListByProject(ctx, p.ID)
 		if err != nil {
 			return nil, nil, err
@@ -85,8 +85,8 @@ func listProjectPhases(repos *repository.Repositories) func(context.Context, *mc
 	}
 }
 
-func listProjectVotes(repos *repository.Repositories) func(context.Context, *mcp.CallToolRequest, *ListProjectVotesParams) (*mcp.CallToolResult, *dto.Page, error) {
-	return func(ctx context.Context, _ *mcp.CallToolRequest, p *ListProjectVotesParams) (*mcp.CallToolResult, *dto.Page, error) {
+func listProjectVotes(repos *repository.Repositories) func(context.Context, *mcp.CallToolRequest, *ListProjectVotesParams) (*mcp.CallToolResult, any, error) {
+	return func(ctx context.Context, _ *mcp.CallToolRequest, p *ListProjectVotesParams) (*mcp.CallToolResult, any, error) {
 		page := pagination(p.pageParams)
 		rows, total, err := repos.Vote.ListByProject(ctx, p.ID, repository.ListOpts{
 			Limit:  page.PageSize,

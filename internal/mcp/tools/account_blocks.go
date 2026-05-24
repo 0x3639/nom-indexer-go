@@ -46,8 +46,8 @@ func registerAccountBlocks(srv *mcp.Server, repos *repository.Repositories) {
 	}, listAccountTransactions(repos))
 }
 
-func listAccountBlocks(repos *repository.Repositories) func(context.Context, *mcp.CallToolRequest, *ListMomentumsParams) (*mcp.CallToolResult, *dto.Page, error) {
-	return func(ctx context.Context, _ *mcp.CallToolRequest, p *ListMomentumsParams) (*mcp.CallToolResult, *dto.Page, error) {
+func listAccountBlocks(repos *repository.Repositories) func(context.Context, *mcp.CallToolRequest, *ListMomentumsParams) (*mcp.CallToolResult, any, error) {
+	return func(ctx context.Context, _ *mcp.CallToolRequest, p *ListMomentumsParams) (*mcp.CallToolResult, any, error) {
 		page := pagination(p.pageParams)
 		rows, total, err := repos.AccountBlock.List(ctx, repository.ListOpts{
 			Limit:  page.PageSize,
@@ -61,8 +61,8 @@ func listAccountBlocks(repos *repository.Repositories) func(context.Context, *mc
 	}
 }
 
-func getAccountBlock(repos *repository.Repositories) func(context.Context, *mcp.CallToolRequest, *HashParams) (*mcp.CallToolResult, *dto.AccountBlock, error) {
-	return func(ctx context.Context, _ *mcp.CallToolRequest, p *HashParams) (*mcp.CallToolResult, *dto.AccountBlock, error) {
+func getAccountBlock(repos *repository.Repositories) func(context.Context, *mcp.CallToolRequest, *HashParams) (*mcp.CallToolResult, any, error) {
+	return func(ctx context.Context, _ *mcp.CallToolRequest, p *HashParams) (*mcp.CallToolResult, any, error) {
 		ab, err := repos.AccountBlock.GetByHash(ctx, p.Hash)
 		if err != nil {
 			return nil, nil, err
@@ -71,8 +71,8 @@ func getAccountBlock(repos *repository.Repositories) func(context.Context, *mcp.
 	}
 }
 
-func listAccountTransactions(repos *repository.Repositories) func(context.Context, *mcp.CallToolRequest, *ListAccountTransactionsParams) (*mcp.CallToolResult, *dto.Page, error) {
-	return func(ctx context.Context, _ *mcp.CallToolRequest, p *ListAccountTransactionsParams) (*mcp.CallToolResult, *dto.Page, error) {
+func listAccountTransactions(repos *repository.Repositories) func(context.Context, *mcp.CallToolRequest, *ListAccountTransactionsParams) (*mcp.CallToolResult, any, error) {
+	return func(ctx context.Context, _ *mcp.CallToolRequest, p *ListAccountTransactionsParams) (*mcp.CallToolResult, any, error) {
 		page := pagination(p.pageParams)
 		rows, total, err := repos.AccountBlock.ListByAddress(ctx, p.Address, repository.ListOpts{
 			Limit:  page.PageSize,

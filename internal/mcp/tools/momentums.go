@@ -46,8 +46,8 @@ func registerMomentums(srv *mcp.Server, repos *repository.Repositories) {
 	}, listMomentums(repos))
 }
 
-func getMomentumByHeight(repos *repository.Repositories) func(context.Context, *mcp.CallToolRequest, *GetMomentumByHeightParams) (*mcp.CallToolResult, *dto.Momentum, error) {
-	return func(ctx context.Context, _ *mcp.CallToolRequest, p *GetMomentumByHeightParams) (*mcp.CallToolResult, *dto.Momentum, error) {
+func getMomentumByHeight(repos *repository.Repositories) func(context.Context, *mcp.CallToolRequest, *GetMomentumByHeightParams) (*mcp.CallToolResult, any, error) {
+	return func(ctx context.Context, _ *mcp.CallToolRequest, p *GetMomentumByHeightParams) (*mcp.CallToolResult, any, error) {
 		m, err := repos.Momentum.GetByHeight(ctx, p.Height)
 		if err != nil {
 			return nil, nil, err
@@ -56,8 +56,8 @@ func getMomentumByHeight(repos *repository.Repositories) func(context.Context, *
 	}
 }
 
-func getLatestMomentum(repos *repository.Repositories) func(context.Context, *mcp.CallToolRequest, *struct{}) (*mcp.CallToolResult, *dto.Momentum, error) {
-	return func(ctx context.Context, _ *mcp.CallToolRequest, _ *struct{}) (*mcp.CallToolResult, *dto.Momentum, error) {
+func getLatestMomentum(repos *repository.Repositories) func(context.Context, *mcp.CallToolRequest, *struct{}) (*mcp.CallToolResult, any, error) {
+	return func(ctx context.Context, _ *mcp.CallToolRequest, _ *struct{}) (*mcp.CallToolResult, any, error) {
 		m, err := repos.Momentum.GetLatest(ctx)
 		if err != nil {
 			return nil, nil, err
@@ -66,8 +66,8 @@ func getLatestMomentum(repos *repository.Repositories) func(context.Context, *mc
 	}
 }
 
-func listMomentums(repos *repository.Repositories) func(context.Context, *mcp.CallToolRequest, *ListMomentumsParams) (*mcp.CallToolResult, *dto.Page, error) {
-	return func(ctx context.Context, _ *mcp.CallToolRequest, p *ListMomentumsParams) (*mcp.CallToolResult, *dto.Page, error) {
+func listMomentums(repos *repository.Repositories) func(context.Context, *mcp.CallToolRequest, *ListMomentumsParams) (*mcp.CallToolResult, any, error) {
+	return func(ctx context.Context, _ *mcp.CallToolRequest, p *ListMomentumsParams) (*mcp.CallToolResult, any, error) {
 		page := pagination(p.pageParams)
 		rows, total, err := repos.Momentum.List(ctx, repository.ListOpts{
 			Limit:  page.PageSize,

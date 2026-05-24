@@ -44,12 +44,12 @@ func registerTokens(srv *mcp.Server, repos *repository.Repositories) {
 	}, listTokenHolders(repos))
 }
 
-func listTokens(repos *repository.Repositories) func(context.Context, *mcp.CallToolRequest, *ListMomentumsParams) (*mcp.CallToolResult, *dto.Page, error) {
+func listTokens(repos *repository.Repositories) func(context.Context, *mcp.CallToolRequest, *ListMomentumsParams) (*mcp.CallToolResult, any, error) {
 	// Reuses ListMomentumsParams' pagination embed (sort isn't honored
 	// for tokens — the order is fixed). We could declare a dedicated
 	// param type, but the pagination shape is identical; keeping one
 	// reduces JSON-Schema noise the LLM has to scan.
-	return func(ctx context.Context, _ *mcp.CallToolRequest, p *ListMomentumsParams) (*mcp.CallToolResult, *dto.Page, error) {
+	return func(ctx context.Context, _ *mcp.CallToolRequest, p *ListMomentumsParams) (*mcp.CallToolResult, any, error) {
 		page := pagination(p.pageParams)
 		rows, total, err := repos.Token.List(ctx, repository.ListOpts{
 			Limit:  page.PageSize,
@@ -62,8 +62,8 @@ func listTokens(repos *repository.Repositories) func(context.Context, *mcp.CallT
 	}
 }
 
-func getToken(repos *repository.Repositories) func(context.Context, *mcp.CallToolRequest, *TokenStandardParams) (*mcp.CallToolResult, *dto.Token, error) {
-	return func(ctx context.Context, _ *mcp.CallToolRequest, p *TokenStandardParams) (*mcp.CallToolResult, *dto.Token, error) {
+func getToken(repos *repository.Repositories) func(context.Context, *mcp.CallToolRequest, *TokenStandardParams) (*mcp.CallToolResult, any, error) {
+	return func(ctx context.Context, _ *mcp.CallToolRequest, p *TokenStandardParams) (*mcp.CallToolResult, any, error) {
 		t, err := repos.Token.GetByStandard(ctx, p.TokenStandard)
 		if err != nil {
 			return nil, nil, err
@@ -72,8 +72,8 @@ func getToken(repos *repository.Repositories) func(context.Context, *mcp.CallToo
 	}
 }
 
-func listTokenHolders(repos *repository.Repositories) func(context.Context, *mcp.CallToolRequest, *TokenHoldersParams) (*mcp.CallToolResult, *dto.Page, error) {
-	return func(ctx context.Context, _ *mcp.CallToolRequest, p *TokenHoldersParams) (*mcp.CallToolResult, *dto.Page, error) {
+func listTokenHolders(repos *repository.Repositories) func(context.Context, *mcp.CallToolRequest, *TokenHoldersParams) (*mcp.CallToolResult, any, error) {
+	return func(ctx context.Context, _ *mcp.CallToolRequest, p *TokenHoldersParams) (*mcp.CallToolResult, any, error) {
 		page := pagination(p.pageParams)
 		rows, total, err := repos.Balance.ListByToken(ctx, p.TokenStandard, repository.ListOpts{
 			Limit:  page.PageSize,

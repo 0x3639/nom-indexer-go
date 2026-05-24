@@ -31,8 +31,8 @@ func registerStatus(srv *mcp.Server, repos *repository.Repositories, version str
 	}, getStatus(repos, version))
 }
 
-func getStatus(repos *repository.Repositories, version string) func(context.Context, *mcp.CallToolRequest, *GetStatusParams) (*mcp.CallToolResult, *dto.Status, error) {
-	return func(ctx context.Context, _ *mcp.CallToolRequest, _ *GetStatusParams) (*mcp.CallToolResult, *dto.Status, error) {
+func getStatus(repos *repository.Repositories, version string) func(context.Context, *mcp.CallToolRequest, *GetStatusParams) (*mcp.CallToolResult, any, error) {
+	return func(ctx context.Context, _ *mcp.CallToolRequest, _ *GetStatusParams) (*mcp.CallToolResult, any, error) {
 		m, err := repos.Momentum.GetLatest(ctx)
 		if errors.Is(err, pgx.ErrNoRows) {
 			return jsonResult(&dto.Status{Version: version})

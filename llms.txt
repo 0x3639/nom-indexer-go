@@ -140,7 +140,7 @@ Hash-formatted flat index of every documentation page, generated from mkdocs.yml
 
 - [Overview](docs/mcp/index.md): The nom-indexer-go MCP server is a [Model Context
 - [Tools](docs/mcp/tools.md): Every tool the [MCP server](index.md) exposes, grouped by domain. Names
-- [Resources](docs/mcp/resources.md): MCP resources are read-only context the LLM can pull before reaching
+- [Resources](docs/mcp/resources.md): **v1 advertises no MCP resources.** All data the server offers is
 - [Setup — Claude Desktop](docs/mcp/setup-claude-desktop.md): Configure Claude Desktop to query the hosted nom-indexer MCP server.
 - [Setup — Claude Code](docs/mcp/setup-claude-code.md): Configure [Claude Code](https://claude.com/claude-code) to query the
 ## Reference

@@ -6,7 +6,6 @@ import (
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 	"go.uber.org/zap"
 
-	"github.com/0x3639/nom-indexer-go/internal/mcp/resources"
 	"github.com/0x3639/nom-indexer-go/internal/mcp/tools"
 	"github.com/0x3639/nom-indexer-go/internal/repository"
 )
@@ -33,9 +32,14 @@ type Deps struct {
 	Middlewares []mcp.Middleware
 }
 
-// New constructs an mcp.Server populated with every tool + resource
-// registered in internal/mcp. The server is transport-agnostic;
-// HTTPHandler wraps it for the Streamable HTTP transport.
+// New constructs an mcp.Server populated with every tool registered
+// in internal/mcp/tools. The server is transport-agnostic; HTTPHandler
+// wraps it for the Streamable HTTP transport.
+//
+// v1 advertises tools only — no MCP resources. The schema catalog
+// formerly served at schema://overview is now the get_schema_overview
+// tool: same payload, but called by the LLM on demand rather than
+// surfaced as a manual-attach affordance in the client UI.
 func New(d Deps) *mcp.Server {
 	version := d.Version
 	if version == "" {
@@ -46,7 +50,6 @@ func New(d Deps) *mcp.Server {
 		Version: implVersion,
 	}, nil)
 	tools.Register(srv, d.Repos, version)
-	resources.Register(srv)
 	if len(d.Middlewares) > 0 {
 		srv.AddReceivingMiddleware(d.Middlewares...)
 	}

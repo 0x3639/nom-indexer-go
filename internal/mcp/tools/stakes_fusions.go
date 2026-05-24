@@ -62,8 +62,8 @@ func registerStakesFusions(srv *mcp.Server, repos *repository.Repositories) {
 	}, listAccountFusions(repos))
 }
 
-func listStakes(repos *repository.Repositories) func(context.Context, *mcp.CallToolRequest, *ListStakesParams) (*mcp.CallToolResult, *dto.Page, error) {
-	return func(ctx context.Context, _ *mcp.CallToolRequest, p *ListStakesParams) (*mcp.CallToolResult, *dto.Page, error) {
+func listStakes(repos *repository.Repositories) func(context.Context, *mcp.CallToolRequest, *ListStakesParams) (*mcp.CallToolResult, any, error) {
+	return func(ctx context.Context, _ *mcp.CallToolRequest, p *ListStakesParams) (*mcp.CallToolResult, any, error) {
 		page := pagination(p.pageParams)
 		rows, total, err := repos.Stake.List(ctx, !p.IncludeInactive, repository.ListOpts{
 			Limit:  page.PageSize,
@@ -76,8 +76,8 @@ func listStakes(repos *repository.Repositories) func(context.Context, *mcp.CallT
 	}
 }
 
-func listAccountStakes(repos *repository.Repositories) func(context.Context, *mcp.CallToolRequest, *ListAccountStakesParams) (*mcp.CallToolResult, *dto.Page, error) {
-	return func(ctx context.Context, _ *mcp.CallToolRequest, p *ListAccountStakesParams) (*mcp.CallToolResult, *dto.Page, error) {
+func listAccountStakes(repos *repository.Repositories) func(context.Context, *mcp.CallToolRequest, *ListAccountStakesParams) (*mcp.CallToolResult, any, error) {
+	return func(ctx context.Context, _ *mcp.CallToolRequest, p *ListAccountStakesParams) (*mcp.CallToolResult, any, error) {
 		page := pagination(p.pageParams)
 		rows, total, err := repos.Stake.ListByAddress(ctx, p.Address, !p.IncludeInactive, repository.ListOpts{
 			Limit:  page.PageSize,
@@ -90,8 +90,8 @@ func listAccountStakes(repos *repository.Repositories) func(context.Context, *mc
 	}
 }
 
-func listFusions(repos *repository.Repositories) func(context.Context, *mcp.CallToolRequest, *ListFusionsParams) (*mcp.CallToolResult, *dto.Page, error) {
-	return func(ctx context.Context, _ *mcp.CallToolRequest, p *ListFusionsParams) (*mcp.CallToolResult, *dto.Page, error) {
+func listFusions(repos *repository.Repositories) func(context.Context, *mcp.CallToolRequest, *ListFusionsParams) (*mcp.CallToolResult, any, error) {
+	return func(ctx context.Context, _ *mcp.CallToolRequest, p *ListFusionsParams) (*mcp.CallToolResult, any, error) {
 		page := pagination(p.pageParams)
 		rows, total, err := repos.Fusion.List(ctx, !p.IncludeInactive, repository.ListOpts{
 			Limit:  page.PageSize,
@@ -104,8 +104,8 @@ func listFusions(repos *repository.Repositories) func(context.Context, *mcp.Call
 	}
 }
 
-func listAccountFusions(repos *repository.Repositories) func(context.Context, *mcp.CallToolRequest, *ListAccountFusionsParams) (*mcp.CallToolResult, *dto.Page, error) {
-	return func(ctx context.Context, _ *mcp.CallToolRequest, p *ListAccountFusionsParams) (*mcp.CallToolResult, *dto.Page, error) {
+func listAccountFusions(repos *repository.Repositories) func(context.Context, *mcp.CallToolRequest, *ListAccountFusionsParams) (*mcp.CallToolResult, any, error) {
+	return func(ctx context.Context, _ *mcp.CallToolRequest, p *ListAccountFusionsParams) (*mcp.CallToolResult, any, error) {
 		page := pagination(p.pageParams)
 		rows, total, err := repos.Fusion.ListByAddress(ctx, p.Address, !p.IncludeInactive, repository.ListOpts{
 			Limit:  page.PageSize,

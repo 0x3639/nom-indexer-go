@@ -43,8 +43,8 @@ func registerBridge(srv *mcp.Server, repos *repository.Repositories) {
 	}, listAccountBridgeUnwraps(repos))
 }
 
-func listBridgeWraps(repos *repository.Repositories) func(context.Context, *mcp.CallToolRequest, *ListMomentumsParams) (*mcp.CallToolResult, *dto.Page, error) {
-	return func(ctx context.Context, _ *mcp.CallToolRequest, p *ListMomentumsParams) (*mcp.CallToolResult, *dto.Page, error) {
+func listBridgeWraps(repos *repository.Repositories) func(context.Context, *mcp.CallToolRequest, *ListMomentumsParams) (*mcp.CallToolResult, any, error) {
+	return func(ctx context.Context, _ *mcp.CallToolRequest, p *ListMomentumsParams) (*mcp.CallToolResult, any, error) {
 		page := pagination(p.pageParams)
 		rows, total, err := repos.Bridge.ListWraps(ctx, repository.ListOpts{
 			Limit:  page.PageSize,
@@ -57,8 +57,8 @@ func listBridgeWraps(repos *repository.Repositories) func(context.Context, *mcp.
 	}
 }
 
-func listBridgeUnwraps(repos *repository.Repositories) func(context.Context, *mcp.CallToolRequest, *ListMomentumsParams) (*mcp.CallToolResult, *dto.Page, error) {
-	return func(ctx context.Context, _ *mcp.CallToolRequest, p *ListMomentumsParams) (*mcp.CallToolResult, *dto.Page, error) {
+func listBridgeUnwraps(repos *repository.Repositories) func(context.Context, *mcp.CallToolRequest, *ListMomentumsParams) (*mcp.CallToolResult, any, error) {
+	return func(ctx context.Context, _ *mcp.CallToolRequest, p *ListMomentumsParams) (*mcp.CallToolResult, any, error) {
 		page := pagination(p.pageParams)
 		rows, total, err := repos.Bridge.ListUnwraps(ctx, repository.ListOpts{
 			Limit:  page.PageSize,
@@ -71,8 +71,8 @@ func listBridgeUnwraps(repos *repository.Repositories) func(context.Context, *mc
 	}
 }
 
-func listAccountBridgeWraps(repos *repository.Repositories) func(context.Context, *mcp.CallToolRequest, *ListAccountBridgeParams) (*mcp.CallToolResult, *dto.Page, error) {
-	return func(ctx context.Context, _ *mcp.CallToolRequest, p *ListAccountBridgeParams) (*mcp.CallToolResult, *dto.Page, error) {
+func listAccountBridgeWraps(repos *repository.Repositories) func(context.Context, *mcp.CallToolRequest, *ListAccountBridgeParams) (*mcp.CallToolResult, any, error) {
+	return func(ctx context.Context, _ *mcp.CallToolRequest, p *ListAccountBridgeParams) (*mcp.CallToolResult, any, error) {
 		page := pagination(p.pageParams)
 		rows, total, err := repos.Bridge.ListWrapsByAddress(ctx, p.Address, repository.ListOpts{
 			Limit:  page.PageSize,
@@ -85,8 +85,8 @@ func listAccountBridgeWraps(repos *repository.Repositories) func(context.Context
 	}
 }
 
-func listAccountBridgeUnwraps(repos *repository.Repositories) func(context.Context, *mcp.CallToolRequest, *ListAccountBridgeParams) (*mcp.CallToolResult, *dto.Page, error) {
-	return func(ctx context.Context, _ *mcp.CallToolRequest, p *ListAccountBridgeParams) (*mcp.CallToolResult, *dto.Page, error) {
+func listAccountBridgeUnwraps(repos *repository.Repositories) func(context.Context, *mcp.CallToolRequest, *ListAccountBridgeParams) (*mcp.CallToolResult, any, error) {
+	return func(ctx context.Context, _ *mcp.CallToolRequest, p *ListAccountBridgeParams) (*mcp.CallToolResult, any, error) {
 		page := pagination(p.pageParams)
 		rows, total, err := repos.Bridge.ListUnwrapsByAddress(ctx, p.Address, repository.ListOpts{
 			Limit:  page.PageSize,

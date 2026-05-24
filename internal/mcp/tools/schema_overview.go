@@ -1,81 +1,57 @@
-// Package resources owns the MCP resources exposed by the server.
-// Resources differ from tools in that they are read-only data the LLM
-// can pull as context — useful for grounding tool selection in the
-// underlying data model.
-//
-// v1 ships one resource: schema://overview, a compact JSON catalog
-// of every table the indexer fills. LLMs reach for it before choosing
-// a tool when the user's question doesn't obviously map to one.
-package resources
+package tools
 
 import (
 	"context"
-	"encoding/json"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
+
+	"github.com/0x3639/nom-indexer-go/internal/repository"
 )
 
-// SchemaOverviewURI is the canonical URI for the schema overview resource.
-// Hand to clients so they can request it explicitly via resources/read.
-const SchemaOverviewURI = "schema://overview"
-
-// table is one row of the schema overview catalog. The MCP tools that
-// read a table are listed in `Tools` so an LLM can map a table back to
-// the tool surface without re-reading the tool catalog.
-type table struct {
+// schemaTable is one row of the catalog. The MCP tools that read a
+// table are listed in `Tools` so an LLM can map a table back to the
+// tool surface without re-reading the tool catalog.
+type schemaTable struct {
 	Name    string   `json:"name"`
 	Domain  string   `json:"domain"`
 	Purpose string   `json:"purpose"`
 	Tools   []string `json:"tools,omitempty"`
 }
 
-// overview is the wire shape returned by schema://overview. Kept small
-// (~3 KB serialized) so an LLM can pull the whole thing into context
-// cheaply.
-type overview struct {
-	Version int      `json:"version"`
-	Tables  []table  `json:"tables"`
-	Notes   []string `json:"notes"`
+// schemaOverview is the wire shape returned by get_schema_overview.
+// Kept small (~3 KB serialized) so an LLM can pull the whole thing
+// into context cheaply.
+type schemaOverview struct {
+	Version int           `json:"version"`
+	Tables  []schemaTable `json:"tables"`
+	Notes   []string      `json:"notes"`
 }
 
-// Register adds every resource to srv.
-func Register(srv *mcp.Server) {
-	srv.AddResource(&mcp.Resource{
-		Name:        "schema_overview",
-		Title:       "Schema overview",
-		URI:         SchemaOverviewURI,
-		MIMEType:    "application/json",
-		Description: "Compact catalog of every Postgres table the indexer fills, with the MCP tools that read each one. Pull this first to ground tool selection.",
-	}, schemaOverviewHandler)
+func registerSchemaOverview(srv *mcp.Server, _ *repository.Repositories) {
+	mcp.AddTool(srv, &mcp.Tool{
+		Name: "get_schema_overview",
+		Description: "Compact catalog of every Postgres table the indexer fills, with the " +
+			"MCP tools that read each one. Call this first when the user's question doesn't " +
+			"obviously map to a single tool — it grounds tool selection in the data model. " +
+			"Returns {version, tables: [{name, domain, purpose, tools}], notes: [string]}.",
+	}, getSchemaOverview())
 }
 
-func schemaOverviewHandler(_ context.Context, req *mcp.ReadResourceRequest) (*mcp.ReadResourceResult, error) {
-	body, err := json.Marshal(schemaOverview())
-	if err != nil {
-		return nil, err
+func getSchemaOverview() func(context.Context, *mcp.CallToolRequest, *struct{}) (*mcp.CallToolResult, any, error) {
+	return func(_ context.Context, _ *mcp.CallToolRequest, _ *struct{}) (*mcp.CallToolResult, any, error) {
+		return jsonResult(catalog())
 	}
-	uri := SchemaOverviewURI
-	if req != nil && req.Params != nil && req.Params.URI != "" {
-		uri = req.Params.URI
-	}
-	return &mcp.ReadResourceResult{
-		Contents: []*mcp.ResourceContents{{
-			URI:      uri,
-			MIMEType: "application/json",
-			Text:     string(body),
-		}},
-	}, nil
 }
 
-// schemaOverview is the canonical catalog. Keep table names + domains
-// aligned with docs/schema/index.md. Tools come from
-// internal/mcp/tools/register.go. When either side gains a new entry,
-// update this list — there is intentionally no auto-derivation: this
-// is the LLM-facing summary and benefits from human-curated phrasing.
-func schemaOverview() overview {
-	return overview{
+// catalog is the canonical schema overview. Keep table names + domains
+// aligned with docs/schema/index.md. Tools come from register.go. When
+// either side gains a new entry, update this list — there is
+// intentionally no auto-derivation: this is the LLM-facing summary
+// and benefits from human-curated phrasing.
+func catalog() schemaOverview {
+	return schemaOverview{
 		Version: 1,
-		Tables: []table{
+		Tables: []schemaTable{
 			// Core ledger
 			{Name: "momentums", Domain: "core_ledger", Purpose: "Block headers indexed by height.",
 				Tools: []string{"get_momentum_by_height", "get_latest_momentum", "list_momentums", "get_status"}},

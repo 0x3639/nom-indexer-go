@@ -25,8 +25,8 @@ func registerSentinels(srv *mcp.Server, repos *repository.Repositories) {
 	}, listSentinels(repos))
 }
 
-func listSentinels(repos *repository.Repositories) func(context.Context, *mcp.CallToolRequest, *ListSentinelsParams) (*mcp.CallToolResult, *dto.Page, error) {
-	return func(ctx context.Context, _ *mcp.CallToolRequest, p *ListSentinelsParams) (*mcp.CallToolResult, *dto.Page, error) {
+func listSentinels(repos *repository.Repositories) func(context.Context, *mcp.CallToolRequest, *ListSentinelsParams) (*mcp.CallToolResult, any, error) {
+	return func(ctx context.Context, _ *mcp.CallToolRequest, p *ListSentinelsParams) (*mcp.CallToolResult, any, error) {
 		page := pagination(p.pageParams)
 		activeOnly := !p.IncludeInactive
 		rows, total, err := repos.Sentinel.List(ctx, activeOnly, repository.ListOpts{

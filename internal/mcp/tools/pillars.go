@@ -51,8 +51,8 @@ func registerPillars(srv *mcp.Server, repos *repository.Repositories) {
 	}, listPillarDelegators(repos))
 }
 
-func listPillars(repos *repository.Repositories) func(context.Context, *mcp.CallToolRequest, *ListPillarsParams) (*mcp.CallToolResult, *dto.Page, error) {
-	return func(ctx context.Context, _ *mcp.CallToolRequest, p *ListPillarsParams) (*mcp.CallToolResult, *dto.Page, error) {
+func listPillars(repos *repository.Repositories) func(context.Context, *mcp.CallToolRequest, *ListPillarsParams) (*mcp.CallToolResult, any, error) {
+	return func(ctx context.Context, _ *mcp.CallToolRequest, p *ListPillarsParams) (*mcp.CallToolResult, any, error) {
 		page := pagination(p.pageParams)
 		rows, total, err := repos.Pillar.List(ctx, p.IncludeRevoked, repository.ListOpts{
 			Limit:  page.PageSize,
@@ -65,8 +65,8 @@ func listPillars(repos *repository.Repositories) func(context.Context, *mcp.Call
 	}
 }
 
-func getPillarByName(repos *repository.Repositories) func(context.Context, *mcp.CallToolRequest, *PillarNameParams) (*mcp.CallToolResult, *dto.Pillar, error) {
-	return func(ctx context.Context, _ *mcp.CallToolRequest, p *PillarNameParams) (*mcp.CallToolResult, *dto.Pillar, error) {
+func getPillarByName(repos *repository.Repositories) func(context.Context, *mcp.CallToolRequest, *PillarNameParams) (*mcp.CallToolResult, any, error) {
+	return func(ctx context.Context, _ *mcp.CallToolRequest, p *PillarNameParams) (*mcp.CallToolResult, any, error) {
 		pillar, err := repos.Pillar.GetByName(ctx, p.Name)
 		if err != nil {
 			return nil, nil, err
@@ -75,8 +75,8 @@ func getPillarByName(repos *repository.Repositories) func(context.Context, *mcp.
 	}
 }
 
-func listPillarDelegators(repos *repository.Repositories) func(context.Context, *mcp.CallToolRequest, *ListPillarDelegatorsParams) (*mcp.CallToolResult, *dto.Page, error) {
-	return func(ctx context.Context, _ *mcp.CallToolRequest, p *ListPillarDelegatorsParams) (*mcp.CallToolResult, *dto.Page, error) {
+func listPillarDelegators(repos *repository.Repositories) func(context.Context, *mcp.CallToolRequest, *ListPillarDelegatorsParams) (*mcp.CallToolResult, any, error) {
+	return func(ctx context.Context, _ *mcp.CallToolRequest, p *ListPillarDelegatorsParams) (*mcp.CallToolResult, any, error) {
 		// Mirror the REST handler: resolve name → owner first so a bad
 		// pillar name surfaces as a clean 404, not an empty list.
 		pillar, err := repos.Pillar.GetByName(ctx, p.Name)

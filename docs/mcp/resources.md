@@ -1,114 +1,37 @@
 # MCP resources
 
-MCP resources are read-only context the LLM can pull before reaching
-for [tools](tools.md) — useful for grounding tool selection in the
-underlying data model. v1 ships one resource.
+**v1 advertises no MCP resources.** All data the server offers is
+exposed through [tools](tools.md). The schema catalog that earlier
+revisions served at `schema://overview` is now the
+[`get_schema_overview`](tools.md#status--schema) tool — same payload,
+called by the LLM on demand.
 
-## `schema://overview`
+## Why no resources?
 
-Compact JSON catalog of every Postgres table the indexer fills, with
-the MCP tools that read each one. Pull this first when the user's
-question doesn't obviously map to one tool.
+MCP has two ways to surface data: **tools** (LLM-callable functions)
+and **resources** (read-only context blobs the user or LLM can attach).
+The two render differently in clients — Claude Desktop, for example,
+shows resources as a separate submenu inside the connector picker,
+distinct from the per-tool toggles. For a query-only server like
+nom-indexer that has nothing the user needs to manually attach, the
+extra UI affordance was confusing rather than helpful: it suggested
+nom-indexer was set up differently from other connectors when in fact
+the data was simply being exposed twice.
 
-| | |
-|---|---|
-| URI | `schema://overview` |
-| MIME type | `application/json` |
-| Size | ~3 KB |
-| Backed by | Hand-curated literal in `internal/mcp/resources/schema.go` |
+Converting the schema catalog to a tool:
 
-### Wire shape
-
-```json
-{
-  "version": 1,
-  "tables": [
-    {
-      "name": "momentums",
-      "domain": "core_ledger",
-      "purpose": "Block headers indexed by height.",
-      "tools": ["get_momentum_by_height", "get_latest_momentum", "list_momentums", "get_status"]
-    }
-    // ... 28 more rows
-  ],
-  "notes": [
-    "All amounts/balances/supplies are int64 (BIGINT) — JSON-encoded as strings to dodge JavaScript Number precision loss.",
-    "All timestamps are Unix seconds (BIGINT).",
-    "All hashes and addresses are lowercase hex/zenon strings.",
-    "No foreign keys: joins are by hash/address/standard. The indexer writes per momentum in a transaction."
-  ]
-}
-```
-
-### Domains
-
-Tables are bucketed into seven domains; one row per table:
-
-- `core_ledger` — momentums, account_blocks, accounts, balances,
-  tokens, token_mints, token_burns
-- `pillars` — pillars, pillar_updates, delegations
-- `sentinels_stakes_plasma` — sentinels, stakes, fusions
-- `accelerator_z` — projects, project_phases, votes
-- `rewards` — reward_transactions, cumulative_rewards
-- `bridge` — wrap_token_requests, unwrap_token_requests, bridge_*
-- `daily_snapshots` — network/token/pillar/bridge stat histories
-
-### Reading the resource
-
-In a real MCP client (Claude Desktop, Claude Code) the resource is
-auto-discovered via `resources/list` and pulled on demand. By hand:
-
-```bash
-TOKEN="paste your token"
-HEADERS="$(mktemp)"
-
-curl -sS -D "$HEADERS" -o /tmp/nom-mcp-init.out \
-     -X POST http://localhost:8081/mcp \
-     -H "Authorization: Bearer $TOKEN" \
-     -H "Content-Type: application/json" \
-     -H "Accept: application/json, text/event-stream" \
-     -d '{"jsonrpc":"2.0","id":1,"method":"initialize",
-          "params":{"protocolVersion":"2025-06-18",
-                    "capabilities":{},
-                    "clientInfo":{"name":"smoke","version":"0"}}}'
-SESSION="$(awk 'tolower($1)=="mcp-session-id:" {gsub("\r","",$2); print $2}' "$HEADERS")"
-
-curl -sS -X POST http://localhost:8081/mcp \
-     -H "Authorization: Bearer $TOKEN" \
-     -H "Mcp-Session-Id: $SESSION" \
-     -H "MCP-Protocol-Version: 2025-06-18" \
-     -H "Content-Type: application/json" \
-     -H "Accept: application/json, text/event-stream" \
-     -d '{"jsonrpc":"2.0","method":"notifications/initialized"}'
-
-curl -sS -X POST http://localhost:8081/mcp \
-     -H "Authorization: Bearer $TOKEN" \
-     -H "Mcp-Session-Id: $SESSION" \
-     -H "MCP-Protocol-Version: 2025-06-18" \
-     -H "Content-Type: application/json" \
-     -H "Accept: application/json, text/event-stream" \
-     -d '{"jsonrpc":"2.0","id":2,"method":"resources/read",
-          "params":{"uri":"schema://overview"}}'
-```
-
-### Keeping it current
-
-The catalog is hand-curated rather than auto-derived: it's
-LLM-facing and benefits from concise phrasing. When the schema gains
-a new table OR the tool catalog changes, update both
-`internal/mcp/resources/schema.go` AND this page. A test in
-`internal/mcp/resources/schema_test.go` asserts that a representative
-sample of tables is present, but it does not catch a missing entry —
-the linter will not nag you if you forget. The cross-link to the
-canonical schema reference is [docs/schema/](../schema/index.md).
+- keeps the LLM-on-demand pattern that actually mattered (the LLM
+  reaches for it when grounding tool selection),
+- removes the manual-attach UI noise,
+- folds the schema catalog into the same per-tool metrics + auth path
+  the other 30 tools already use.
 
 ## Future resources
 
-These have not been built; see [Known issues](../reference/known-issues.md)
-for the full deferral list.
-
-- `docs://migrations` — a flat catalog of migrations + their semantics,
-  useful when the LLM is reasoning about whether a column exists yet.
-- `schema://table/<name>` — per-table deep dive with column types,
-  index hints, and gotchas (the same content the docs/schema/ pages
-  render in MkDocs, but in MCP form).
+If a future iteration ships data that genuinely benefits from
+user-driven attachment (e.g. a per-table schema fragment to drop into
+a conversation as context, or a snapshot file too large to fit in a
+single tool call), the resource layer is easy to add back — the SDK
+supports it directly via `srv.AddResource(...)`. See
+[Known issues](../reference/known-issues.md) for the current deferral
+list.

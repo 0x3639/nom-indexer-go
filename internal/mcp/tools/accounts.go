@@ -32,8 +32,8 @@ func registerAccounts(srv *mcp.Server, repos *repository.Repositories) {
 	}, listAccountBalances(repos))
 }
 
-func getAccount(repos *repository.Repositories) func(context.Context, *mcp.CallToolRequest, *AddressParams) (*mcp.CallToolResult, *dto.Account, error) {
-	return func(ctx context.Context, _ *mcp.CallToolRequest, p *AddressParams) (*mcp.CallToolResult, *dto.Account, error) {
+func getAccount(repos *repository.Repositories) func(context.Context, *mcp.CallToolRequest, *AddressParams) (*mcp.CallToolResult, any, error) {
+	return func(ctx context.Context, _ *mcp.CallToolRequest, p *AddressParams) (*mcp.CallToolResult, any, error) {
 		a, err := repos.Account.GetByAddress(ctx, p.Address)
 		if err != nil {
 			return nil, nil, err
@@ -49,8 +49,8 @@ type listAccountBalancesResult struct {
 	Data []*dto.Balance `json:"data"`
 }
 
-func listAccountBalances(repos *repository.Repositories) func(context.Context, *mcp.CallToolRequest, *AddressParams) (*mcp.CallToolResult, *listAccountBalancesResult, error) {
-	return func(ctx context.Context, _ *mcp.CallToolRequest, p *AddressParams) (*mcp.CallToolResult, *listAccountBalancesResult, error) {
+func listAccountBalances(repos *repository.Repositories) func(context.Context, *mcp.CallToolRequest, *AddressParams) (*mcp.CallToolResult, any, error) {
+	return func(ctx context.Context, _ *mcp.CallToolRequest, p *AddressParams) (*mcp.CallToolResult, any, error) {
 		rows, err := repos.Balance.ListByAddress(ctx, p.Address)
 		if err != nil {
 			return nil, nil, err

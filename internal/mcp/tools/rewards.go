@@ -33,8 +33,8 @@ func registerRewards(srv *mcp.Server, repos *repository.Repositories) {
 	}, getAccountCumulativeRewards(repos))
 }
 
-func listAccountRewards(repos *repository.Repositories) func(context.Context, *mcp.CallToolRequest, *ListAccountRewardsParams) (*mcp.CallToolResult, *dto.Page, error) {
-	return func(ctx context.Context, _ *mcp.CallToolRequest, p *ListAccountRewardsParams) (*mcp.CallToolResult, *dto.Page, error) {
+func listAccountRewards(repos *repository.Repositories) func(context.Context, *mcp.CallToolRequest, *ListAccountRewardsParams) (*mcp.CallToolResult, any, error) {
+	return func(ctx context.Context, _ *mcp.CallToolRequest, p *ListAccountRewardsParams) (*mcp.CallToolResult, any, error) {
 		page := pagination(p.pageParams)
 		rows, total, err := repos.Reward.HistoryByAddress(ctx, p.Address, repository.ListOpts{
 			Limit:  page.PageSize,
@@ -52,8 +52,8 @@ type cumulativeRewardsResult struct {
 	Data []*dto.CumulativeReward `json:"data"`
 }
 
-func getAccountCumulativeRewards(repos *repository.Repositories) func(context.Context, *mcp.CallToolRequest, *AddressParams) (*mcp.CallToolResult, *cumulativeRewardsResult, error) {
-	return func(ctx context.Context, _ *mcp.CallToolRequest, p *AddressParams) (*mcp.CallToolResult, *cumulativeRewardsResult, error) {
+func getAccountCumulativeRewards(repos *repository.Repositories) func(context.Context, *mcp.CallToolRequest, *AddressParams) (*mcp.CallToolResult, any, error) {
+	return func(ctx context.Context, _ *mcp.CallToolRequest, p *AddressParams) (*mcp.CallToolResult, any, error) {
 		rows, err := repos.Reward.CumulativeByAddress(ctx, p.Address)
 		if err != nil {
 			return nil, nil, err
