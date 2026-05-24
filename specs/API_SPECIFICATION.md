@@ -15,7 +15,7 @@
 > strategy) that produced the v1 API. Treat it as an architecture
 > decision record, not as the API contract.
 >
-> For the schema that any future API will sit on top of, see
+> For the schema that the REST API reads directly, see
 > [`docs/schema/`](../docs/schema/index.md).
 
 This document provides everything needed to build a REST API layer for the nom-indexer-go database using Go and Gin.

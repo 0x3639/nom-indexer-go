@@ -15,8 +15,8 @@ versions and major doc/code milestones.
   generators and CI checks to keep committed copies in sync.
 - Per-package `doc.go` files in every `internal/*` package.
 - `CONTRIBUTING.md` at the repo root.
-- `docs/api/` and `docs/mcp/` stub trees reserving slots for the
-  forthcoming REST API and MCP server.
+- `docs/api/` live REST API reference (OpenAPI 3.1 + Swagger UI) and
+  `docs/mcp/` stub tree reserving a slot for the forthcoming MCP server.
 
 ### Schema
 
