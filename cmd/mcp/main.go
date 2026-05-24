@@ -26,11 +26,13 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/modelcontextprotocol/go-sdk/mcp"
 	"go.uber.org/zap"
 
 	"github.com/0x3639/nom-indexer-go/internal/auth"
 	"github.com/0x3639/nom-indexer-go/internal/config"
 	"github.com/0x3639/nom-indexer-go/internal/database"
+	mcpmetrics "github.com/0x3639/nom-indexer-go/internal/mcp/metrics"
 	mcpserver "github.com/0x3639/nom-indexer-go/internal/mcp/server"
 	"github.com/0x3639/nom-indexer-go/internal/repository"
 )
@@ -72,15 +74,23 @@ func main() {
 		logger.Fatal("failed to initialize JWT signer", zap.Error(err))
 	}
 
+	m := mcpmetrics.New()
+
 	srv := mcpserver.New(mcpserver.Deps{
-		Repos:  repos,
-		Logger: logger,
+		Repos:       repos,
+		Logger:      logger,
+		Middlewares: []mcp.Middleware{m.Middleware()},
 	})
 	handler := mcpserver.Auth(signer)(mcpserver.HTTPHandler(srv))
 
 	mux := http.NewServeMux()
 	mux.Handle("/mcp", handler)
 	mux.Handle("/mcp/", handler)
+	// Health probes live on the public MCP listener (not the metrics
+	// listener) so external load balancers and k8s probes hit the same
+	// port the JWT-protected MCP endpoint serves. Both are unauthenticated.
+	mux.HandleFunc("/healthz", mcpserver.Healthz)
+	mux.Handle("/readyz", mcpserver.Readyz(pool))
 
 	mcpHTTP := &http.Server{
 		Addr:              fmt.Sprintf(":%d", cfg.MCP.Port),
@@ -92,14 +102,28 @@ func main() {
 		IdleTimeout: 2 * time.Minute,
 	}
 
+	metricsMux := http.NewServeMux()
+	metricsMux.Handle("/metrics", m.Handler())
+	metricsSrv := &http.Server{
+		Addr:              fmt.Sprintf(":%d", cfg.MCP.MetricsPort),
+		Handler:           metricsMux,
+		ReadHeaderTimeout: 5 * time.Second,
+	}
+
 	ctx, cancel := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer cancel()
 
-	errCh := make(chan error, 1)
+	errCh := make(chan error, 2)
 	go func() {
 		logger.Info("MCP listening", zap.String("addr", mcpHTTP.Addr), zap.String("version", version))
 		if err := mcpHTTP.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
 			errCh <- fmt.Errorf("mcp server: %w", err)
+		}
+	}()
+	go func() {
+		logger.Info("metrics listening", zap.String("addr", metricsSrv.Addr))
+		if err := metricsSrv.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
+			errCh <- fmt.Errorf("metrics server: %w", err)
 		}
 	}()
 
@@ -114,6 +138,9 @@ func main() {
 	defer shutdownCancel()
 	if err := mcpHTTP.Shutdown(shutdownCtx); err != nil {
 		logger.Warn("graceful shutdown failed", zap.Error(err))
+	}
+	if err := metricsSrv.Shutdown(shutdownCtx); err != nil {
+		logger.Warn("metrics graceful shutdown failed", zap.Error(err))
 	}
 	logger.Info("MCP stopped")
 }

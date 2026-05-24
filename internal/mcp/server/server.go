@@ -6,6 +6,7 @@ import (
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 	"go.uber.org/zap"
 
+	"github.com/0x3639/nom-indexer-go/internal/mcp/resources"
 	"github.com/0x3639/nom-indexer-go/internal/mcp/tools"
 	"github.com/0x3639/nom-indexer-go/internal/repository"
 )
@@ -22,17 +23,26 @@ const (
 type Deps struct {
 	Repos  *repository.Repositories
 	Logger *zap.Logger
+	// Middlewares are applied to the MCP receiving handler before any
+	// tool/resource handler runs. Used to attach the metrics observer
+	// (per-tool counter + duration histogram). Order matches the order
+	// AddReceivingMiddleware applies them: first middleware wraps last.
+	Middlewares []mcp.Middleware
 }
 
-// New constructs an mcp.Server populated with every tool registered in
-// internal/mcp/tools. The server is transport-agnostic; HTTPHandler
-// and StdioHandler wrap it for the two transports.
+// New constructs an mcp.Server populated with every tool + resource
+// registered in internal/mcp. The server is transport-agnostic;
+// HTTPHandler wraps it for the Streamable HTTP transport.
 func New(d Deps) *mcp.Server {
 	srv := mcp.NewServer(&mcp.Implementation{
 		Name:    implName,
 		Version: implVersion,
 	}, nil)
 	tools.Register(srv, d.Repos)
+	resources.Register(srv)
+	if len(d.Middlewares) > 0 {
+		srv.AddReceivingMiddleware(d.Middlewares...)
+	}
 	return srv
 }
 
