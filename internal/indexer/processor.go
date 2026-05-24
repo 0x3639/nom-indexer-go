@@ -170,12 +170,10 @@ func queueMomentumNotify(batch *pgx.Batch, m *models.Momentum) error {
 // Payload field names mirror dto.AccountBlock so the stream hub can
 // json.Unmarshal directly. Amount is stringified (matches the REST DTO
 // convention; int64 transfers can exceed 2^53). Input is included if
-// txData decoded a method; large inputs (contract calls) push payload
-// size — Postgres caps NOTIFY at 8 KB, which is comfortable for the
-// typical transfer block but contract calls with very large argument
-// lists could overflow. In that case the NOTIFY is dropped (logged
-// indexer-side) and the live frame is lost; the WS client's normal
-// reconnect-with-from_height path fills the gap via REST replay.
+// txData decoded a method. Large inputs (contract calls) can push the
+// payload over Postgres' 8 KB NOTIFY cap; when that happens we omit
+// bulky optional fields (input, then data) and still stream the core
+// account-block frame.
 func queueAccountBlockNotify(batch *pgx.Batch, ab *models.AccountBlock, txData *models.TxData) error {
 	// Build snake_case payload manually because models.AccountBlock has
 	// no json tags. Amount stringified to match dto.AccountBlock wire
@@ -193,7 +191,7 @@ func queueAccountBlockNotify(batch *pgx.Batch, ab *models.AccountBlock, txData *
 			input = b
 		}
 	}
-	payload, err := json.Marshal(map[string]interface{}{
+	fields := map[string]interface{}{
 		"hash":                 ab.Hash,
 		"momentum_hash":        ab.MomentumHash,
 		"momentum_timestamp":   ab.MomentumTimestamp,
@@ -204,19 +202,38 @@ func queueAccountBlockNotify(batch *pgx.Batch, ab *models.AccountBlock, txData *
 		"to_address":           ab.ToAddress,
 		"amount":               strconv.FormatInt(ab.Amount, 10),
 		"token_standard":       ab.TokenStandard,
-		"data":                 ab.Data,
-		"method":               method,
-		"input":                input,
 		"paired_account_block": ab.PairedAccountBlock,
-	})
+	}
+	if ab.Data != "" {
+		fields["data"] = ab.Data
+	}
+	if method != "" {
+		fields["method"] = method
+	}
+	if input != nil {
+		fields["input"] = input
+	}
+
+	payload, err := json.Marshal(fields)
 	if err != nil {
 		return fmt.Errorf("marshal account_block notify payload: %w", err)
 	}
-	// Defensive: Postgres rejects NOTIFY payloads above 8000 bytes. If a
-	// contract call's inputs blow that budget, skip the live notify —
-	// REST + ?from_height= replay will still catch it.
 	if len(payload) > 7900 {
-		return nil
+		delete(fields, "input")
+		payload, err = json.Marshal(fields)
+		if err != nil {
+			return fmt.Errorf("marshal account_block notify payload without input: %w", err)
+		}
+	}
+	if len(payload) > 7900 {
+		delete(fields, "data")
+		payload, err = json.Marshal(fields)
+		if err != nil {
+			return fmt.Errorf("marshal account_block notify payload without data: %w", err)
+		}
+	}
+	if len(payload) > 7900 {
+		return fmt.Errorf("account_block notify payload too large: %d bytes", len(payload))
 	}
 	batch.Queue(`SELECT pg_notify('account_block_new', $1::text)`, string(payload))
 	return nil

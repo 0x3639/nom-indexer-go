@@ -34,7 +34,7 @@ curl -s -H "Authorization: Bearer $TOKEN" \
 ## Stream — `GET /api/v1/transactions/stream` (WebSocket)
 
 Live stream of newly-indexed account_blocks. Same plumbing as
-[`/api/v1/momentums/stream`](momentums.md#stream--get-apiv1momentumsstream-websocket):
+[`/api/v1/momentums/stream`](momentums.md):
 LISTEN/NOTIFY, JWT via header or `?token=`, per-subject cap,
 `?from_height=` replay.
 

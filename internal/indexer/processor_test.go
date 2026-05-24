@@ -3,10 +3,14 @@ package indexer
 import (
 	"math"
 	"math/big"
+	"strings"
 	"testing"
 
+	"github.com/jackc/pgx/v5"
 	"go.uber.org/zap"
 	"go.uber.org/zap/zaptest/observer"
+
+	"github.com/0x3639/nom-indexer-go/internal/models"
 )
 
 func TestSafeBigIntToInt64(t *testing.T) {
@@ -41,5 +45,35 @@ func TestSafeBigIntToInt64(t *testing.T) {
 				t.Errorf("warn emitted = %v, want %v (logs=%v)", gotWarn, tt.wantWarn, logs.All())
 			}
 		})
+	}
+}
+
+func TestQueueAccountBlockNotifyOmitsLargeInputsButQueues(t *testing.T) {
+	var batch pgx.Batch
+	ab := &models.AccountBlock{
+		Hash:              "h1",
+		MomentumHash:      "mh1",
+		MomentumTimestamp: 123,
+		MomentumHeight:    456,
+		BlockType:         2,
+		Height:            7,
+		Address:           "z1qsender",
+		ToAddress:         "z1qrecipient",
+		Amount:            42,
+		TokenStandard:     models.ZnnTokenStandard,
+		Data:              strings.Repeat("d", 200),
+	}
+	txData := &models.TxData{
+		Method: "BigCall",
+		Inputs: map[string]string{
+			"payload": strings.Repeat("x", 9000),
+		},
+	}
+
+	if err := queueAccountBlockNotify(&batch, ab, txData); err != nil {
+		t.Fatalf("queueAccountBlockNotify: %v", err)
+	}
+	if batch.Len() != 1 {
+		t.Fatalf("batch.Len() = %d, want 1", batch.Len())
 	}
 }

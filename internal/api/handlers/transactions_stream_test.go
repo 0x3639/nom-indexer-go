@@ -3,6 +3,7 @@ package handlers
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -51,9 +52,13 @@ func (f *fakeTxRepo) ListByMomentumHeightRange(
 
 type fakeTxMomentumRepo struct {
 	latest *models.Momentum
+	err    error
 }
 
 func (f *fakeTxMomentumRepo) GetLatest(_ context.Context) (*models.Momentum, error) {
+	if f.err != nil {
+		return nil, f.err
+	}
 	if f.latest == nil {
 		return nil, pgx.ErrNoRows
 	}
@@ -106,7 +111,7 @@ func TestTxStream_LiveFirehose(t *testing.T) {
 			Hash: "ab-1", MomentumHeight: 100, Address: "z1qsender", ToAddress: "z1qrecv", Amount: "1",
 		})
 		stream.DispatchForTest(hub, &dto.AccountBlock{
-			Hash: "ab-2", MomentumHeight: 101, Address: "z1qother", ToAddress: "z1qrecv2", Amount: "2",
+			Hash: "ab-2", MomentumHeight: 100, Address: "z1qother", ToAddress: "z1qrecv2", Amount: "2",
 		})
 	}()
 
@@ -203,21 +208,40 @@ func TestTxStream_ReplayThenLive(t *testing.T) {
 		}
 	}
 
-	// Live dispatch at momentum_height 106 should arrive next; a dup at
-	// 105 (already replayed) must be suppressed.
+	// Live dispatches from the replay boundary should suppress only
+	// true duplicate hashes. A different transaction in the same
+	// momentum is valid and must not be collapsed by height alone.
 	go func() {
 		time.Sleep(20 * time.Millisecond)
-		stream.DispatchForTest(hub, &dto.AccountBlock{Hash: "h105-dup", MomentumHeight: 105})
+		stream.DispatchForTest(hub, &dto.AccountBlock{Hash: "h105", MomentumHeight: 105})
+		stream.DispatchForTest(hub, &dto.AccountBlock{Hash: "h105b", MomentumHeight: 105})
 		stream.DispatchForTest(hub, &dto.AccountBlock{Hash: "h106", MomentumHeight: 106})
 	}()
-	_, body, readErr := conn.Read(ctx)
-	if readErr != nil {
-		t.Fatalf("read live: %v", readErr)
+	for _, want := range []string{"h105b", "h106"} {
+		_, body, readErr := conn.Read(ctx)
+		if readErr != nil {
+			t.Fatalf("read live %s: %v", want, readErr)
+		}
+		var live dto.AccountBlock
+		_ = json.Unmarshal(body, &live)
+		if live.Hash != want {
+			t.Errorf("got %q, want %s (duplicate h105 should have been suppressed)", live.Hash, want)
+		}
 	}
-	var live dto.AccountBlock
-	_ = json.Unmarshal(body, &live)
-	if live.Hash != "h106" {
-		t.Errorf("got %q, want h106 (h105-dup should have been suppressed)", live.Hash)
+}
+
+func TestTxStream_ReplayLatestErrorReturnsError(t *testing.T) {
+	wantErr := errors.New("latest failed")
+	_, err := replayTransactions(
+		context.Background(),
+		nil,
+		&fakeTxRepo{},
+		&fakeTxMomentumRepo{err: wantErr},
+		100,
+		"",
+	)
+	if !errors.Is(err, wantErr) {
+		t.Fatalf("replayTransactions error = %v, want %v", err, wantErr)
 	}
 }
 

@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/coder/websocket"
+	"github.com/jackc/pgx/v5"
 
 	"github.com/0x3639/nom-indexer-go/internal/api/dto"
 	"github.com/0x3639/nom-indexer-go/internal/api/httpx"
@@ -124,24 +125,52 @@ func TransactionsStream(
 		ctx := conn.CloseRead(context.Background())
 
 		// 5. Optional replay + filter + live.
-		var lastSent int64
+		cursor := txStreamCursor{}
 		if fromMomentumHeight > 0 {
-			h, err := replayTransactions(ctx, conn, txRepo, momentumRepo, fromMomentumHeight, addressFilter)
+			var err error
+			cursor, err = replayTransactions(ctx, conn, txRepo, momentumRepo, fromMomentumHeight, addressFilter)
 			if err != nil {
 				_ = conn.Close(websocket.StatusInternalError, "replay failed")
 				return
 			}
-			lastSent = h
 		}
-		runTxLive(ctx, conn, sub, addressFilter, lastSent)
+		runTxLive(ctx, conn, sub, addressFilter, cursor)
 	}
+}
+
+// txStreamCursor tracks account-block hashes already sent at the
+// current replay/live watermark. A momentum can contain many
+// account_blocks, so height alone is not a safe duplicate key.
+type txStreamCursor struct {
+	height int64
+	hashes map[string]struct{}
+}
+
+func (c *txStreamCursor) seen(ab *dto.AccountBlock) bool {
+	if c.height > 0 && ab.MomentumHeight < c.height {
+		return true
+	}
+	if ab.MomentumHeight == c.height {
+		_, ok := c.hashes[ab.Hash]
+		return ok
+	}
+	return false
+}
+
+func (c *txStreamCursor) mark(ab *dto.AccountBlock) {
+	if ab.MomentumHeight != c.height {
+		c.height = ab.MomentumHeight
+		c.hashes = make(map[string]struct{})
+	}
+	c.hashes[ab.Hash] = struct{}{}
 }
 
 // replayTransactions issues a single range scan against account_blocks
 // from fromMomentumHeight up to the indexer's tip (capped). Writes
-// each row as a WS frame. Returns the highest momentum_height written
-// so the live loop can suppress frames at-or-below that height in case
-// the hub buffered new commits mid-scan.
+// each row as a WS frame. Returns a cursor containing the highest
+// momentum_height written and the hashes sent at that height, so the
+// live loop can suppress only true replay duplicates without dropping
+// other account_blocks from the same momentum.
 func replayTransactions(
 	ctx context.Context,
 	conn *websocket.Conn,
@@ -149,16 +178,17 @@ func replayTransactions(
 	momentumRepo streamLatestMomentumRepo,
 	fromMomentumHeight int64,
 	addressFilter string,
-) (int64, error) {
+) (txStreamCursor, error) {
 	latest, err := momentumRepo.GetLatest(ctx)
 	if err != nil {
-		// Empty table or unreachable: no replay, fall through to live.
-		// A fresh chain or transient blip shouldn't abort the upgrade.
-		return fromMomentumHeight - 1, nil //nolint:nilerr // graceful degradation
+		if errors.Is(err, pgx.ErrNoRows) {
+			return txStreamCursor{height: fromMomentumHeight - 1}, nil
+		}
+		return txStreamCursor{}, err
 	}
 	end := int64(latest.Height)
 	if fromMomentumHeight > end {
-		return fromMomentumHeight - 1, nil
+		return txStreamCursor{height: fromMomentumHeight - 1}, nil
 	}
 	if end-fromMomentumHeight+1 > streamReplayMaxRows {
 		end = fromMomentumHeight + streamReplayMaxRows - 1
@@ -166,30 +196,29 @@ func replayTransactions(
 
 	rows, err := txRepo.ListByMomentumHeightRange(ctx, fromMomentumHeight, end, addressFilter, streamReplayMaxRows)
 	if err != nil {
-		return 0, err
+		return txStreamCursor{}, err
 	}
-	var lastSent int64
+	var cursor txStreamCursor
 	for _, ab := range rows {
-		if err := writeTxFrame(ctx, conn, dto.FromAccountBlock(ab)); err != nil {
-			return lastSent, err
+		frame := dto.FromAccountBlock(ab)
+		if err := writeTxFrame(ctx, conn, frame); err != nil {
+			return cursor, err
 		}
-		if ab.MomentumHeight > lastSent {
-			lastSent = ab.MomentumHeight
-		}
+		cursor.mark(frame)
 	}
-	return lastSent, nil
+	return cursor, nil
 }
 
 // runTxLive blocks on the subscriber channel + ping ticker, applying
-// the optional per-address filter before each WS write. lastSent
-// suppresses any frame whose momentum_height <= lastSent so a replay
-// that overlapped with live arrivals doesn't double-emit.
+// the optional per-address filter before each WS write. cursor
+// suppresses replay duplicates and duplicate live notifications by
+// hash without collapsing every account_block in the same momentum.
 func runTxLive(
 	ctx context.Context,
 	conn *websocket.Conn,
 	sub *stream.Subscriber[*dto.AccountBlock],
 	addressFilter string,
-	lastSent int64,
+	cursor txStreamCursor,
 ) {
 	pingTicker := time.NewTicker(streamPingInterval)
 	defer pingTicker.Stop()
@@ -209,18 +238,16 @@ func runTxLive(
 				_ = conn.Close(4000, "slow_consumer: reconnect with from_height")
 				return
 			}
-			if ab.MomentumHeight <= lastSent {
+			if addressFilter != "" && ab.Address != addressFilter && ab.ToAddress != addressFilter {
 				continue
 			}
-			if addressFilter != "" && ab.Address != addressFilter && ab.ToAddress != addressFilter {
+			if cursor.seen(ab) {
 				continue
 			}
 			if err := writeTxFrame(ctx, conn, ab); err != nil {
 				return
 			}
-			if ab.MomentumHeight > lastSent {
-				lastSent = ab.MomentumHeight
-			}
+			cursor.mark(ab)
 
 		case <-pingTicker.C:
 			pingCtx, cancel := context.WithTimeout(ctx, streamWriteTimeout)
