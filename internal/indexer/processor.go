@@ -83,6 +83,14 @@ func (i *Indexer) processMomentum(ctx context.Context, m *api.Momentum) error {
 	}
 	i.repos.Momentum.InsertBatch(ctx, batch, momentum)
 
+	// Queue NOTIFY in the same transaction as the row writes. Postgres
+	// delivers NOTIFY only when the transaction commits, so live stream
+	// clients cannot see an event for rolled-back data, and a pg_notify
+	// failure rolls the whole momentum back for the normal retry path.
+	if err := queueMomentumNotify(batch, momentum); err != nil {
+		return fmt.Errorf("queue momentum %d notify: %w", m.Height, err)
+	}
+
 	// Run the batch inside a transaction so partial failures roll back and the
 	// caller can retry the height instead of advancing past corrupted state.
 	tx, err := i.pool.Begin(ctx)
@@ -118,15 +126,6 @@ func (i *Indexer) processMomentum(ctx context.Context, m *api.Momentum) error {
 	}
 	committed = true
 
-	// Fire a Postgres NOTIFY so the API's stream hub can fan out the new
-	// momentum to WebSocket subscribers without polling. Best-effort: a
-	// failure here must not roll back the already-committed write — at
-	// worst, subscribers miss this one momentum and resync on reconnect.
-	if err := i.notifyMomentum(ctx, momentum); err != nil {
-		i.logger.Warn("notify momentum_new failed (subscribers may miss this height)",
-			zap.Uint64("height", momentum.Height), zap.Error(err))
-	}
-
 	i.logger.Debug("processed momentum",
 		zap.Uint64("height", m.Height),
 		zap.Duration("duration", time.Since(start)))
@@ -134,16 +133,17 @@ func (i *Indexer) processMomentum(ctx context.Context, m *api.Momentum) error {
 	return nil
 }
 
-// notifyMomentum sends a NOTIFY momentum_new with a snake_case JSON
+// queueMomentumNotify appends a NOTIFY momentum_new statement with a snake_case JSON
 // payload — same field names as the API's dto.Momentum wire shape, so
 // the stream hub can unmarshal directly into the type it ships to
 // WebSocket clients. (models.Momentum lacks json tags by design — the
 // indexer-side schema is decoupled from the API wire format.)
 //
-// Best-effort and idempotent at the consumer side: a NOTIFY loss never
-// produces incorrect data, only a missed live event that subscribers
-// fill in on reconnect via the from_height replay path.
-func (i *Indexer) notifyMomentum(ctx context.Context, m *models.Momentum) error {
+// This must be queued inside processMomentum's transaction. Postgres
+// emits NOTIFY messages only after commit, so subscribers are woken
+// exactly when the committed row is visible; rollback suppresses the
+// notification automatically.
+func queueMomentumNotify(batch *pgx.Batch, m *models.Momentum) error {
 	payload, err := json.Marshal(map[string]interface{}{
 		"height":         m.Height,
 		"hash":           m.Hash,
@@ -158,8 +158,8 @@ func (i *Indexer) notifyMomentum(ctx context.Context, m *models.Momentum) error 
 	}
 	// pg_notify is the function form; takes payload as a parameter so
 	// we don't have to escape JSON manually.
-	_, err = i.pool.Exec(ctx, `SELECT pg_notify('momentum_new', $1::text)`, string(payload))
-	return err
+	batch.Queue(`SELECT pg_notify('momentum_new', $1::text)`, string(payload))
+	return nil
 }
 
 // updateBalances updates balances for all addresses in a momentum

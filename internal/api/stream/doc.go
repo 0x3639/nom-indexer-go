@@ -5,9 +5,10 @@
 //
 // Exactly one Hub runs per API process. It holds a single dedicated
 // pgx.Conn (outside the request pool) that issues `LISTEN momentum_new`
-// once at startup and then blocks on WaitForNotification in a goroutine
-// for the process lifetime. Postgres fires the NOTIFY from the indexer's
-// processMomentum after every successful commit (see
+// for each connection attempt, blocks on WaitForNotification, and
+// reconnects with backoff if the LISTEN connection drops. The indexer's
+// processMomentum queues the NOTIFY in the same transaction as the row
+// writes, so Postgres fires it only after a successful commit (see
 // internal/indexer/processor.go).
 //
 // DB cost

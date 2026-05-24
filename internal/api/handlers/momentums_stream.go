@@ -259,6 +259,7 @@ func runLive(ctx context.Context, conn *websocket.Conn, sub *stream.Subscriber, 
 			if err := writeFrame(ctx, conn, m); err != nil {
 				return
 			}
+			lastSent = m.Height
 
 		case <-pingTicker.C:
 			pingCtx, cancel := context.WithTimeout(ctx, streamWriteTimeout)
