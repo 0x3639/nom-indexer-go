@@ -271,21 +271,36 @@ curl -s http://localhost:8080/healthz
 
 ## Readiness — `GET /readyz`
 
-Two checks: pings the Postgres pool **and** verifies the indexer
-schema is present (looks for the `momentums` table). Returns
-`200 {"status":"ready"}` when both pass, `503` with a problem+json
-body when either fails. Safe for k8s readiness probes — it returns
-not-ready until migrations have run on a fresh cluster.
+Two checks:
+
+1. Pings the Postgres pool.
+2. Reads golang-migrate's `schema_migrations` and asserts
+   `version >= minSchemaVersion` (currently `11`) AND `dirty = false`.
+
+Returns `200 {"status":"ready"}` when both pass. Returns `503` with a
+problem+json body on any failure mode below. Safe for k8s readiness
+probes — `/readyz` reports not-ready on a fresh cluster, a partially
+migrated DB, or a migration that crashed mid-run.
 
 ```bash
 curl -s http://localhost:8080/readyz
 # {"status":"ready"}
-
-# On a fresh DB before the indexer has migrated:
-# {"type":"about:blank","title":"Service Unavailable","status":503,
-#  "detail":"momentums table missing — start the indexer container so migrations run",
-#  "code":"schema_not_migrated"}
 ```
+
+Failure shapes:
+
+| `code` | Status | When |
+|---|---|---|
+| `db_unavailable` | 503 | Pool ping or query failed (network, pool exhausted). |
+| `schema_not_migrated` | 503 | `schema_migrations` missing, or its `version` < `minSchemaVersion`. Start the indexer container so migrations run. |
+| `schema_dirty` | 503 | `schema_migrations.dirty = true`. The last migration crashed mid-run; manual repair required. |
+
+`minSchemaVersion` is pinned in `internal/api/router/router.go` and
+must be bumped whenever a new migration touches a table the API
+reads. The constant is intentionally separate from the indexer's
+migration tooling so a deploy that ships the API without the matching
+migration cleanly reports `schema_not_migrated` instead of 500ing on
+the first request.
 
 ## Indexer sync state — `GET /api/v1/status`
 
@@ -618,12 +633,14 @@ safe to use as a Kubernetes readiness probe even on a cold cluster.
   ```
 
 * **Single-object endpoints** return the object directly (no envelope).
-* **Errors** are RFC 7807 `application/problem+json`:
+* **Errors** are RFC 7807 `application/problem+json`. The `code`
+  field is a stable application-level identifier — see
+  [Authentication](auth.md#failure-responses) for the full enum.
 
   ```json
   { "type": "about:blank", "title": "Unauthorized",
-    "status": 401, "detail": "missing bearer token",
-    "code": "unauthorized" }
+    "status": 401, "detail": "missing Authorization header (want: Bearer <token>)",
+    "code": "missing_token" }
   ```
 
 ### Amounts are JSON strings
@@ -644,10 +661,14 @@ See [Authentication](auth.md) for token issuance, headers, and rotation.
 
 ### Rate limit
 
-In-process token-bucket: **60 requests/minute** per JWT subject
-(falling back to IP if no token). Returns `429` with a
-problem+json body when exceeded. Limit is per-replica — multi-replica
-deployments multiply the effective ceiling.
+In-process sliding window: **60 requests/minute** per JWT subject,
+tunable via `API_RATE_LIMIT_PER_MINUTE`. Returns `429` with a
+problem+json body (`code: "rate_limited"`) when exceeded. The
+middleware chain runs `Auth → RateLimit`, so unauthenticated
+requests are rejected at Auth before the limiter sees them — see
+[Authentication → Rate limiting](auth.md#rate-limiting-and-unauthenticated-requests).
+The limit is per-replica; multi-replica deployments multiply the
+effective ceiling.
 
 ### Versioning
 
@@ -1214,25 +1235,26 @@ title: Architecture overview
 
 # Architecture overview
 
-The big picture: one process, one Postgres database, several
-independent work lanes, and two forthcoming consumer surfaces.
+The big picture: one indexer process, one read-only HTTP API
+process, one Postgres database, several independent work lanes, and
+one future consumer surface (MCP).
 
 ## System context
 
 ```mermaid
 flowchart LR
     node["Zenon node<br/>(WebSocket RPC)"]:::external
-    idx["nom-indexer-go<br/>(this service)"]:::core
+    idx["nom-indexer-go<br/>(cmd/indexer)"]:::core
     pg[(PostgreSQL<br/>30 tables)]:::core
-    api["REST API<br/>(forthcoming)"]:::future
+    api["REST API<br/>(cmd/api)"]:::core
     mcp["MCP server<br/>(forthcoming)"]:::future
     web["explorer UI / SDK<br/>consumers"]:::external
 
     node -- "Subscriber + Ledger + Embedded RPCs" --> idx
     idx -- "writes" --> pg
-    pg -. "reads" .-> api
+    pg -- "reads" --> api
     pg -. "reads" .-> mcp
-    api -. "HTTP" .-> web
+    api -- "HTTP + JWT" --> web
     mcp -. "MCP" .-> web
 
     classDef core fill:#3949ab,stroke:#1a237e,color:#fff;
@@ -1240,14 +1262,11 @@ flowchart LR
     classDef future stroke-dasharray:5 5,fill:#fafafa,stroke:#9e9e9e;
 ```
 
-Two boxes are dashed because they don't exist yet:
-
-- The REST API server will live next to the indexer (`cmd/api`).
-- The MCP server will live next to it (`cmd/mcp`).
-
-Both consume the same Postgres tables this indexer fills. Adding them
-later does not require restructuring the existing tree — `docs/api/`
-and `docs/mcp/` are reserved.
+- The REST API server lives at `cmd/api` with HS256 JWT auth and
+  Prometheus `/metrics` on a sidecar port. See [API](../api/index.md).
+- The MCP server (dashed) is still future work; it will live at
+  `cmd/mcp` and share `internal/api/dto` + `internal/repository`
+  with the REST API.
 
 ## Process layout
 
@@ -1749,8 +1768,9 @@ Source: [`internal/models/`](https://github.com/0x3639/nom-indexer-go/tree/main/
 
 Go struct mirrors of every table in the schema, plus enum types and
 address constants. The leaf of the import graph — stdlib only — which
-is intentional: the forthcoming API and MCP packages depend on it
-without pulling in pgx, viper, zap, or the SDK.
+is intentional: `internal/api/dto` already depends on it (and the
+future MCP package will too) without pulling in pgx, viper, zap, or
+the SDK.
 
 See the [`doc.go`](https://github.com/0x3639/nom-indexer-go/blob/main/internal/models/doc.go)
 package docstring.
@@ -3090,9 +3110,10 @@ cmd/* → internal/indexer → internal/repository → internal/models
 ## Why `internal/`
 
 Every non-leaf package lives under `internal/` so external Go callers
-can't import them. The forthcoming API + MCP server will be siblings
-of `cmd/indexer/` and they too will live under `internal/api/` /
-`internal/mcp/`; nothing outside this module gets to import them.
+can't import them. The shipped API service lives at `cmd/api/` with
+its packages under `internal/api/{dto,handlers,httpx,metrics,middleware,oapi,router}`;
+the future MCP server will follow the same pattern under
+`internal/mcp/`. Nothing outside this module gets to import them.
 
 ## What's *not* a package
 
@@ -3122,8 +3143,9 @@ How to get a local checkout building and tests running.
 
 ## Prerequisites
 
-- Go **1.24+**. The SDK requires Go 1.24; older toolchains will refuse
-  to compile.
+- Go **1.25+**. `go.mod` declares 1.25 (the prometheus + kin-openapi
+  upgrades pulled the floor up from 1.24); older toolchains will
+  refuse to compile.
 - A working C toolchain. CGO is required for `secp256k1`:
     - macOS: Xcode command-line tools (`xcode-select --install`).
     - Linux: `gcc` + `libc-dev` (usually `apt install build-essential`).
@@ -3243,8 +3265,9 @@ See [`docs.md`](docs.md) for the doc authoring workflow.
 
 A Go service that indexes the Zenon Network blockchain (NoM) into PostgreSQL.
 It listens to a Zenon node over WebSocket, decodes embedded-contract activity,
-and writes a normalized relational schema that downstream consumers — including
-the forthcoming REST API and MCP server — can query directly.
+and writes a normalized relational schema. A read-only HTTP API (`cmd/api`,
+documented at [API](api/index.md)) reads those tables behind HS256 JWT auth;
+the future MCP server will share the same DTO + repository layer.
 
 ## Where to start
 
@@ -3271,11 +3294,14 @@ the forthcoming REST API and MCP server — can query directly.
 
     You query the database that this indexer fills.
 
-    1. [Schema overview](schema/index.md) — table-by-table reference.
-    2. [Schema conventions](schema/conventions.md) — int64 cap, timestamp,
+    1. [API overview](api/index.md) — quick start, auth, conventions, Swagger UI.
+    2. [Endpoint catalog](api/endpoints/index.md) — per-domain curl examples.
+    3. [Schema overview](schema/index.md) — table-by-table reference for
+       direct SQL access or future MCP consumers.
+    4. [Schema conventions](schema/conventions.md) — int64 cap, timestamp,
        hash encoding rules that every table follows.
-    3. [Glossary](reference/glossary.md) — Zenon-specific terms.
-    4. [API (forthcoming)](api/index.md) · [MCP (forthcoming)](mcp/index.md)
+    5. [Glossary](reference/glossary.md) — Zenon-specific terms.
+    6. [MCP (forthcoming)](mcp/index.md)
 
 ## What's in the docs
 
@@ -3291,7 +3317,7 @@ the forthcoming REST API and MCP server — can query directly.
 | [Migrations](migrations/guide.md) | Writing migrations, rollback discipline, narrative history. |
 | [Code reference](code-reference/index.md) | Go package summaries pulled from `doc.go`. |
 | [Reference](reference/glossary.md) | Glossary, addresses, FAQ, known issues. |
-| [API](api/index.md) | (Stub — fills in when the API server ships.) |
+| [API](api/index.md) | HTTP endpoints, HS256 JWT auth, Swagger UI, per-domain pages. |
 | [MCP](mcp/index.md) | (Stub — fills in when the MCP server ships.) |
 
 ## Documentation conventions
@@ -4811,7 +4837,7 @@ The compose-specific ones are `POSTGRES_USER`, `POSTGRES_PASSWORD`,
 
 The Dockerfile is multi-stage:
 
-- **Stage 1** — `golang:1.24-alpine` with CGO toolchain (`gcc musl-dev`)
+- **Stage 1** — `golang:1.25-alpine` with CGO toolchain (`gcc musl-dev`)
   for secp256k1. `go mod tidy && go build -o /app/indexer ./cmd/indexer`.
 - **Stage 2** — `alpine:3.19` runtime with `ca-certificates` + `tzdata`.
   Runs as non-root user `indexer:1000`.
@@ -5159,11 +5185,19 @@ docker logs nom-indexer 2>&1 | grep -vE 'INFO|MERMAID' | tail -50
 | `gaps > 0` after a steady-state window | Backfill needed. | See [`backfill.md`](backfill.md). |
 | Reward tables empty for a recent day | Reward indexing broken or no rewards. | Spot-check the receive paths. |
 
-## Future: Prometheus / metrics
+## Prometheus / metrics
 
-The indexer does not currently expose Prometheus metrics. The API
-service (forthcoming) is the natural place to add `/metrics`; see
-[`scaling.md`](scaling.md).
+The indexer binary does not expose Prometheus metrics today —
+operators read sync state from Postgres (see the canonical liveness
+query above).
+
+The `cmd/api` HTTP service does ship Prometheus metrics on a
+separate listener (port 9090 by default) exposing
+`nom_api_http_requests_total` and `nom_api_http_request_duration_seconds`
+labeled by method/route/status. See the
+[API overview](../api/index.md). The route label uses the chi
+template (e.g. `/api/v1/momentums/{height}`) so label cardinality
+stays bounded.
 
 
 === docs/operations/runbook.md ===
@@ -5386,8 +5420,9 @@ tax dramatically.
 
 ## Read replica (for API / MCP consumers)
 
-The forthcoming API and MCP server are pure read consumers — they
-should not contend with the indexer's writes. Two options:
+The `cmd/api` service and the future MCP server are pure read
+consumers — they should not contend with the indexer's writes.
+Two options:
 
 1. **Postgres streaming replica.** Point read consumers at the replica.
    Lag is typically sub-second; fine for an explorer UI.
@@ -5395,8 +5430,9 @@ should not contend with the indexer's writes. Two options:
    QPS stays modest. The indexer already runs at low transaction
    rates.
 
-For now, the API will read from the same DB as the indexer until
-contention becomes visible.
+The default `docker-compose.yml` API service uses option 2 (same
+primary). Switch to option 1 once contention becomes visible —
+nothing in the API code path is replica-incompatible.
 
 ## Partitioning
 
@@ -6049,13 +6085,14 @@ intervals.
 plausible but not written. The current state (`accounts.delegate`)
 remains correct for "who is X delegated to right now?".
 
-## No HTTP `/metrics` endpoint
+## Indexer has no HTTP `/metrics` endpoint
 
-**What:** The indexer doesn't expose Prometheus metrics.
+**What:** The indexer binary doesn't expose Prometheus metrics.
 
-**Status:** Planned alongside the forthcoming REST API. The
-canonical liveness signal today is "`MAX(momentums.timestamp)` is
-advancing".
+**Status:** Won't fix in the indexer for now — operators read sync
+state from Postgres (`MAX(momentums.timestamp)` advancing). The
+`cmd/api` HTTP service does expose Prometheus metrics on `:9090`
+(see [API → Metrics](../api/index.md)) if you run it alongside.
 
 ## Dagger CI doesn't run integration tests
 

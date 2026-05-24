@@ -75,9 +75,10 @@ cmd/* → internal/indexer → internal/repository → internal/models
 ## Why `internal/`
 
 Every non-leaf package lives under `internal/` so external Go callers
-can't import them. The forthcoming API + MCP server will be siblings
-of `cmd/indexer/` and they too will live under `internal/api/` /
-`internal/mcp/`; nothing outside this module gets to import them.
+can't import them. The shipped API service lives at `cmd/api/` with
+its packages under `internal/api/{dto,handlers,httpx,metrics,middleware,oapi,router}`;
+the future MCP server will follow the same pattern under
+`internal/mcp/`. Nothing outside this module gets to import them.
 
 ## What's *not* a package
 

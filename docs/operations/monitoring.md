@@ -124,8 +124,16 @@ docker logs nom-indexer 2>&1 | grep -vE 'INFO|MERMAID' | tail -50
 | `gaps > 0` after a steady-state window | Backfill needed. | See [`backfill.md`](backfill.md). |
 | Reward tables empty for a recent day | Reward indexing broken or no rewards. | Spot-check the receive paths. |
 
-## Future: Prometheus / metrics
+## Prometheus / metrics
 
-The indexer does not currently expose Prometheus metrics. The API
-service (forthcoming) is the natural place to add `/metrics`; see
-[`scaling.md`](scaling.md).
+The indexer binary does not expose Prometheus metrics today —
+operators read sync state from Postgres (see the canonical liveness
+query above).
+
+The `cmd/api` HTTP service does ship Prometheus metrics on a
+separate listener (port 9090 by default) exposing
+`nom_api_http_requests_total` and `nom_api_http_request_duration_seconds`
+labeled by method/route/status. See the
+[API overview](../api/index.md). The route label uses the chi
+template (e.g. `/api/v1/momentums/{height}`) so label cardinality
+stays bounded.

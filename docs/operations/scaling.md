@@ -54,8 +54,9 @@ tax dramatically.
 
 ## Read replica (for API / MCP consumers)
 
-The forthcoming API and MCP server are pure read consumers — they
-should not contend with the indexer's writes. Two options:
+The `cmd/api` service and the future MCP server are pure read
+consumers — they should not contend with the indexer's writes.
+Two options:
 
 1. **Postgres streaming replica.** Point read consumers at the replica.
    Lag is typically sub-second; fine for an explorer UI.
@@ -63,8 +64,9 @@ should not contend with the indexer's writes. Two options:
    QPS stays modest. The indexer already runs at low transaction
    rates.
 
-For now, the API will read from the same DB as the indexer until
-contention becomes visible.
+The default `docker-compose.yml` API service uses option 2 (same
+primary). Switch to option 1 once contention becomes visible —
+nothing in the API code path is replica-incompatible.
 
 ## Partitioning
 

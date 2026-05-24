@@ -57,7 +57,7 @@ The compose-specific ones are `POSTGRES_USER`, `POSTGRES_PASSWORD`,
 
 The Dockerfile is multi-stage:
 
-- **Stage 1** — `golang:1.24-alpine` with CGO toolchain (`gcc musl-dev`)
+- **Stage 1** — `golang:1.25-alpine` with CGO toolchain (`gcc musl-dev`)
   for secp256k1. `go mod tidy && go build -o /app/indexer ./cmd/indexer`.
 - **Stage 2** — `alpine:3.19` runtime with `ca-certificates` + `tzdata`.
   Runs as non-root user `indexer:1000`.

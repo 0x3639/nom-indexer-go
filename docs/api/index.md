@@ -52,12 +52,14 @@ safe to use as a Kubernetes readiness probe even on a cold cluster.
   ```
 
 * **Single-object endpoints** return the object directly (no envelope).
-* **Errors** are RFC 7807 `application/problem+json`:
+* **Errors** are RFC 7807 `application/problem+json`. The `code`
+  field is a stable application-level identifier — see
+  [Authentication](auth.md#failure-responses) for the full enum.
 
   ```json
   { "type": "about:blank", "title": "Unauthorized",
-    "status": 401, "detail": "missing bearer token",
-    "code": "unauthorized" }
+    "status": 401, "detail": "missing Authorization header (want: Bearer <token>)",
+    "code": "missing_token" }
   ```
 
 ### Amounts are JSON strings
@@ -78,10 +80,14 @@ See [Authentication](auth.md) for token issuance, headers, and rotation.
 
 ### Rate limit
 
-In-process token-bucket: **60 requests/minute** per JWT subject
-(falling back to IP if no token). Returns `429` with a
-problem+json body when exceeded. Limit is per-replica — multi-replica
-deployments multiply the effective ceiling.
+In-process sliding window: **60 requests/minute** per JWT subject,
+tunable via `API_RATE_LIMIT_PER_MINUTE`. Returns `429` with a
+problem+json body (`code: "rate_limited"`) when exceeded. The
+middleware chain runs `Auth → RateLimit`, so unauthenticated
+requests are rejected at Auth before the limiter sees them — see
+[Authentication → Rate limiting](auth.md#rate-limiting-and-unauthenticated-requests).
+The limit is per-replica; multi-replica deployments multiply the
+effective ceiling.
 
 ### Versioning
 

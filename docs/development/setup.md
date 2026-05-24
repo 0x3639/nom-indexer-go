@@ -8,8 +8,9 @@ How to get a local checkout building and tests running.
 
 ## Prerequisites
 
-- Go **1.24+**. The SDK requires Go 1.24; older toolchains will refuse
-  to compile.
+- Go **1.25+**. `go.mod` declares 1.25 (the prometheus + kin-openapi
+  upgrades pulled the floor up from 1.24); older toolchains will
+  refuse to compile.
 - A working C toolchain. CGO is required for `secp256k1`:
     - macOS: Xcode command-line tools (`xcode-select --install`).
     - Linux: `gcc` + `libc-dev` (usually `apt install build-essential`).

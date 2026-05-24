@@ -7,7 +7,7 @@ Hash-formatted flat index of every documentation page, generated from mkdocs.yml
 - [Home](docs/index.md): A Go service that indexes the Zenon Network blockchain (NoM) into PostgreSQL.
 ## Architecture
 
-- [Overview](docs/architecture/overview.md): The big picture: one process, one Postgres database, several
+- [Overview](docs/architecture/overview.md): The big picture: one indexer process, one read-only HTTP API
 - [Data flow](docs/architecture/data-flow.md): A line-by-line trace of what happens between "the node tells us a new
 - [Sync and recovery](docs/architecture/sync-and-recovery.md): How the indexer catches up from a cold start, transitions to real-time
 - [Cron and snapshots](docs/architecture/cron-and-snapshots.md): The cron goroutine in
