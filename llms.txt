@@ -138,9 +138,11 @@ Hash-formatted flat index of every documentation page, generated from mkdocs.yml
 - [Bridge](docs/api/endpoints/bridge.md): Cross-chain wrap/unwrap requests handled by the Zenon bridge.
 ## MCP
 
-- [Overview](docs/mcp/index.md): A Model Context Protocol server is planned. This page is a stub; tool and
-- [Resources](docs/mcp/resources.md): The MCP server has not been implemented yet, so no resources are exposed
-- [Tools](docs/mcp/tools.md): The MCP server has not been implemented yet, so no tools are exposed by
+- [Overview](docs/mcp/index.md): The nom-indexer-go MCP server is a [Model Context
+- [Tools](docs/mcp/tools.md): Every tool the [MCP server](index.md) exposes, grouped by domain. Names
+- [Resources](docs/mcp/resources.md): MCP resources are read-only context the LLM can pull before reaching
+- [Setup — Claude Desktop](docs/mcp/setup-claude-desktop.md): Configure Claude Desktop to query the hosted nom-indexer MCP server.
+- [Setup — Claude Code](docs/mcp/setup-claude-code.md): Configure [Claude Code](https://claude.com/claude-code) to query the
 ## Reference
 
 - [Glossary](docs/reference/glossary.md): Zenon-specific terms used throughout this codebase and the docs.

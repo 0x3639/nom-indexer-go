@@ -4267,75 +4267,579 @@ mints it's the token owner. The reward classifier in
 
 === docs/mcp/index.md ===
 
-# MCP server (forthcoming)
+# MCP server
 
-A Model Context Protocol server is planned. This page is a stub; tool and
-resource references will live under `docs/mcp/tools.md` and
-`docs/mcp/resources.md` once the server ships.
+The nom-indexer-go MCP server is a [Model Context
+Protocol](https://modelcontextprotocol.io) endpoint that exposes the
+same Postgres tables the [REST API](../api/index.md) serves, but speaks
+JSON-RPC over Streamable HTTP so AI agents (Claude Desktop, Claude
+Code, any tool-using LLM) can query them directly. It is hosted in
+the same Docker stack as the indexer and API — **end users never run an
+MCP binary locally**; they configure their client to point at the
+hosted endpoint with a JWT issued by the operator.
 
-## Status
+## Quick start
 
-| Item | State |
-|---|---|
-| Server implementation | Not started |
-| Draft tool / resource list | Stub pages only; no runtime contract yet |
+```bash
+# 1. Start the full stack. The indexer container runs migrations on
+#    startup; until those finish, /readyz returns 503 schema_not_migrated.
+docker compose up -d
+# (Requires POSTGRES_PASSWORD and API_JWT_SECRET in .env.)
 
-## What this MCP server will expose
+# 2. Mint a token. The MCP and API services share API_JWT_SECRET by
+#    default (set MCP_JWT_SECRET to isolate them). Either container
+#    bundles cmd/jwt-issue.
+export TOKEN=$(docker compose exec -T api /app/jwt-issue \
+    --sub claude-desktop --ttl 24h --scope read | tail -1)
 
-The MCP server exposes the indexer's database to MCP-capable clients
-(Claude, Cursor, IDEs). It is **read-only** and built directly on the schema
-this indexer fills.
-
-- **Resources** — each table becomes one or more MCP resources for read-only
-  retrieval. Defined in [`docs/mcp/resources.md`](resources.md).
-- **Tools** — parameterized queries that answer common questions ("rewards
-  by address", "pillar by name", "wrap requests for a token"). Defined in
-  [`docs/mcp/tools.md`](tools.md).
-
-## Where the contract lives
-
-- **Tables and columns:** [`docs/schema/`](../schema/index.md)
-- **Schema-wide conventions:** [`docs/schema/conventions.md`](../schema/conventions.md)
-- **Glossary of Zenon terms:** [`docs/reference/glossary.md`](../reference/glossary.md)
-
-## Future structure of this section
-
-```
-docs/mcp/
-  index.md          # this file — overview + status
-  resources.md      # resource list keyed by table
-  tools.md          # tool list with input schemas and example invocations
+# 3. Smoke the wire.
+curl -s -X POST http://localhost:8081/mcp \
+     -H "Authorization: Bearer $TOKEN" \
+     -H "Content-Type: application/json" \
+     -H "Accept: application/json, text/event-stream" \
+     -d '{"jsonrpc":"2.0","id":1,"method":"initialize",
+          "params":{"protocolVersion":"2025-06-18",
+                    "capabilities":{},
+                    "clientInfo":{"name":"smoke","version":"0"}}}'
 ```
 
-The directory layout is in place now so that filling in the MCP docs is purely
-additive.
+`/healthz` and `/readyz` do not require a token; `/mcp` does. `/readyz`
+returns 503 until the database is reachable **and** the indexer schema
+has been applied — safe as a Kubernetes readiness probe even on a cold
+cluster.
+
+For configuring real clients, see:
+
+- [Claude Desktop setup](setup-claude-desktop.md)
+- [Claude Code setup](setup-claude-code.md)
+
+## Architecture
+
+The MCP server runs alongside the REST API as a sibling Docker service.
+Both processes:
+
+- read from the same Postgres pool the indexer fills,
+- import the same `internal/repository` + `internal/api/dto` packages
+  (so wire shapes are identical across the two transports), and
+- accept the same HS256 JWT (shared `API_JWT_SECRET` unless
+  `MCP_JWT_SECRET` is set).
+
+```text
+Claude Desktop ────┐
+Claude Code ───────┼──► cmd/mcp :8081 /mcp ──► internal/mcp/tools ──┐
+Browser MCP ───────┘                                                ├─► internal/repository ──► Postgres
+                                                                    │
+Frontend ──────────► cmd/api :8080 /api/v1/* ──► internal/api ──────┘
+```
+
+| | REST API | MCP server |
+|---|---|---|
+| Port | 8080 | 8081 |
+| Metrics | 9090 | 9091 |
+| Transport | HTTP + JSON | MCP over Streamable HTTP (JSON-RPC, optional SSE) |
+| Auth | HS256 JWT bearer | HS256 JWT bearer (same secret by default) |
+| Discovery | Swagger UI | MCP `tools/list` (auto-surfaces in clients) |
+| Streaming | One WS endpoint per stream | Tool calls only in v1 — server-initiated notifications deferred |
+
+## Transport
+
+The MCP server speaks the **Streamable HTTP** transport at `POST /mcp`:
+a single JSON-RPC endpoint that returns either a normal JSON response
+or, for long-running calls, an SSE stream. This is the transport
+Claude Desktop's "remote MCP server" config expects, and it replaces
+the older SSE-only transport in the spec.
+
+There is no stdio mode — by design. End users never run an MCP binary
+locally; the server is hosted.
+
+## Authentication
+
+Every call to `/mcp` must include an HS256 JWT, either:
+
+- `Authorization: Bearer <token>` (CLI / server-side clients), or
+- `?token=<token>` query parameter (browser MCP clients that cannot
+  set custom headers on the upgrade request).
+
+The signer is shared with the REST API. Operators mint tokens with the
+bundled `cmd/jwt-issue` CLI; there is no token endpoint.
+
+```bash
+# Mint a 30-day token for a single Claude Desktop user.
+docker compose exec -T mcp /app/jwt-issue \
+    --sub alice --ttl 720h --scope read
+```
+
+On failure the server returns HTTP 401 with a JSON-RPC error envelope:
+
+```json
+{
+  "jsonrpc": "2.0",
+  "id": null,
+  "error": {
+    "code": -32001,
+    "message": "invalid or expired token",
+    "data": { "code": "expired_token" }
+  }
+}
+```
+
+`data.code` is one of: `missing_token`, `invalid_token`, `expired_token`.
+
+## Tool catalog
+
+Tools are one-per-logical-query and mirror the REST endpoints — see
+[Tools](tools.md) for the full list. As of v1 there are 30 tools across
+the same domains the REST API surfaces (momentums, accounts, tokens,
+pillars, sentinels, stakes, fusions, projects, rewards, bridge).
+
+Each tool returns the same `dto.*` shape the REST API emits: amounts as
+JSON strings, paginated envelopes for lists, etc. Moving between
+transports doesn't require re-learning the data.
+
+## Resources
+
+v1 ships one resource: [`schema://overview`](resources.md) — a compact
+JSON catalog of every indexed table with the MCP tools that read it.
+LLMs reach for it before choosing a tool.
+
+## Observability
+
+- `/healthz` — liveness, always 200.
+- `/readyz` — DB ping + `schema_migrations.version >= 11`.
+- `/metrics` (on `:9091`, separate listener) — Prometheus exposition
+  with `nom_mcp_tool_calls_total{tool,status}` and
+  `nom_mcp_tool_call_duration_seconds{tool,status}` plus the standard
+  Go/process collectors.
+
+## Limits and follow-ups
+
+v1 is intentionally minimal. See
+[Known issues](../reference/known-issues.md) for the documented
+deferrals — most notably:
+
+- No server-initiated notifications (the LLM can't subscribe to a live
+  momentum stream). The REST API's WebSocket endpoints fill this gap
+  for non-MCP consumers; MCP-side subscription semantics are a future
+  design.
+- No per-tool scope enforcement — every authenticated caller can call
+  every tool. The `scope` claim is preserved for future per-route
+  gating.
+- No cursor pagination — mirrors the REST-side gap.
 
 
 === docs/mcp/resources.md ===
 
 # MCP resources
 
-The MCP server has not been implemented yet, so no resources are exposed
-by the current binary.
+MCP resources are read-only context the LLM can pull before reaching
+for [tools](tools.md) — useful for grounding tool selection in the
+underlying data model. v1 ships one resource.
 
-The planned shape is read-only resources backed by the same Postgres
-tables documented in [`docs/schema/`](../schema/index.md). When the
-server exists, this page should list each resource URI, its backing
-table or query, parameters, and returned fields.
+## `schema://overview`
+
+Compact JSON catalog of every Postgres table the indexer fills, with
+the MCP tools that read each one. Pull this first when the user's
+question doesn't obviously map to one tool.
+
+| | |
+|---|---|
+| URI | `schema://overview` |
+| MIME type | `application/json` |
+| Size | ~3 KB |
+| Backed by | Hand-curated literal in `internal/mcp/resources/schema.go` |
+
+### Wire shape
+
+```json
+{
+  "version": 1,
+  "tables": [
+    {
+      "name": "momentums",
+      "domain": "core_ledger",
+      "purpose": "Block headers indexed by height.",
+      "tools": ["get_momentum_by_height", "get_latest_momentum", "list_momentums", "get_status"]
+    }
+    // ... 28 more rows
+  ],
+  "notes": [
+    "All amounts/balances/supplies are int64 (BIGINT) — JSON-encoded as strings to dodge JavaScript Number precision loss.",
+    "All timestamps are Unix seconds (BIGINT).",
+    "All hashes and addresses are lowercase hex/zenon strings.",
+    "No foreign keys: joins are by hash/address/standard. The indexer writes per momentum in a transaction."
+  ]
+}
+```
+
+### Domains
+
+Tables are bucketed into seven domains; one row per table:
+
+- `core_ledger` — momentums, account_blocks, accounts, balances,
+  tokens, token_mints, token_burns
+- `pillars` — pillars, pillar_updates, delegations
+- `sentinels_stakes_plasma` — sentinels, stakes, fusions
+- `accelerator_z` — projects, project_phases, votes
+- `rewards` — reward_transactions, cumulative_rewards
+- `bridge` — wrap_token_requests, unwrap_token_requests, bridge_*
+- `daily_snapshots` — network/token/pillar/bridge stat histories
+
+### Reading the resource
+
+In a real MCP client (Claude Desktop, Claude Code) the resource is
+auto-discovered via `resources/list` and pulled on demand. By hand:
+
+```bash
+TOKEN="paste your token"
+curl -s -X POST http://localhost:8081/mcp \
+     -H "Authorization: Bearer $TOKEN" \
+     -H "Content-Type: application/json" \
+     -H "Accept: application/json, text/event-stream" \
+     -d '{"jsonrpc":"2.0","id":1,"method":"resources/read",
+          "params":{"uri":"schema://overview"}}'
+```
+
+### Keeping it current
+
+The catalog is hand-curated rather than auto-derived: it's
+LLM-facing and benefits from concise phrasing. When the schema gains
+a new table OR the tool catalog changes, update both
+`internal/mcp/resources/schema.go` AND this page. A test in
+`internal/mcp/resources/schema_test.go` asserts that a representative
+sample of tables is present, but it does not catch a missing entry —
+the linter will not nag you if you forget. The cross-link to the
+canonical schema reference is [docs/schema/](../schema/index.md).
+
+## Future resources
+
+These have not been built; see [Known issues](../reference/known-issues.md)
+for the full deferral list.
+
+- `docs://migrations` — a flat catalog of migrations + their semantics,
+  useful when the LLM is reasoning about whether a column exists yet.
+- `schema://table/<name>` — per-table deep dive with column types,
+  index hints, and gotchas (the same content the docs/schema/ pages
+  render in MkDocs, but in MCP form).
+
+
+=== docs/mcp/setup-claude-code.md ===
+
+# Setup — Claude Code
+
+Configure [Claude Code](https://claude.com/claude-code) to query the
+hosted nom-indexer MCP server. Same shape as the
+[Claude Desktop](setup-claude-desktop.md) flow — the only difference is
+where the config lives.
+
+## Prerequisites
+
+1. The operator has the stack running and the MCP service reachable on
+   a URL you can hit.
+2. The operator has minted you a JWT (see the Claude Desktop guide for
+   the `jwt-issue` invocation).
+
+## Add the MCP server
+
+From the terminal, with Claude Code installed:
+
+```bash
+claude mcp add nom-indexer \
+    --transport http \
+    --url https://mcp.example.com/mcp \
+    --header "Authorization: Bearer eyJhbGciOiJIUzI1NiIs…"
+```
+
+This writes the entry to the project-scoped `.mcp.json` (or
+user-scoped, depending on Claude Code's current settings) so the
+server is available in every session in this project.
+
+Equivalent `.mcp.json` snippet for hand-editing:
+
+```json
+{
+  "mcpServers": {
+    "nom-indexer": {
+      "type": "http",
+      "url": "https://mcp.example.com/mcp",
+      "headers": {
+        "Authorization": "Bearer eyJhbGciOiJIUzI1NiIs…"
+      }
+    }
+  }
+}
+```
+
+For local dev: `--url http://localhost:8081/mcp` and the locally-minted
+token.
+
+## Verify
+
+```text
+> What's the latest momentum height on Zenon?
+```
+
+Claude Code calls `get_status` and reports the height. If you don't
+see a tool-call indicator in the response, the server probably failed
+to register — check `claude mcp list` and `claude mcp logs nom-indexer`.
+
+## Token rotation
+
+Same as Claude Desktop. Re-run `claude mcp add` with `--force` or
+edit `.mcp.json` directly with the new token.
+
+
+=== docs/mcp/setup-claude-desktop.md ===
+
+# Setup — Claude Desktop
+
+Configure Claude Desktop to query the hosted nom-indexer MCP server.
+The user never installs an MCP binary; they paste a JWT into the
+config file and restart Claude Desktop.
+
+## Prerequisites
+
+1. The operator has the stack running and the MCP service reachable on
+   a URL you can hit (`http://localhost:8081/mcp` for local dev,
+   `https://mcp.example.com/mcp` for a deployed instance).
+2. The operator has minted you a JWT — see [Issuing a token](#issuing-a-token).
+
+## Issuing a token
+
+The operator runs this once per user. The token's `sub` claim shows up
+in metrics and rate limits, so make it stable per user.
+
+```bash
+docker compose exec -T mcp /app/jwt-issue \
+    --sub alice \
+    --ttl 720h \
+    --scope read
+# → eyJhbGciOiJIUzI1NiIs…
+```
+
+Hand the token to the user out-of-band (1Password, signed message,
+whatever). There is no token endpoint — there is no way to mint a
+token from inside Claude Desktop.
+
+## Configure Claude Desktop
+
+Open `claude_desktop_config.json`:
+
+| OS | Path |
+|---|---|
+| macOS | `~/Library/Application Support/Claude/claude_desktop_config.json` |
+| Windows | `%APPDATA%\Claude\claude_desktop_config.json` |
+| Linux | `~/.config/Claude/claude_desktop_config.json` |
+
+Add an entry under `mcpServers`. If the file is empty, the full
+contents should be:
+
+```json
+{
+  "mcpServers": {
+    "nom-indexer": {
+      "type": "http",
+      "url": "https://mcp.example.com/mcp",
+      "headers": {
+        "Authorization": "Bearer eyJhbGciOiJIUzI1NiIs…"
+      }
+    }
+  }
+}
+```
+
+For local dev against a `docker compose up` stack, use
+`http://localhost:8081/mcp` and the locally-minted token. Restart
+Claude Desktop after editing the file.
+
+## Verify
+
+In a fresh Claude Desktop conversation, ask:
+
+> What's the latest momentum height on Zenon?
+
+Claude should call `get_status` automatically. If the call fails with
+an authentication error, double-check:
+
+- the `Bearer ` prefix is present (one space, not a colon),
+- the token has not expired (`exp` claim — re-issue if needed), and
+- the server URL is reachable (open it in a browser — you should get
+  a 405 or 400, not a connection error).
+
+## Rotating tokens
+
+Tokens are short-lived by design. To rotate:
+
+1. Operator runs `jwt-issue` again with a new TTL.
+2. User pastes the new token into `claude_desktop_config.json`.
+3. User restarts Claude Desktop.
+
+No server-side state changes — the old token simply expires.
+
+## Revoking access
+
+Because tokens are stateless (HS256 with a single shared secret), the
+only way to revoke a single user mid-TTL is to rotate the server-side
+secret and re-issue every active token. For per-user revocation, set a
+short TTL (24h–48h) and stop re-issuing.
 
 
 === docs/mcp/tools.md ===
 
 # MCP tools
 
-The MCP server has not been implemented yet, so no tools are exposed by
-the current binary.
+Every tool the [MCP server](index.md) exposes, grouped by domain. Names
+and shapes match the equivalent [REST endpoints](../api/index.md) — the
+two surfaces share `internal/api/dto` and `internal/repository`, so a
+caller can move between transports without re-learning the data.
 
-The planned shape is read-only, parameterized queries over the indexer
-schema: examples include rewards by address, pillar lookup by name, and
-bridge requests by token. When the server exists, this page should list
-each tool name, input schema, backing SQL or repository method, and
-example result.
+## Conventions
+
+- **Pagination params:** `page` (1-indexed, default 1) and `page_size`
+  (default 50, max 200) — same caps as the REST API.
+- **Sort param:** `sort` is `asc` or `desc`, defaults to the per-tool
+  natural order (height DESC, timestamp DESC).
+- **Output:** every tool returns both:
+  - a TextContent block holding pretty-printed JSON (for LLM
+    consumption), and
+  - `structuredContent` carrying the same payload as a typed object
+    (for programmatic consumers).
+- **Envelopes:**
+  - List tools return `{"data": [...], "pagination": {...}}`.
+  - Unpaginated lists (account balances, project phases, cumulative
+    rewards) return `{"data": [...]}` with no pagination block.
+  - Single-object tools return the object directly.
+- **Amounts:** every `*_amount`, `total_supply`, `max_supply`, etc.
+  ships as a JSON string. The underlying int64 values regularly exceed
+  2^53, so a JS Number would lose precision.
+
+## Status
+
+| Tool | Input | Output |
+|---|---|---|
+| `get_status` | — | `dto.Status` — `{latest_height, latest_timestamp, indexer_lag_seconds, version}` |
+
+## Momentums (block headers)
+
+| Tool | Input | Output |
+|---|---|---|
+| `get_momentum_by_height` | `height: int64` | `dto.Momentum` |
+| `get_latest_momentum` | — | `dto.Momentum` |
+| `list_momentums` | `page, page_size, sort` | `Page<Momentum>` |
+
+## Accounts and balances
+
+| Tool | Input | Output |
+|---|---|---|
+| `get_account` | `address: string` | `dto.Account` |
+| `list_account_balances` | `address` | `{data: [Balance]}` (unpaginated; balances per account are bounded) |
+| `list_account_transactions` | `address, page, page_size, sort` | `Page<AccountBlock>` |
+
+## Account blocks (transactions)
+
+| Tool | Input | Output |
+|---|---|---|
+| `list_account_blocks` | `page, page_size, sort` | `Page<AccountBlock>` |
+| `get_account_block` | `hash` | `dto.AccountBlock` |
+
+## Tokens
+
+| Tool | Input | Output |
+|---|---|---|
+| `list_tokens` | `page, page_size` | `Page<Token>` |
+| `get_token` | `token_standard` (zts1…) | `dto.Token` |
+| `list_token_holders` | `token_standard, page, page_size` | `Page<Balance>` — richlist for one token |
+
+## Pillars
+
+| Tool | Input | Output |
+|---|---|---|
+| `list_pillars` | `include_revoked, page, page_size` | `Page<Pillar>` |
+| `get_pillar_by_name` | `name` | `dto.Pillar` |
+| `list_pillar_delegators` | `name, page, page_size` | `Page<PillarDelegator>` — resolves the pillar name to its owner address first |
+
+## Sentinels
+
+| Tool | Input | Output |
+|---|---|---|
+| `list_sentinels` | `include_inactive, page, page_size` | `Page<Sentinel>` |
+
+## Stakes (ZNN delegation entries)
+
+| Tool | Input | Output |
+|---|---|---|
+| `list_stakes` | `include_inactive, page, page_size` | `Page<Stake>` — active only by default |
+| `list_account_stakes` | `address, include_inactive, page, page_size` | `Page<Stake>` |
+
+## Fusions (QSR plasma entries)
+
+| Tool | Input | Output |
+|---|---|---|
+| `list_fusions` | `include_inactive, page, page_size` | `Page<Fusion>` |
+| `list_account_fusions` | `address, include_inactive, page, page_size` | `Page<Fusion>` — matches on funder OR beneficiary |
+
+## Rewards
+
+| Tool | Input | Output |
+|---|---|---|
+| `list_account_rewards` | `address, page, page_size` | `Page<RewardTransaction>` — per-event history |
+| `get_account_cumulative_rewards` | `address` | `{data: [CumulativeReward]}` — one row per (reward_type, token_standard) |
+
+## Accelerator-Z (projects)
+
+| Tool | Input | Output |
+|---|---|---|
+| `list_projects` | `page, page_size` | `Page<Project>` |
+| `get_project` | `id` (64-char hex) | `dto.Project` |
+| `list_project_phases` | `id` | `{data: [ProjectPhase]}` — ascending phase order |
+| `list_project_votes` | `id, page, page_size` | `Page<Vote>` — pillar votes on the project or any of its phases |
+
+## Bridge
+
+| Tool | Input | Output |
+|---|---|---|
+| `list_bridge_wraps` | `page, page_size` | `Page<WrapTokenRequest>` — ZTS → external chain intents |
+| `list_bridge_unwraps` | `page, page_size` | `Page<UnwrapTokenRequest>` |
+| `list_account_bridge_wraps` | `address, page, page_size` | `Page<WrapTokenRequest>` |
+| `list_account_bridge_unwraps` | `address, page, page_size` | `Page<UnwrapTokenRequest>` |
+
+## Calling a tool by hand
+
+The Streamable HTTP transport accepts plain JSON-RPC, so any HTTP
+client works. The example below smoke-tests `get_status` end-to-end.
+
+```bash
+TOKEN="paste your token"
+
+# 1. initialize — required handshake.
+curl -s -X POST http://localhost:8081/mcp \
+     -H "Authorization: Bearer $TOKEN" \
+     -H "Content-Type: application/json" \
+     -H "Accept: application/json, text/event-stream" \
+     -d '{"jsonrpc":"2.0","id":1,"method":"initialize",
+          "params":{"protocolVersion":"2025-06-18",
+                    "capabilities":{},
+                    "clientInfo":{"name":"smoke","version":"0"}}}'
+
+# 2. tools/list — discover the catalog.
+curl -s -X POST http://localhost:8081/mcp \
+     -H "Authorization: Bearer $TOKEN" \
+     -H "Content-Type: application/json" \
+     -H "Accept: application/json, text/event-stream" \
+     -d '{"jsonrpc":"2.0","id":2,"method":"tools/list"}'
+
+# 3. tools/call get_status.
+curl -s -X POST http://localhost:8081/mcp \
+     -H "Authorization: Bearer $TOKEN" \
+     -H "Content-Type: application/json" \
+     -H "Accept: application/json, text/event-stream" \
+     -d '{"jsonrpc":"2.0","id":3,"method":"tools/call",
+          "params":{"name":"get_status","arguments":{}}}'
+```
+
+In real clients (Claude Desktop, Claude Code) the handshake and
+discovery are handled automatically — see the
+[Claude Desktop setup](setup-claude-desktop.md) and
+[Claude Code setup](setup-claude-code.md) pages.
 
 
 === docs/migrations/guide.md ===
