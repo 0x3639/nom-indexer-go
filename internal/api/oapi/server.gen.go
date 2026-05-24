@@ -63,6 +63,30 @@ func (e HealthStatus) Valid() bool {
 	}
 }
 
+// Defines values for PillarVoteEntryVote.
+const (
+	PillarVoteEntryVoteAbstain PillarVoteEntryVote = "abstain"
+	PillarVoteEntryVoteNo      PillarVoteEntryVote = "no"
+	PillarVoteEntryVoteUnknown PillarVoteEntryVote = "unknown"
+	PillarVoteEntryVoteYes     PillarVoteEntryVote = "yes"
+)
+
+// Valid indicates whether the value is a known member of the PillarVoteEntryVote enum.
+func (e PillarVoteEntryVote) Valid() bool {
+	switch e {
+	case PillarVoteEntryVoteAbstain:
+		return true
+	case PillarVoteEntryVoteNo:
+		return true
+	case PillarVoteEntryVoteUnknown:
+		return true
+	case PillarVoteEntryVoteYes:
+		return true
+	default:
+		return false
+	}
+}
+
 // Defines values for RewardTransactionRewardType.
 const (
 	RewardTransactionRewardTypeDelegation RewardTransactionRewardType = "Delegation"
@@ -360,6 +384,13 @@ type Pagination struct {
 	Total int64 `json:"total"`
 }
 
+// PhaseVoteTally defines model for PhaseVoteTally.
+type PhaseVoteTally struct {
+	PhaseId   string            `json:"phase_id"`
+	PhaseName string            `json:"phase_name"`
+	Vote      ProposalVoteTally `json:"vote"`
+}
+
 // Pillar defines model for Pillar.
 type Pillar struct {
 	EpochExpectedMomentums       *int   `json:"epoch_expected_momentums,omitempty"`
@@ -406,6 +437,32 @@ type PillarDelegatorList struct {
 type PillarList struct {
 	Data       []Pillar   `json:"data"`
 	Pagination Pagination `json:"pagination"`
+}
+
+// PillarVoteEntry defines model for PillarVoteEntry.
+type PillarVoteEntry struct {
+	MomentumHeight    int64               `json:"momentum_height"`
+	MomentumTimestamp int64               `json:"momentum_timestamp"`
+	PhaseId           *string             `json:"phase_id,omitempty"`
+	PhaseName         *string             `json:"phase_name,omitempty"`
+	ProjectId         string              `json:"project_id"`
+	ProjectName       *string             `json:"project_name,omitempty"`
+	Vote              PillarVoteEntryVote `json:"vote"`
+	VotingId          string              `json:"voting_id"`
+}
+
+// PillarVoteEntryVote defines model for PillarVoteEntry.Vote.
+type PillarVoteEntryVote string
+
+// PillarVotingHistory defines model for PillarVotingHistory.
+type PillarVotingHistory struct {
+	AbstainCount int               `json:"abstain_count"`
+	NoCount      int               `json:"no_count"`
+	PillarName   string            `json:"pillar_name"`
+	PillarOwner  string            `json:"pillar_owner"`
+	TotalVotes   int               `json:"total_votes"`
+	Votes        []PillarVoteEntry `json:"votes"`
+	YesCount     int               `json:"yes_count"`
 }
 
 // Problem RFC 7807 problem details.
@@ -488,6 +545,31 @@ type ProjectPhase struct {
 // ProjectPhaseList defines model for ProjectPhaseList.
 type ProjectPhaseList struct {
 	Data []ProjectPhase `json:"data"`
+}
+
+// ProjectVotingReport defines model for ProjectVotingReport.
+type ProjectVotingReport struct {
+	// ActivePillarCount Denominator used for each tally — current is_revoked=false set.
+	ActivePillarCount int               `json:"active_pillar_count"`
+	Phases            []PhaseVoteTally  `json:"phases"`
+	Project           ProposalVoteTally `json:"project"`
+	ProjectId         string            `json:"project_id"`
+	ProjectName       string            `json:"project_name"`
+}
+
+// ProposalVoteTally defines model for ProposalVoteTally.
+type ProposalVoteTally struct {
+	AbstainCount   int      `json:"abstain_count"`
+	AbstainPillars []string `json:"abstain_pillars"`
+	NoCount        int      `json:"no_count"`
+	NoPillars      []string `json:"no_pillars"`
+
+	// NoVoteCount Active pillars that have not voted on this proposal.
+	NoVoteCount   int      `json:"no_vote_count"`
+	NoVotePillars []string `json:"no_vote_pillars"`
+	VotingId      string   `json:"voting_id"`
+	YesCount      int      `json:"yes_count"`
+	YesPillars    []string `json:"yes_pillars"`
 }
 
 // RewardTransaction defines model for RewardTransaction.
@@ -978,6 +1060,9 @@ type ServerInterface interface {
 	// List delegators for a pillar
 	// (GET /api/v1/pillars/{name}/delegators)
 	ListPillarDelegators(w http.ResponseWriter, r *http.Request, name string, params ListPillarDelegatorsParams)
+	// Server-aggregated voting history for a named pillar
+	// (GET /api/v1/pillars/{name}/voting-report)
+	GetPillarVotingHistory(w http.ResponseWriter, r *http.Request, name string)
 	// List Accelerator-Z projects
 	// (GET /api/v1/projects)
 	ListProjects(w http.ResponseWriter, r *http.Request, params ListProjectsParams)
@@ -990,6 +1075,9 @@ type ServerInterface interface {
 	// List pillar votes targeting a project (or any of its phases)
 	// (GET /api/v1/projects/{id}/votes)
 	ListProjectVotes(w http.ResponseWriter, r *http.Request, id string, params ListProjectVotesParams)
+	// Server-aggregated voting report for a project + all its phases
+	// (GET /api/v1/projects/{id}/voting-report)
+	GetProjectVotingReport(w http.ResponseWriter, r *http.Request, id string)
 	// List sentinels
 	// (GET /api/v1/sentinels)
 	ListSentinels(w http.ResponseWriter, r *http.Request, params ListSentinelsParams)
@@ -2122,6 +2210,38 @@ func (siw *ServerInterfaceWrapper) ListPillarDelegators(w http.ResponseWriter, r
 	handler.ServeHTTP(w, r)
 }
 
+// GetPillarVotingHistory operation middleware
+func (siw *ServerInterfaceWrapper) GetPillarVotingHistory(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+	_ = err
+
+	// ------------- Path parameter "name" -------------
+	var name string
+
+	err = runtime.BindStyledParameterWithOptions("simple", "name", r.PathValue("name"), &name, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: ""})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "name", Err: err})
+		return
+	}
+
+	ctx := r.Context()
+
+	ctx = context.WithValue(ctx, BearerAuthScopes, []string{})
+
+	r = r.WithContext(ctx)
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.GetPillarVotingHistory(w, r, name)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
 // ListProjects operation middleware
 func (siw *ServerInterfaceWrapper) ListProjects(w http.ResponseWriter, r *http.Request) {
 
@@ -2290,6 +2410,38 @@ func (siw *ServerInterfaceWrapper) ListProjectVotes(w http.ResponseWriter, r *ht
 
 	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		siw.Handler.ListProjectVotes(w, r, id, params)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// GetProjectVotingReport operation middleware
+func (siw *ServerInterfaceWrapper) GetProjectVotingReport(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+	_ = err
+
+	// ------------- Path parameter "id" -------------
+	var id string
+
+	err = runtime.BindStyledParameterWithOptions("simple", "id", r.PathValue("id"), &id, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: ""})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "id", Err: err})
+		return
+	}
+
+	ctx := r.Context()
+
+	ctx = context.WithValue(ctx, BearerAuthScopes, []string{})
+
+	r = r.WithContext(ctx)
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.GetProjectVotingReport(w, r, id)
 	}))
 
 	for _, middleware := range siw.HandlerMiddlewares {
@@ -2828,10 +2980,12 @@ func HandlerWithOptions(si ServerInterface, options StdHTTPServerOptions) http.H
 	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/api/v1/pillars", wrapper.ListPillars)
 	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/api/v1/pillars/{name}", wrapper.GetPillar)
 	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/api/v1/pillars/{name}/delegators", wrapper.ListPillarDelegators)
+	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/api/v1/pillars/{name}/voting-report", wrapper.GetPillarVotingHistory)
 	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/api/v1/projects", wrapper.ListProjects)
 	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/api/v1/projects/{id}", wrapper.GetProject)
 	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/api/v1/projects/{id}/phases", wrapper.ListProjectPhases)
 	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/api/v1/projects/{id}/votes", wrapper.ListProjectVotes)
+	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/api/v1/projects/{id}/voting-report", wrapper.GetProjectVotingReport)
 	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/api/v1/sentinels", wrapper.ListSentinels)
 	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/api/v1/stakes", wrapper.ListStakes)
 	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/api/v1/status", wrapper.GetStatus)

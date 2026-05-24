@@ -125,7 +125,7 @@ func (r *VoteRepository) ProjectVotingReport(ctx context.Context, projectID stri
 	if err != nil {
 		return nil, err
 	}
-	pillarNames, pillarNameByOwner, err := r.loadActivePillars(ctx)
+	pillarNames, err := r.loadActivePillarNames(ctx)
 	if err != nil {
 		return nil, err
 	}
@@ -135,7 +135,7 @@ func (r *VoteRepository) ProjectVotingReport(ctx context.Context, projectID stri
 	for _, p := range phases {
 		votingIDs = append(votingIDs, p.votingID)
 	}
-	votesByVotingID, err := r.loadVotesByVotingID(ctx, votingIDs, pillarNameByOwner)
+	votesByVotingID, err := r.loadVotesByVotingID(ctx, votingIDs)
 	if err != nil {
 		return nil, err
 	}
@@ -200,43 +200,69 @@ func (r *VoteRepository) loadPhaseMetas(ctx context.Context, projectID string) (
 	return phases, rows.Err()
 }
 
-// loadActivePillars returns the ordered name list (denominator for
-// no-vote calculations) and the owner_address → name map (used to
-// join votes back to their pillars).
-func (r *VoteRepository) loadActivePillars(ctx context.Context) ([]string, map[string]string, error) {
+// loadActivePillarNames returns the ordered name list used as the
+// denominator for no-vote calculations.
+func (r *VoteRepository) loadActivePillarNames(ctx context.Context) ([]string, error) {
 	rows, err := r.pool.Query(ctx,
-		`SELECT name, owner_address
+		`SELECT name
 		   FROM pillars
 		  WHERE is_revoked = false
 		  ORDER BY name`)
 	if err != nil {
-		return nil, nil, err
+		return nil, err
 	}
 	defer rows.Close()
 
-	pillarNameByOwner := make(map[string]string)
 	var pillarNames []string
 	for rows.Next() {
-		var name, owner string
-		if err := rows.Scan(&name, &owner); err != nil {
-			return nil, nil, err
+		var name string
+		if err := rows.Scan(&name); err != nil {
+			return nil, err
 		}
-		pillarNameByOwner[owner] = name
 		pillarNames = append(pillarNames, name)
 	}
-	return pillarNames, pillarNameByOwner, rows.Err()
+	return pillarNames, rows.Err()
 }
 
 // loadVotesByVotingID fetches every vote covering the given voting_ids
-// and groups them by voting_id → pillar_name → vote code. Votes cast
-// by voters not in pillarNameByOwner (revoked pillars whose votes are
-// still in the table) are dropped — the report describes the
-// current governing set.
-func (r *VoteRepository) loadVotesByVotingID(ctx context.Context, votingIDs []string, pillarNameByOwner map[string]string) (map[string]map[string]int16, error) {
-	rows, err := r.pool.Query(ctx,
-		`SELECT voting_id, voter_address, vote
-		   FROM votes
-		  WHERE voting_id = ANY($1)`, votingIDs)
+// and groups them by voting_id → active pillar name → vote code.
+//
+// VoteByName rows store owner_address. VoteByProdAddress rows store a
+// producer address, so the query resolves those through the historical
+// pillar_updates row at the vote height, with a current-producer fallback
+// for old data that predates the update log.
+func (r *VoteRepository) loadVotesByVotingID(ctx context.Context, votingIDs []string) (map[string]map[string]int16, error) {
+	rows, err := r.pool.Query(ctx, `
+		SELECT v.voting_id,
+		       COALESCE(owner_p.name, hist_p.name, current_producer_p.name) AS pillar_name,
+		       v.vote
+		  FROM votes v
+		  LEFT JOIN pillars owner_p
+		    ON owner_p.owner_address = v.voter_address
+		   AND owner_p.is_revoked = false
+		  LEFT JOIN LATERAL (
+		      SELECT pu.owner_address
+		        FROM pillar_updates pu
+		       WHERE pu.producer_address = v.voter_address
+		         AND pu.momentum_height <= v.momentum_height
+		       ORDER BY pu.id DESC
+		       LIMIT 1
+		  ) hist ON owner_p.owner_address IS NULL
+		  LEFT JOIN pillars hist_p
+		    ON hist_p.owner_address = hist.owner_address
+		   AND hist_p.is_revoked = false
+		  LEFT JOIN LATERAL (
+		      SELECT p.name
+		        FROM pillars p
+		       WHERE p.producer_address = v.voter_address
+		         AND p.is_revoked = false
+		       ORDER BY p.rank ASC
+		       LIMIT 1
+		  ) current_producer_p ON owner_p.owner_address IS NULL
+		                      AND hist.owner_address IS NULL
+		 WHERE v.voting_id = ANY($1)
+		   AND COALESCE(owner_p.name, hist_p.name, current_producer_p.name) IS NOT NULL`,
+		votingIDs)
 	if err != nil {
 		return nil, err
 	}
@@ -249,15 +275,11 @@ func (r *VoteRepository) loadVotesByVotingID(ctx context.Context, votingIDs []st
 	for rows.Next() {
 		var (
 			votingID string
-			voter    string
+			name     string
 			vote     int16
 		)
-		if err := rows.Scan(&votingID, &voter, &vote); err != nil {
+		if err := rows.Scan(&votingID, &name, &vote); err != nil {
 			return nil, err
-		}
-		name, ok := pillarNameByOwner[voter]
-		if !ok {
-			continue
 		}
 		out[votingID][name] = vote
 	}
@@ -274,10 +296,10 @@ func (r *VoteRepository) PillarVotingHistory(ctx context.Context, pillarName str
 		return nil, fmt.Errorf("pillar name is required")
 	}
 
-	var owner string
+	var owner, currentProducer string
 	if err := r.pool.QueryRow(ctx,
-		`SELECT owner_address FROM pillars WHERE name = $1`, pillarName,
-	).Scan(&owner); err != nil {
+		`SELECT owner_address, producer_address FROM pillars WHERE name = $1`, pillarName,
+	).Scan(&owner, &currentProducer); err != nil {
 		return nil, err
 	}
 
@@ -290,7 +312,24 @@ func (r *VoteRepository) PillarVotingHistory(ctx context.Context, pillarName str
 		  LEFT JOIN projects p        ON p.id  = v.project_id
 		  LEFT JOIN project_phases pp ON pp.id = v.phase_id
 		 WHERE v.voter_address = $1
-		 ORDER BY v.momentum_timestamp DESC`, owner)
+		    OR $1 = (
+		       SELECT pu.owner_address
+		         FROM pillar_updates pu
+		        WHERE pu.producer_address = v.voter_address
+		          AND pu.momentum_height <= v.momentum_height
+		        ORDER BY pu.id DESC
+		        LIMIT 1
+		    )
+		    OR (
+		       v.voter_address = $2
+		       AND NOT EXISTS (
+		           SELECT 1
+		             FROM pillar_updates pu
+		            WHERE pu.producer_address = v.voter_address
+		              AND pu.momentum_height <= v.momentum_height
+		       )
+		    )
+		 ORDER BY v.momentum_timestamp DESC`, owner, currentProducer)
 	if err != nil {
 		return nil, err
 	}
