@@ -32,6 +32,21 @@ func (m *NomIndexer) PublishAPI(ctx context.Context, source *dagger.Directory, t
 		Publish(ctx, "ghcr.io/0x3639/nom-indexer-api:"+tag)
 }
 
+// BuildMCP builds the MCP server Docker image (Dockerfile.mcp,
+// CGO_ENABLED=0). Same shape as BuildAPI — the MCP binary never imports
+// go-zenon, so a CGO-free build keeps the runtime image small.
+func (m *NomIndexer) BuildMCP(source *dagger.Directory) *dagger.Container {
+	return source.DockerBuild(dagger.DirectoryDockerBuildOpts{
+		Dockerfile: "Dockerfile.mcp",
+	})
+}
+
+// PublishMCP builds and pushes the MCP image to GitHub Container Registry.
+func (m *NomIndexer) PublishMCP(ctx context.Context, source *dagger.Directory, tag string) (string, error) {
+	return m.BuildMCP(source).
+		Publish(ctx, "ghcr.io/0x3639/nom-indexer-mcp:"+tag)
+}
+
 // Test runs go test with CGO enabled (required for secp256k1)
 func (m *NomIndexer) Test(ctx context.Context, source *dagger.Directory) (string, error) {
 	return dag.Container().
@@ -91,6 +106,9 @@ func (m *NomIndexer) CI(ctx context.Context, source *dagger.Directory) (string, 
 		return "", err
 	}
 	if _, err := m.BuildAPI(source).Sync(ctx); err != nil {
+		return "", err
+	}
+	if _, err := m.BuildMCP(source).Sync(ctx); err != nil {
 		return "", err
 	}
 
