@@ -79,7 +79,7 @@ Adds bridge configuration cache tables:
 [`bridge_guardians`](../schema/bridge_guardians.md),
 [`bridge_orchestrator_info`](../schema/bridge_orchestrator_info.md),
 [`bridge_security_info`](../schema/bridge_security_info.md). Mirrors the
-zenonhub bridge schema so the future API / MCP server can answer
+zenonhub bridge schema so the API (and future MCP server) can answer
 "what's the current bridge admin?" without an RPC round-trip.
 
 ## 009 — `account_flow_and_balance_timestamp`

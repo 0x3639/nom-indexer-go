@@ -34,8 +34,9 @@ config_file=/etc/postgresql/postgresql.conf` if you want tuned config.
 
 `database.pool_size` (default 10) is the indexer's max pgxpool size.
 Under steady-state load, the indexer typically holds 2–4 connections.
-Raise to 20–30 if you're running additional consumers (the future API
-and MCP server will share this DB).
+The `cmd/api` service opens its own pgxpool against the same DB
+(its `database.pool_size` knob is independent). Raise either pool to
+20–30 if you're running more replicas or expect heavy API traffic.
 
 ## Vertical: indexer
 
@@ -113,8 +114,8 @@ double that for production.
 
 ## Observability
 
-The current liveness signal is `MAX(momentums.timestamp)` advancing.
-The future API exposes a `/metrics` endpoint; the indexer itself does
-not export Prometheus today. Adding `/metrics` to the indexer is a
-plausible follow-up — see
-[`monitoring.md`](monitoring.md).
+The indexer's liveness signal is `MAX(momentums.timestamp)` advancing
+— the indexer binary does not export Prometheus today. The
+`cmd/api` service does, on a separate listener (`API_METRICS_PORT`,
+default 9090), with request count + latency histograms labeled by
+chi route pattern. See [`monitoring.md`](monitoring.md).

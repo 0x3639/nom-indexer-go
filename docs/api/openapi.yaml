@@ -712,8 +712,22 @@ paths:
       operationId: getReadyz
       summary: Readiness probe
       description: |
-        Pings the Postgres pool. Returns 200 ready when the DB is
-        reachable; 503 with an RFC 7807 problem when it is not.
+        Two checks:
+
+        1. Pings the Postgres pool.
+        2. Reads `schema_migrations` (golang-migrate) and asserts
+           `version >= minSchemaVersion` (pinned in
+           `internal/api/router/router.go`) AND `dirty = false`.
+
+        Returns 200 `{"status":"ready"}` when both pass. Returns
+        503 application/problem+json with a stable `code` field on
+        any failure:
+
+        | `code` | Cause |
+        |---|---|
+        | `db_unavailable` | Pool ping or query failed (network, pool exhausted). |
+        | `schema_not_migrated` | `schema_migrations` table missing OR `version` below the API's pinned minimum. Start the indexer container so migrations run. |
+        | `schema_dirty` | `schema_migrations.dirty = true` — last migration crashed mid-run; manual repair required. |
       tags: [meta]
       security: []
       responses:
@@ -727,7 +741,10 @@ paths:
                 properties:
                   status: { type: string, enum: [ready] }
         '503':
-          description: Database is unreachable.
+          description: |
+            Service is not ready. The `code` field on the problem
+            body distinguishes db_unavailable, schema_not_migrated,
+            and schema_dirty (see operation description).
           content:
             application/problem+json:
               schema:

@@ -85,9 +85,9 @@ flowchart LR
     db --> cfg
 ```
 
-`internal/models` is the leaf — it imports stdlib only. That makes
-it safe for the future API and MCP packages to depend on (they'll need
-the structs to serialize responses).
+`internal/models` is the leaf — it imports stdlib only. That keeps
+it safe for `internal/api/dto` to depend on without dragging in pgx,
+and reserves the same property for the future MCP package.
 
 ## Data flow at a glance
 
