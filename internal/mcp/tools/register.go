@@ -16,4 +16,7 @@ import (
 // the catalog easy to scan: one file, one domain, one mental model.
 func Register(srv *mcp.Server, repos *repository.Repositories) {
 	registerStatus(srv, repos)
+	registerMomentums(srv, repos)
+	registerAccounts(srv, repos)
+	registerTokens(srv, repos)
 }
