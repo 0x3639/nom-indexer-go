@@ -38,3 +38,20 @@ curl -s -H "Authorization: Bearer $TOKEN" \
 ```
 
 `vote` values: `0` = yes, `1` = no, `2` = abstain.
+
+## Voting report — `GET /api/v1/projects/{id}/voting-report`
+
+Server-aggregated. Returns the project's own proposal vote AND every
+phase's vote pre-tallied against the current active pillar set
+(`is_revoked = false`). Each tally lists `yes_pillars`, `no_pillars`,
+`abstain_pillars`, and `no_vote_pillars` by name — `no_vote_pillars`
+captures active pillars who never voted on that specific proposal.
+
+```bash
+curl -s -H "Authorization: Bearer $TOKEN" \
+     http://localhost:8080/api/v1/projects/<project-id>/voting-report | jq
+```
+
+One call replaces the enumerate-pillars + paginate-`votes` +
+filter-by-pillar pattern. Phases are returned in creation order.
+Pillar lists are alphabetized for stable diffs.

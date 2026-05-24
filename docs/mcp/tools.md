@@ -70,6 +70,7 @@ caller can move between transports without re-learning the data.
 | `list_pillars` | `include_revoked, page, page_size` | `Page<Pillar>` |
 | `get_pillar_by_name` | `name` | `dto.Pillar` |
 | `list_pillar_delegators` | `name, page, page_size` | `Page<PillarDelegator>` — resolves the pillar name to its owner address first |
+| `get_pillar_voting_history` | `name` | `dto.PillarVotingHistory` — one named pillar's complete vote record across every project + phase, with project + phase names already joined and codes translated to `"yes"` / `"no"` / `"abstain"`. Ordered newest-first. Use instead of paging through `list_project_votes` and filtering. |
 
 ## Sentinels
 
@@ -106,6 +107,7 @@ caller can move between transports without re-learning the data.
 | `get_project` | `id` (64-char hex) | `dto.Project` |
 | `list_project_phases` | `id` | `{data: [ProjectPhase]}` — ascending phase order |
 | `list_project_votes` | `id, page, page_size` | `Page<Vote>` — pillar votes on the project or any of its phases |
+| `get_project_voting_report` | `id` | `dto.ProjectVotingReport` — one project + every phase pre-aggregated against the active pillar set. Each tally lists `yes_pillars`, `no_pillars`, `abstain_pillars`, `no_vote_pillars` by name. One call replaces enumerate-pillars + paginate-list_project_votes. |
 
 ## Bridge
 
