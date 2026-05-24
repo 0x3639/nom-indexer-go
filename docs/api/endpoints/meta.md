@@ -14,21 +14,36 @@ curl -s http://localhost:8080/healthz
 
 ## Readiness — `GET /readyz`
 
-Two checks: pings the Postgres pool **and** verifies the indexer
-schema is present (looks for the `momentums` table). Returns
-`200 {"status":"ready"}` when both pass, `503` with a problem+json
-body when either fails. Safe for k8s readiness probes — it returns
-not-ready until migrations have run on a fresh cluster.
+Two checks:
+
+1. Pings the Postgres pool.
+2. Reads golang-migrate's `schema_migrations` and asserts
+   `version >= minSchemaVersion` (currently `11`) AND `dirty = false`.
+
+Returns `200 {"status":"ready"}` when both pass. Returns `503` with a
+problem+json body on any failure mode below. Safe for k8s readiness
+probes — `/readyz` reports not-ready on a fresh cluster, a partially
+migrated DB, or a migration that crashed mid-run.
 
 ```bash
 curl -s http://localhost:8080/readyz
 # {"status":"ready"}
-
-# On a fresh DB before the indexer has migrated:
-# {"type":"about:blank","title":"Service Unavailable","status":503,
-#  "detail":"momentums table missing — start the indexer container so migrations run",
-#  "code":"schema_not_migrated"}
 ```
+
+Failure shapes:
+
+| `code` | Status | When |
+|---|---|---|
+| `db_unavailable` | 503 | Pool ping or query failed (network, pool exhausted). |
+| `schema_not_migrated` | 503 | `schema_migrations` missing, or its `version` < `minSchemaVersion`. Start the indexer container so migrations run. |
+| `schema_dirty` | 503 | `schema_migrations.dirty = true`. The last migration crashed mid-run; manual repair required. |
+
+`minSchemaVersion` is pinned in `internal/api/router/router.go` and
+must be bumped whenever a new migration touches a table the API
+reads. The constant is intentionally separate from the indexer's
+migration tooling so a deploy that ships the API without the matching
+migration cleanly reports `schema_not_migrated` instead of 500ing on
+the first request.
 
 ## Indexer sync state — `GET /api/v1/status`
 

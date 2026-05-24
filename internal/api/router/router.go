@@ -8,7 +8,9 @@ package router
 
 import (
 	"context"
+	"fmt"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/go-chi/chi/v5"
@@ -122,13 +124,29 @@ func healthz(w http.ResponseWriter, _ *http.Request) {
 	httpx.WriteJSON(w, http.StatusOK, map[string]string{"status": "ok"})
 }
 
-// readyz verifies the database is reachable AND that the indexer
-// schema has been applied. A bare Ping is insufficient because a fresh
-// Postgres container without migrations would report healthy while
-// every /api/v1/* call 500s on missing relations. We probe the
-// information_schema for one of the oldest indexer tables (momentums)
-// — its presence implies migrations 001+ have run. A nil pool (test
-// mode) is treated as ready since there's nothing to verify.
+// minSchemaVersion is the lowest golang-migrate version the API can serve
+// against. Bump this in the same PR that adds a new migrations/NNN_*.sql
+// file IF the new migration touches a table the API reads. Failing to
+// bump means /readyz reports ready against an under-migrated DB and
+// some /api/v1/* endpoint will 500 on a missing table; bumping too
+// aggressively (i.e. before the migration actually ships in operators'
+// indexer image) means /readyz stays 503 after a deploy. Today the API
+// reads bridge/config/delegation/stat-history tables added through 011.
+const minSchemaVersion = 11
+
+// readyz verifies the database is reachable AND that the indexer schema
+// has been migrated far enough for every endpoint to serve. A bare Ping
+// is insufficient: a fresh container would report healthy while every
+// /api/v1/* call 500s, and a DB stuck on an early migration would 500
+// on tables added later (bridge_config, daily_stat_histories, etc.).
+//
+// We query golang-migrate's schema_migrations table (one row, version
+// + dirty) and require version >= minSchemaVersion AND dirty=false.
+// schema_migrations missing → migrations never ran. dirty=true → the
+// last migration failed mid-run and someone must intervene.
+//
+// A nil pool (test mode) is treated as ready since there's nothing to
+// verify.
 func readyz(pool *pgxpool.Pool) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		if pool == nil {
@@ -141,18 +159,34 @@ func readyz(pool *pgxpool.Pool) http.HandlerFunc {
 			httpx.WriteProblem(w, http.StatusServiceUnavailable, "db_unavailable", err.Error())
 			return
 		}
-		var exists bool
-		if err := pool.QueryRow(ctx, `
-			SELECT EXISTS (
-				SELECT 1 FROM information_schema.tables
-				WHERE table_schema = 'public' AND table_name = 'momentums'
-			)`).Scan(&exists); err != nil {
+
+		var (
+			version int64
+			dirty   bool
+		)
+		err := pool.QueryRow(ctx,
+			`SELECT version, dirty FROM schema_migrations LIMIT 1`).Scan(&version, &dirty)
+		if err != nil {
+			// Most likely: schema_migrations relation does not exist
+			// because migrations never ran. Surface a stable code so
+			// operators can grep for it without parsing pg messages.
+			if strings.Contains(err.Error(), "schema_migrations") {
+				httpx.WriteProblem(w, http.StatusServiceUnavailable, "schema_not_migrated",
+					"schema_migrations table missing — start the indexer container so migrations run")
+				return
+			}
 			httpx.WriteProblem(w, http.StatusServiceUnavailable, "db_unavailable", err.Error())
 			return
 		}
-		if !exists {
+		if dirty {
+			httpx.WriteProblem(w, http.StatusServiceUnavailable, "schema_dirty",
+				fmt.Sprintf("schema_migrations marks version %d dirty — manual repair needed", version))
+			return
+		}
+		if version < minSchemaVersion {
 			httpx.WriteProblem(w, http.StatusServiceUnavailable, "schema_not_migrated",
-				"momentums table missing — start the indexer container so migrations run")
+				fmt.Sprintf("schema_migrations.version = %d, API requires >= %d",
+					version, minSchemaVersion))
 			return
 		}
 		httpx.WriteJSON(w, http.StatusOK, map[string]string{"status": "ready"})
