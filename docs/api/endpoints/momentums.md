@@ -12,6 +12,10 @@ curl -s -H "Authorization: Bearer $TOKEN" \
      'http://localhost:8080/api/v1/momentums?page=1&page_size=10' | jq
 ```
 
+`pagination.total` is an upper bound derived from `MAX(height)` —
+exact when the chain has no backfill gaps. See
+[Pagination → Approximate totals](../pagination.md#approximate-totals-on-large-list-endpoints).
+
 ## Latest — `GET /api/v1/momentums/latest`
 
 The highest-height momentum. Returns `404` if the indexer has not

@@ -84,13 +84,25 @@ func TestIntegration_AccountBlockRepo_List(t *testing.T) {
 			t.Fatalf("seed: %v", err)
 		}
 	}
+	// AccountBlock.List reads pg_class.reltuples for the page total
+	// (see comment on the method). reltuples is only refreshed by
+	// ANALYZE / autovacuum, so a freshly-truncated table returns 0
+	// until we kick it. ANALYZE here keeps the test deterministic.
+	if _, err := pool.Exec(ctx, `ANALYZE account_blocks`); err != nil {
+		t.Fatalf("analyze: %v", err)
+	}
 
 	rows, total, err := repo.List(ctx, allOpts())
 	if err != nil {
 		t.Fatalf("List: %v", err)
 	}
-	if total != 4 || len(rows) != 4 {
-		t.Errorf("List got %d/%d, want 4/4", len(rows), total)
+	if len(rows) != 4 {
+		t.Errorf("List got %d rows, want 4", len(rows))
+	}
+	// reltuples is approximate but post-ANALYZE on a 4-row table should
+	// land exactly at 4. If autovacuum doesn't grace us, accept ±1.
+	if total < 3 || total > 5 {
+		t.Errorf("List total = %d, want ~4 (pg_class.reltuples)", total)
 	}
 
 	byAddr, total2, _ := repo.ListByAddress(ctx, "z1qsender", allOpts())

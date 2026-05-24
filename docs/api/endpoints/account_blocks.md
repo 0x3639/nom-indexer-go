@@ -13,6 +13,13 @@ curl -s -H "Authorization: Bearer $TOKEN" \
      'http://localhost:8080/api/v1/account_blocks?page=1&page_size=20' | jq
 ```
 
+`pagination.total` here is **approximate** — sourced from
+`pg_class.reltuples`, which Postgres refreshes via ANALYZE /
+autovacuum. Expect drift on the order of the autovacuum cadence.
+The scoped variant (`/api/v1/accounts/{address}/transactions`)
+returns an exact count. See
+[Pagination → Approximate totals](../pagination.md#approximate-totals-on-large-list-endpoints).
+
 ## By hash — `GET /api/v1/account_blocks/{hash}`
 
 ```bash

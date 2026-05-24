@@ -169,18 +169,40 @@ const accountBlockCols = `hash, momentum_hash, momentum_timestamp, momentum_heig
 	height, address, to_address, amount, token_standard, data, method, input,
 	paired_account_block, descendant_of`
 
+// scanAccountBlock reads one account_blocks row. total may be nil for
+// callers that compute total via a separate query (see List below); when
+// non-nil, the SELECT must include `COUNT(*) OVER () AS total` as the
+// final column.
 func scanAccountBlock(rows pgx.Row, ab *models.AccountBlock, total *int64) error {
-	return rows.Scan(
+	dst := []interface{}{
 		&ab.Hash, &ab.MomentumHash, &ab.MomentumTimestamp, &ab.MomentumHeight, &ab.BlockType,
 		&ab.Height, &ab.Address, &ab.ToAddress, &ab.Amount, &ab.TokenStandard, &ab.Data,
-		&ab.Method, &ab.Input, &ab.PairedAccountBlock, &ab.DescendantOf, total)
+		&ab.Method, &ab.Input, &ab.PairedAccountBlock, &ab.DescendantOf,
+	}
+	if total != nil {
+		dst = append(dst, total)
+	}
+	return rows.Scan(dst...)
 }
 
-// List returns account blocks ordered by momentum_height (newest-first by
-// default), with the total row count for pagination.
+// List returns account blocks ordered by momentum_height (newest-first
+// by default), with an approximate total row count for pagination.
+//
+// Two queries by design. The original pattern inlined COUNT(*) OVER ()
+// which forced a full sequential scan of the ~3M-row account_blocks
+// table even on page 1 — production requests blew past the API's 30s
+// WriteTimeout. The page query now reads only LIMIT rows via the
+// momentum_height index; the total comes from pg_class.reltuples,
+// which Postgres maintains via ANALYZE and autovacuum.
+//
+// reltuples is approximate: it lags behind autovacuum by however long
+// the table has been growing since the last stats update. The
+// scoped variant ListByAddress keeps the exact COUNT(*) OVER ()
+// because its WHERE clause shrinks the scan to per-address row counts
+// (typically far under a thousand) where the exact count is cheap.
 func (r *AccountBlockRepository) List(ctx context.Context, opts ListOpts) ([]*models.AccountBlock, int64, error) {
 	query := fmt.Sprintf(`
-		SELECT `+accountBlockCols+`, COUNT(*) OVER () AS total
+		SELECT `+accountBlockCols+`
 		FROM account_blocks
 		ORDER BY momentum_height %s
 		LIMIT $1 OFFSET $2`, orderClause(opts.Sort))
@@ -190,13 +212,10 @@ func (r *AccountBlockRepository) List(ctx context.Context, opts ListOpts) ([]*mo
 	}
 	defer rows.Close()
 
-	var (
-		out   []*models.AccountBlock
-		total int64
-	)
+	var out []*models.AccountBlock
 	for rows.Next() {
 		var ab models.AccountBlock
-		if err := scanAccountBlock(rows, &ab, &total); err != nil {
+		if err := scanAccountBlock(rows, &ab, nil); err != nil {
 			return nil, 0, err
 		}
 		out = append(out, &ab)
@@ -204,12 +223,12 @@ func (r *AccountBlockRepository) List(ctx context.Context, opts ListOpts) ([]*mo
 	if err := rows.Err(); err != nil {
 		return nil, 0, err
 	}
-	if len(out) == 0 && opts.Offset > 0 {
-		var err error
-		total, err = fallbackCount(ctx, r.pool, `SELECT COUNT(*) FROM account_blocks`)
-		if err != nil {
-			return nil, 0, err
-		}
+
+	var total int64
+	if err := r.pool.QueryRow(ctx,
+		`SELECT GREATEST(reltuples, 0)::BIGINT
+		 FROM pg_class WHERE relname = 'account_blocks'`).Scan(&total); err != nil {
+		return nil, 0, err
 	}
 	return out, total, nil
 }
