@@ -199,13 +199,34 @@ A 1 ZNN transfer is represented as `"100000000"` (8 decimals).
 ## Get account — `GET /api/v1/accounts/{address}`
 
 Returns flow metrics (lifetime ZNN/QSR sent/received), delegation
-state, and first/last activity timestamps. `404` if the indexer has
-never observed the address.
+state, first/last activity timestamps (chain-owner blocks only), and
+the `first_seen` / `last_seen` / `tx_count` triple covering blocks
+where the address appears as sender or recipient (`to_address`). `404` if
+the indexer has never observed the address.
 
 ```bash
 curl -s -H "Authorization: Bearer $TOKEN" \
      http://localhost:8080/api/v1/accounts/z1qq... | jq
 ```
+
+### `first_seen`, `last_seen`, `tx_count`
+
+These three fields are maintained incrementally per indexed block — they
+are O(1) reads, not aggregates computed at request time.
+
+| Field | Type | Notes |
+|---|---|---|
+| `first_seen` | integer \| null | Unix seconds of the earliest account-block where this address appears (sender == `address` or recipient == `to_address`). `null` until first observation. |
+| `last_seen` | integer \| null | Unix seconds of the most recent such block. `null` until first observation. |
+| `tx_count` | integer | Total count of those blocks. Equals `pagination.total` returned by the Transactions endpoint below. |
+
+`first_seen` / `last_seen` differ from `first_active_at` / `last_active_at`:
+the `_active_` pair only advances when the address is the chain owner (so
+it misses sends queued for an address that has not yet submitted a receive
+block), whereas the `_seen_` pair advances the moment the address appears
+on either side of any block. Similarly, `tx_count` differs from
+`block_count`: `block_count` is the per-account chain height (sender-only),
+while `tx_count` covers both roles.
 
 ## Balances — `GET /api/v1/accounts/{address}/balances`
 
@@ -328,7 +349,7 @@ Two checks:
 
 1. Pings the Postgres pool.
 2. Reads golang-migrate's `schema_migrations` and asserts
-   `version >= minSchemaVersion` (currently `11`) AND `dirty = false`.
+   `version >= minSchemaVersion` (currently `12`) AND `dirty = false`.
 
 Returns `200 {"status":"ready"}` when both pass. Returns `503` with a
 problem+json body on any failure mode below. Safe for k8s readiness
@@ -4466,7 +4487,7 @@ manual-attach affordance in the client UI. See
 ## Observability
 
 - `/healthz` — liveness, always 200.
-- `/readyz` — DB ping + `schema_migrations.version >= 11`.
+- `/readyz` — DB ping + `schema_migrations.version >= 12`.
 - `/metrics` (on `:9091`, separate listener) — Prometheus exposition
   with `nom_mcp_tool_calls_total{tool,status}` and
   `nom_mcp_tool_call_duration_seconds{tool,status}` plus the standard
@@ -5119,6 +5140,25 @@ intervals. Replaces the original "current delegation only on
 `accounts.delegate`" model (kept for backward compat). Enables
 historical attribution queries — "what was X delegated to on date D?",
 "how many delegators did pillar P have on D?".
+
+## 012 — `account_seen_and_tx_count`
+
+Adds `accounts.first_seen`, `accounts.last_seen`, and
+`accounts.tx_count`. Maintained incrementally by `BumpTxCountBatch`
+in [`internal/repository/account.go`](https://github.com/0x3639/nom-indexer-go/blob/main/internal/repository/account.go),
+called once per role the address plays in each indexed block (sender
+and recipient, deduped for self-sends).
+
+The migration backfills all three from the existing `account_blocks`
+table in a single `INSERT … ON CONFLICT DO UPDATE`. Stub account rows
+are created for addresses that only appear as `to_address` (recipients
+of sends that have not yet been claimed) so their counters survive
+a future `GET /accounts/{address}` lookup.
+
+Distinct from the older `first_active_at` / `last_active_at` pair
+(chain-owner blocks only) and from `block_count` (sender-only chain
+height). `tx_count` matches `pagination.total` from
+`/api/v1/accounts/{address}/transactions`.
 
 ## What's next
 
@@ -6912,7 +6952,8 @@ title: accounts
 
 One row per address that has ever been observed in a block. Tracks the
 account's running block count, delegation state, ZNN/QSR flow metrics,
-genesis balance seed, and first/last-activity timestamps.
+genesis balance seed, first/last-activity timestamps, and a per-account
+transaction counter that mirrors the `/transactions` row count.
 
 ## Columns
 
@@ -6929,8 +6970,11 @@ genesis balance seed, and first/last-activity timestamps.
 | `znn_received` | `BIGINT` | NO | `0` | Running ZNN total received. |
 | `qsr_sent` | `BIGINT` | NO | `0` | Running QSR total sent. |
 | `qsr_received` | `BIGINT` | NO | `0` | Running QSR total received. |
-| `first_active_at` | `BIGINT` | YES | — | Unix seconds of the earliest block we've observed. NULL = never seen. |
-| `last_active_at` | `BIGINT` | YES | — | Unix seconds of the most recent block observed. NULL = never seen. |
+| `first_active_at` | `BIGINT` | YES | — | Unix seconds of the earliest block where this address is the chain owner (sender on a send, recipient on a receive). NULL = never seen. |
+| `last_active_at` | `BIGINT` | YES | — | Unix seconds of the most recent chain-owner block. NULL = never seen. |
+| `first_seen` | `BIGINT` | YES | — | Unix seconds of the earliest account-block where the address appears as **sender or recipient** (i.e. matches `WHERE address = X OR to_address = X`). NULL = never seen. Distinct from `first_active_at`: catches sends queued for this recipient even before they submit a receive block. |
+| `last_seen` | `BIGINT` | YES | — | Unix seconds of the most recent such block. NULL = never seen. |
+| `tx_count` | `BIGINT` | NO | `0` | Count of those same blocks. Matches `pagination.total` from `GET /api/v1/accounts/{address}/transactions`. Distinct from `block_count`, which is the per-account chain height (sender-only). |
 
 ## Primary key & indexes
 
@@ -6959,6 +7003,13 @@ genesis balance seed, and first/last-activity timestamps.
   `first_active_at` (MIN) / `last_active_at` (MAX) atomically. Only ZNN and
   QSR token standards write to the flow columns; other tokens update activity
   only.
+- **`tx_count` + `first_seen` / `last_seen`** — `BumpTxCountBatch` in the
+  same file. Called once per role the address plays in each block (sender +
+  recipient, deduped for self-sends), so the counter matches the
+  `WHERE address = X OR to_address = X` filter on
+  `/accounts/{address}/transactions`. Stub rows are upserted for addresses
+  that only ever appear as `to_address` (sends not yet claimed), so their
+  counters survive a future API lookup.
 - **Genesis seed** — at `m.Height == 1`, `SetGenesisBalanceBatch` records
   the genesis ZNN/QSR balance from the receive amount.
 - **Delegation** — `UpdateDelegateBatch` from the Pillar `Delegate` /
@@ -6989,7 +7040,12 @@ genesis balance seed, and first/last-activity timestamps.
 - `first_active_at` / `last_active_at` use `NULL`, not `0`, for "never
   observed". Other timestamp columns in the schema use `0` for "unset"; this
   one is the exception because monotonic MIN/MAX of `NULL` and a real value
-  picks the real value.
+  picks the real value. `first_seen` / `last_seen` follow the same
+  convention.
+- `tx_count` and `block_count` measure different things and are usually
+  unequal. `block_count` is the per-account chain height the node reports
+  (only sender-side activity advances it). `tx_count` includes the address
+  as both sender and recipient and so is typically larger.
 
 
 === docs/schema/balances.md ===

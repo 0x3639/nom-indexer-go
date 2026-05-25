@@ -18,6 +18,9 @@ type Account struct {
 	QsrReceived              Amount `json:"qsr_received"`
 	FirstActiveAt            *int64 `json:"first_active_at,omitempty"`
 	LastActiveAt             *int64 `json:"last_active_at,omitempty"`
+	FirstSeen                *int64 `json:"first_seen"`
+	LastSeen                 *int64 `json:"last_seen"`
+	TxCount                  int64  `json:"tx_count"`
 }
 
 // FromAccount maps the model into the wire shape. Returns nil for nil
@@ -40,5 +43,8 @@ func FromAccount(a *models.Account) *Account {
 		QsrReceived:              AmountFromInt64(a.QsrReceived),
 		FirstActiveAt:            a.FirstActiveAt,
 		LastActiveAt:             a.LastActiveAt,
+		FirstSeen:                a.FirstSeen,
+		LastSeen:                 a.LastSeen,
+		TxCount:                  a.TxCount,
 	}
 }

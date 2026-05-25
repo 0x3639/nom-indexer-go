@@ -215,6 +215,9 @@ components:
         - znn_received
         - qsr_sent
         - qsr_received
+        - first_seen
+        - last_seen
+        - tx_count
       properties:
         address: { type: string }
         block_count: { type: integer, format: int64 }
@@ -229,6 +232,33 @@ components:
         qsr_received: { $ref: '#/components/schemas/Amount' }
         first_active_at: { type: integer, format: int64 }
         last_active_at: { type: integer, format: int64 }
+        first_seen:
+          type: integer
+          format: int64
+          nullable: true
+          description: |
+            Unix seconds of the earliest account-block where this address
+            appears in either role (sender == account_blocks.address OR
+            recipient == account_blocks.to_address). NULL means
+            never observed. Distinct from `first_active_at`, which only
+            tracks blocks where the address is the chain owner.
+        last_seen:
+          type: integer
+          format: int64
+          nullable: true
+          description: |
+            Unix seconds of the most recent account-block where this
+            address appears in either role. NULL means never observed.
+            Distinct from `last_active_at` for the same reason.
+        tx_count:
+          type: integer
+          format: int64
+          description: |
+            Total count of account-blocks where this address appears as
+            sender or recipient. Matches `pagination.total` from
+            `GET /api/v1/accounts/{address}/transactions`. Distinct from
+            `block_count`, which is the per-account chain height
+            (sender-only).
 
     Balance:
       type: object

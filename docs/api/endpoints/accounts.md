@@ -5,13 +5,34 @@
 ## Get account — `GET /api/v1/accounts/{address}`
 
 Returns flow metrics (lifetime ZNN/QSR sent/received), delegation
-state, and first/last activity timestamps. `404` if the indexer has
-never observed the address.
+state, first/last activity timestamps (chain-owner blocks only), and
+the `first_seen` / `last_seen` / `tx_count` triple covering blocks
+where the address appears as sender or recipient (`to_address`). `404` if
+the indexer has never observed the address.
 
 ```bash
 curl -s -H "Authorization: Bearer $TOKEN" \
      http://localhost:8080/api/v1/accounts/z1qq... | jq
 ```
+
+### `first_seen`, `last_seen`, `tx_count`
+
+These three fields are maintained incrementally per indexed block — they
+are O(1) reads, not aggregates computed at request time.
+
+| Field | Type | Notes |
+|---|---|---|
+| `first_seen` | integer \| null | Unix seconds of the earliest account-block where this address appears (sender == `address` or recipient == `to_address`). `null` until first observation. |
+| `last_seen` | integer \| null | Unix seconds of the most recent such block. `null` until first observation. |
+| `tx_count` | integer | Total count of those blocks. Equals `pagination.total` returned by the Transactions endpoint below. |
+
+`first_seen` / `last_seen` differ from `first_active_at` / `last_active_at`:
+the `_active_` pair only advances when the address is the chain owner (so
+it misses sends queued for an address that has not yet submitted a receive
+block), whereas the `_seen_` pair advances the moment the address appears
+on either side of any block. Similarly, `tx_count` differs from
+`block_count`: `block_count` is the per-account chain height (sender-only),
+while `tx_count` covers both roles.
 
 ## Balances — `GET /api/v1/accounts/{address}/balances`
 

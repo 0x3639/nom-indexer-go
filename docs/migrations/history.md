@@ -113,6 +113,25 @@ intervals. Replaces the original "current delegation only on
 historical attribution queries — "what was X delegated to on date D?",
 "how many delegators did pillar P have on D?".
 
+## 012 — `account_seen_and_tx_count`
+
+Adds `accounts.first_seen`, `accounts.last_seen`, and
+`accounts.tx_count`. Maintained incrementally by `BumpTxCountBatch`
+in [`internal/repository/account.go`](https://github.com/0x3639/nom-indexer-go/blob/main/internal/repository/account.go),
+called once per role the address plays in each indexed block (sender
+and recipient, deduped for self-sends).
+
+The migration backfills all three from the existing `account_blocks`
+table in a single `INSERT … ON CONFLICT DO UPDATE`. Stub account rows
+are created for addresses that only appear as `to_address` (recipients
+of sends that have not yet been claimed) so their counters survive
+a future `GET /accounts/{address}` lookup.
+
+Distinct from the older `first_active_at` / `last_active_at` pair
+(chain-owner blocks only) and from `block_count` (sender-only chain
+height). `tx_count` matches `pagination.total` from
+`/api/v1/accounts/{address}/transactions`.
+
 ## What's next
 
 No migration is currently in flight. The next likely candidates,

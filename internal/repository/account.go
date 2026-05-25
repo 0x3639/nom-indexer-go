@@ -89,6 +89,25 @@ func (r *AccountRepository) AddReceiveBatch(batch *pgx.Batch, address, tokenStan
 		address, amount, timestamp)
 }
 
+// BumpTxCountBatch increments tx_count by 1 and updates first_seen
+// (MIN) / last_seen (MAX) for the given address. Called once per
+// account_blocks row per role the address plays in that row — see
+// processAccountBlocks for the sender + recipient call sites.
+//
+// Upserts a stub row when the address has no prior account entry; this
+// is how to_address-only recipients (sends not yet claimed) acquire
+// rows so their tx_count survives a future GET /accounts/{address}.
+func (r *AccountRepository) BumpTxCountBatch(batch *pgx.Batch, address string, timestamp int64) {
+	batch.Queue(`
+		INSERT INTO accounts (address, block_count, public_key, first_seen, last_seen, tx_count)
+		VALUES ($1, 0, '', $2, $2, 1)
+		ON CONFLICT (address) DO UPDATE SET
+			first_seen = LEAST(COALESCE(accounts.first_seen, EXCLUDED.first_seen), EXCLUDED.first_seen),
+			last_seen  = GREATEST(COALESCE(accounts.last_seen, EXCLUDED.last_seen), EXCLUDED.last_seen),
+			tx_count   = accounts.tx_count + 1`,
+		address, timestamp)
+}
+
 // flowColumn maps (token_standard, direction) to the accounts column name.
 // Returns "" for non-ZNN/QSR tokens (we don't track per-token flow totals).
 func flowColumn(tokenStandard, direction string) string {
@@ -134,12 +153,14 @@ func (r *AccountRepository) GetByAddress(ctx context.Context, address string) (*
 		SELECT address, block_count, public_key, delegate, delegation_start_timestamp,
 			genesis_znn_balance, genesis_qsr_balance,
 			znn_sent, znn_received, qsr_sent, qsr_received,
-			first_active_at, last_active_at
+			first_active_at, last_active_at,
+			first_seen, last_seen, tx_count
 		FROM accounts WHERE address = $1`, address).Scan(
 		&a.Address, &a.BlockCount, &a.PublicKey, &a.Delegate, &a.DelegationStartTimestamp,
 		&a.GenesisZnnBalance, &a.GenesisQsrBalance,
 		&a.ZnnSent, &a.ZnnReceived, &a.QsrSent, &a.QsrReceived,
-		&a.FirstActiveAt, &a.LastActiveAt)
+		&a.FirstActiveAt, &a.LastActiveAt,
+		&a.FirstSeen, &a.LastSeen, &a.TxCount)
 	if err != nil {
 		return nil, err
 	}

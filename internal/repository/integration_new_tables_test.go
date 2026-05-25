@@ -282,6 +282,124 @@ func TestIntegration_Account_AddSendAddReceiveAndActivity(t *testing.T) {
 	}
 }
 
+func TestIntegration_Account_BackfillSeenAndTxCount(t *testing.T) {
+	pool := newTestDB(t)
+	ctx := context.Background()
+
+	// Seed account_blocks directly: three blocks involving z1qA and z1qB.
+	//  block h1: A -> B  @ 1000  (A appears as address, B as to_address)
+	//  block h2: receive on B   @ 1500  (B as address)
+	//  block h3: B -> EmptyAddress @ 2000 (B as address, EmptyAddress as to_address)
+	type row struct {
+		hash, addr, to string
+		ts             int64
+	}
+	rows := []row{
+		{"h1", "z1qA", "z1qB", 1000},
+		{"h2", "z1qB", "", 1500},
+		{"h3", "z1qB", models.EmptyAddress, 2000},
+	}
+	for _, r := range rows {
+		if _, err := pool.Exec(ctx, `
+			INSERT INTO account_blocks (
+				hash, momentum_hash, momentum_timestamp, momentum_height,
+				block_type, height, address, to_address, amount, token_standard
+			) VALUES ($1::text, 'm', $4::bigint, 1, 0, 1, $2::text, $3::text, 0, '')`,
+			r.hash, r.addr, r.to, r.ts); err != nil {
+			t.Fatalf("seed %s: %v", r.hash, err)
+		}
+	}
+
+	// Re-run the backfill from migration 012 to verify it on real rows.
+	// The migration itself ran against an empty table during TestMain.
+	if _, err := pool.Exec(ctx, `
+		INSERT INTO accounts (address, block_count, public_key, first_seen, last_seen, tx_count)
+		SELECT addr, 0, '',
+			MIN(momentum_timestamp), MAX(momentum_timestamp), COUNT(*)
+		FROM (
+			SELECT hash, address AS addr, momentum_timestamp FROM account_blocks
+			UNION
+			SELECT hash, to_address AS addr, momentum_timestamp FROM account_blocks
+			WHERE to_address IS NOT NULL AND to_address <> ''
+		) appearances
+		GROUP BY addr
+		ON CONFLICT (address) DO UPDATE SET
+			first_seen = EXCLUDED.first_seen,
+			last_seen  = EXCLUDED.last_seen,
+			tx_count   = EXCLUDED.tx_count`); err != nil {
+		t.Fatalf("backfill: %v", err)
+	}
+
+	repo := NewAccountRepository(pool)
+
+	a, err := repo.GetByAddress(ctx, "z1qA")
+	if err != nil {
+		t.Fatalf("get z1qA: %v", err)
+	}
+	if a.TxCount != 1 || a.FirstSeen == nil || *a.FirstSeen != 1000 || a.LastSeen == nil || *a.LastSeen != 1000 {
+		t.Errorf("z1qA: tx=%d first=%v last=%v, want tx=1 first=last=1000",
+			a.TxCount, a.FirstSeen, a.LastSeen)
+	}
+
+	b, err := repo.GetByAddress(ctx, "z1qB")
+	if err != nil {
+		t.Fatalf("get z1qB: %v", err)
+	}
+	// z1qB appears in h1 (as to_address), h2 (as address), h3 (as address) → 3
+	if b.TxCount != 3 || b.FirstSeen == nil || *b.FirstSeen != 1000 || b.LastSeen == nil || *b.LastSeen != 2000 {
+		t.Errorf("z1qB: tx=%d first=%v last=%v, want tx=3 first=1000 last=2000",
+			b.TxCount, b.FirstSeen, b.LastSeen)
+	}
+
+	// EmptyAddress appears only as to_address in h3 — backfill stub created.
+	e, err := repo.GetByAddress(ctx, models.EmptyAddress)
+	if err != nil {
+		t.Fatalf("get EmptyAddress: %v", err)
+	}
+	if e.TxCount != 1 {
+		t.Errorf("EmptyAddress: tx=%d, want 1", e.TxCount)
+	}
+}
+
+func TestIntegration_Account_BumpTxCount(t *testing.T) {
+	pool := newTestDB(t)
+	ctx := context.Background()
+	repo := NewAccountRepository(pool)
+
+	b := &pgx.Batch{}
+	// Three "appearances" for z1qa across times 1000, 2000, 500.
+	repo.BumpTxCountBatch(b, "z1qa", 1000)
+	repo.BumpTxCountBatch(b, "z1qa", 2000)
+	repo.BumpTxCountBatch(b, "z1qa", 500)
+	// One appearance for z1qb at time 1500.
+	repo.BumpTxCountBatch(b, "z1qb", 1500)
+	sendBatch(t, ctx, pool, b)
+
+	a, err := repo.GetByAddress(ctx, "z1qa")
+	if err != nil {
+		t.Fatalf("get z1qa: %v", err)
+	}
+	if a.TxCount != 3 {
+		t.Errorf("z1qa.tx_count = %d, want 3", a.TxCount)
+	}
+	if a.FirstSeen == nil || *a.FirstSeen != 500 {
+		t.Errorf("z1qa.first_seen = %v, want 500", a.FirstSeen)
+	}
+	if a.LastSeen == nil || *a.LastSeen != 2000 {
+		t.Errorf("z1qa.last_seen = %v, want 2000", a.LastSeen)
+	}
+
+	bAcc, err := repo.GetByAddress(ctx, "z1qb")
+	if err != nil {
+		t.Fatalf("get z1qb: %v", err)
+	}
+	if bAcc.TxCount != 1 || bAcc.FirstSeen == nil || *bAcc.FirstSeen != 1500 ||
+		bAcc.LastSeen == nil || *bAcc.LastSeen != 1500 {
+		t.Errorf("z1qb counters = tx=%d first=%v last=%v, want tx=1 first=last=1500",
+			bAcc.TxCount, bAcc.FirstSeen, bAcc.LastSeen)
+	}
+}
+
 func TestIntegration_Pillar_IsWithdrawAddress(t *testing.T) {
 	pool := newTestDB(t)
 	ctx := context.Background()

@@ -212,6 +212,13 @@ type Account struct {
 	DelegationStartTimestamp *int64  `json:"delegation_start_timestamp,omitempty"`
 	FirstActiveAt            *int64  `json:"first_active_at,omitempty"`
 
+	// FirstSeen Unix seconds of the earliest account-block where this address
+	// appears in either role (sender == account_blocks.address OR
+	// recipient == account_blocks.to_address). NULL means
+	// never observed. Distinct from `first_active_at`, which only
+	// tracks blocks where the address is the chain owner.
+	FirstSeen *int64 `json:"first_seen"`
+
 	// GenesisQsrBalance Raw int64 token amount (no decimals applied) serialized as a
 	// JSON string. Strings avoid JavaScript Number precision loss for
 	// values above 2^53-1 — ZNN total supply already exceeds that.
@@ -220,9 +227,14 @@ type Account struct {
 	// GenesisZnnBalance Raw int64 token amount (no decimals applied) serialized as a
 	// JSON string. Strings avoid JavaScript Number precision loss for
 	// values above 2^53-1 — ZNN total supply already exceeds that.
-	GenesisZnnBalance Amount  `json:"genesis_znn_balance"`
-	LastActiveAt      *int64  `json:"last_active_at,omitempty"`
-	PublicKey         *string `json:"public_key,omitempty"`
+	GenesisZnnBalance Amount `json:"genesis_znn_balance"`
+	LastActiveAt      *int64 `json:"last_active_at,omitempty"`
+
+	// LastSeen Unix seconds of the most recent account-block where this
+	// address appears in either role. NULL means never observed.
+	// Distinct from `last_active_at` for the same reason.
+	LastSeen  *int64  `json:"last_seen"`
+	PublicKey *string `json:"public_key,omitempty"`
 
 	// QsrReceived Raw int64 token amount (no decimals applied) serialized as a
 	// JSON string. Strings avoid JavaScript Number precision loss for
@@ -233,6 +245,13 @@ type Account struct {
 	// JSON string. Strings avoid JavaScript Number precision loss for
 	// values above 2^53-1 — ZNN total supply already exceeds that.
 	QsrSent Amount `json:"qsr_sent"`
+
+	// TxCount Total count of account-blocks where this address appears as
+	// sender or recipient. Matches `pagination.total` from
+	// `GET /api/v1/accounts/{address}/transactions`. Distinct from
+	// `block_count`, which is the per-account chain height
+	// (sender-only).
+	TxCount int64 `json:"tx_count"`
 
 	// ZnnReceived Raw int64 token amount (no decimals applied) serialized as a
 	// JSON string. Strings avoid JavaScript Number precision loss for

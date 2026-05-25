@@ -8,7 +8,8 @@ title: accounts
 
 One row per address that has ever been observed in a block. Tracks the
 account's running block count, delegation state, ZNN/QSR flow metrics,
-genesis balance seed, and first/last-activity timestamps.
+genesis balance seed, first/last-activity timestamps, and a per-account
+transaction counter that mirrors the `/transactions` row count.
 
 ## Columns
 
@@ -25,8 +26,11 @@ genesis balance seed, and first/last-activity timestamps.
 | `znn_received` | `BIGINT` | NO | `0` | Running ZNN total received. |
 | `qsr_sent` | `BIGINT` | NO | `0` | Running QSR total sent. |
 | `qsr_received` | `BIGINT` | NO | `0` | Running QSR total received. |
-| `first_active_at` | `BIGINT` | YES | — | Unix seconds of the earliest block we've observed. NULL = never seen. |
-| `last_active_at` | `BIGINT` | YES | — | Unix seconds of the most recent block observed. NULL = never seen. |
+| `first_active_at` | `BIGINT` | YES | — | Unix seconds of the earliest block where this address is the chain owner (sender on a send, recipient on a receive). NULL = never seen. |
+| `last_active_at` | `BIGINT` | YES | — | Unix seconds of the most recent chain-owner block. NULL = never seen. |
+| `first_seen` | `BIGINT` | YES | — | Unix seconds of the earliest account-block where the address appears as **sender or recipient** (i.e. matches `WHERE address = X OR to_address = X`). NULL = never seen. Distinct from `first_active_at`: catches sends queued for this recipient even before they submit a receive block. |
+| `last_seen` | `BIGINT` | YES | — | Unix seconds of the most recent such block. NULL = never seen. |
+| `tx_count` | `BIGINT` | NO | `0` | Count of those same blocks. Matches `pagination.total` from `GET /api/v1/accounts/{address}/transactions`. Distinct from `block_count`, which is the per-account chain height (sender-only). |
 
 ## Primary key & indexes
 
@@ -55,6 +59,13 @@ genesis balance seed, and first/last-activity timestamps.
   `first_active_at` (MIN) / `last_active_at` (MAX) atomically. Only ZNN and
   QSR token standards write to the flow columns; other tokens update activity
   only.
+- **`tx_count` + `first_seen` / `last_seen`** — `BumpTxCountBatch` in the
+  same file. Called once per role the address plays in each block (sender +
+  recipient, deduped for self-sends), so the counter matches the
+  `WHERE address = X OR to_address = X` filter on
+  `/accounts/{address}/transactions`. Stub rows are upserted for addresses
+  that only ever appear as `to_address` (sends not yet claimed), so their
+  counters survive a future API lookup.
 - **Genesis seed** — at `m.Height == 1`, `SetGenesisBalanceBatch` records
   the genesis ZNN/QSR balance from the receive amount.
 - **Delegation** — `UpdateDelegateBatch` from the Pillar `Delegate` /
@@ -85,4 +96,9 @@ genesis balance seed, and first/last-activity timestamps.
 - `first_active_at` / `last_active_at` use `NULL`, not `0`, for "never
   observed". Other timestamp columns in the schema use `0` for "unset"; this
   one is the exception because monotonic MIN/MAX of `NULL` and a real value
-  picks the real value.
+  picks the real value. `first_seen` / `last_seen` follow the same
+  convention.
+- `tx_count` and `block_count` measure different things and are usually
+  unequal. `block_count` is the per-account chain height the node reports
+  (only sender-side activity advances it). `tx_count` includes the address
+  as both sender and recipient and so is typically larger.

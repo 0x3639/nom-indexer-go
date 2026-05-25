@@ -18,7 +18,7 @@ Two checks:
 
 1. Pings the Postgres pool.
 2. Reads golang-migrate's `schema_migrations` and asserts
-   `version >= minSchemaVersion` (currently `11`) AND `dirty = false`.
+   `version >= minSchemaVersion` (currently `12`) AND `dirty = false`.
 
 Returns `200 {"status":"ready"}` when both pass. Returns `503` with a
 problem+json body on any failure mode below. Safe for k8s readiness

@@ -36,3 +36,12 @@ For per-migration narrative + rationale see
 | 009 | Account flow metrics + balance refresh timestamp. |
 | 010 | Daily stat history tables. |
 | 011 | `delegations` history table. |
+| 012 | `accounts.first_seen`, `accounts.last_seen`, `accounts.tx_count`. |
+
+### API
+
+- `GET /api/v1/accounts/{address}` now returns `first_seen`,
+  `last_seen`, and `tx_count`. `tx_count` matches `pagination.total`
+  from the address's `/transactions` endpoint and is maintained
+  incrementally as blocks are indexed (O(1) per request). See
+  [accounts endpoint docs](docs/api/endpoints/accounts.md).

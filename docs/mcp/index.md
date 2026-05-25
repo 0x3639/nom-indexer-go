@@ -148,7 +148,7 @@ manual-attach affordance in the client UI. See
 ## Observability
 
 - `/healthz` — liveness, always 200.
-- `/readyz` — DB ping + `schema_migrations.version >= 11`.
+- `/readyz` — DB ping + `schema_migrations.version >= 12`.
 - `/metrics` (on `:9091`, separate listener) — Prometheus exposition
   with `nom_mcp_tool_calls_total{tool,status}` and
   `nom_mcp_tool_call_duration_seconds{tool,status}` plus the standard

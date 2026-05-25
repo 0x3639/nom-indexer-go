@@ -60,6 +60,13 @@ type Account struct {
 	QsrReceived       int64  `db:"qsr_received"`
 	FirstActiveAt     *int64 `db:"first_active_at"`
 	LastActiveAt      *int64 `db:"last_active_at"`
+	// Per-account block counters maintained from account_blocks where the
+	// address appears as sender OR recipient (to_address). Distinct from
+	// BlockCount (sender-only chain height) and FirstActiveAt/LastActiveAt
+	// (chain owner only).
+	FirstSeen *int64 `db:"first_seen"`
+	LastSeen  *int64 `db:"last_seen"`
+	TxCount   int64  `db:"tx_count"`
 }
 
 // Balance represents a token balance for an account
