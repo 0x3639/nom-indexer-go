@@ -68,7 +68,7 @@ func catalog() schemaOverview {
 
 			// Pillars + delegation
 			{Name: "pillars", Domain: "pillars", Purpose: "Current pillar registry.",
-				Tools: []string{"list_pillars", "get_pillar_by_name", "list_pillar_delegators"}},
+				Tools: []string{"list_pillars", "get_pillar_by_name", "list_pillar_delegators", "get_pillar_voting_history"}},
 			{Name: "pillar_updates", Domain: "pillars", Purpose: "Append-only history of pillar config changes."},
 			{Name: "delegations", Domain: "pillars", Purpose: "Time-bucketed delegator → pillar intervals."},
 
@@ -82,11 +82,11 @@ func catalog() schemaOverview {
 
 			// Accelerator-Z
 			{Name: "projects", Domain: "accelerator_z", Purpose: "Accelerator-Z funding projects.",
-				Tools: []string{"list_projects", "get_project"}},
+				Tools: []string{"list_projects", "get_project", "get_project_voting_report"}},
 			{Name: "project_phases", Domain: "accelerator_z", Purpose: "Project phases (sub-grants).",
 				Tools: []string{"list_project_phases"}},
 			{Name: "votes", Domain: "accelerator_z", Purpose: "Pillar votes on projects/phases.",
-				Tools: []string{"list_project_votes"}},
+				Tools: []string{"list_project_votes", "get_project_voting_report", "get_pillar_voting_history"}},
 
 			// Rewards
 			{Name: "reward_transactions", Domain: "rewards", Purpose: "Per-event reward receipts.",

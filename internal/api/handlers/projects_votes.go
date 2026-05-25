@@ -25,6 +25,14 @@ type votesRepo interface {
 	ListByProject(ctx context.Context, projectID string, opts repository.ListOpts) ([]*models.Vote, int64, error)
 }
 
+// votingReportRepo is the narrow surface ProjectsVotingReport +
+// PillarsVotingHistory hit on the vote repository. Two methods, kept
+// in one interface so handler tests can supply a single fake.
+type votingReportRepo interface {
+	ProjectVotingReport(ctx context.Context, projectID string) (*repository.ProjectVotingReportRow, error)
+	PillarVotingHistory(ctx context.Context, pillarName string) (*repository.PillarVotingHistoryRow, error)
+}
+
 // ProjectsList handles GET /api/v1/projects.
 func ProjectsList(repo projectsRepo) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
@@ -98,4 +106,48 @@ func ProjectsVotes(repo votesRepo) http.HandlerFunc {
 		httpx.WriteJSON(w, http.StatusOK,
 			dto.NewPage(dto.FromVotes(rows), p.Page, p.PageSize, total))
 	}
+}
+
+// ProjectsVotingReport handles GET /api/v1/projects/{id}/voting-report.
+// Returns the project + every phase pre-aggregated against the active
+// pillar set — yes/no/abstain counts plus the explicit pillar lists
+// for each bucket.
+func ProjectsVotingReport(repo votingReportRepo) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		id := chi.URLParam(r, "id")
+		if id == "" {
+			httpx.WriteProblem(w, http.StatusBadRequest, "invalid_id", "id is required")
+			return
+		}
+		row, err := repo.ProjectVotingReport(r.Context(), id)
+		if err != nil {
+			writeRepoError(w, err)
+			return
+		}
+		httpx.WriteJSON(w, http.StatusOK, projectVotingReportToDTO(row))
+	}
+}
+
+// projectVotingReportToDTO mirrors the MCP-side translator
+// (internal/mcp/tools/projects.go). Kept in the handler package so the
+// REST surface doesn't take a dependency on internal/mcp.
+func projectVotingReportToDTO(row *repository.ProjectVotingReportRow) *dto.ProjectVotingReport {
+	out := &dto.ProjectVotingReport{
+		ProjectID:         row.ProjectID,
+		ProjectName:       row.ProjectName,
+		ActivePillarCount: row.ActivePillarCount,
+		Project: dto.FromProposalTally(dto.RawProposalTally{
+			VotingID:      row.Project.VotingID,
+			ByPillar:      row.Project.ByPillar,
+			NoVotePillars: row.Project.NoVotePillars,
+		}),
+	}
+	for _, ph := range row.Phases {
+		out.Phases = append(out.Phases, dto.FromPhaseTally(ph.PhaseID, ph.PhaseName, dto.RawProposalTally{
+			VotingID:      ph.Tally.VotingID,
+			ByPillar:      ph.Tally.ByPillar,
+			NoVotePillars: ph.Tally.NoVotePillars,
+		}))
+	}
+	return out
 }

@@ -34,3 +34,19 @@ Returns `404` if the pillar name is unknown.
 curl -s -H "Authorization: Bearer $TOKEN" \
      'http://localhost:8080/api/v1/pillars/alphanet-1/delegators?page=1&page_size=20' | jq
 ```
+
+## Voting history — `GET /api/v1/pillars/{name}/voting-report`
+
+Returns one pillar's complete voting record across every
+Accelerator-Z project AND phase, with project + phase names joined
+server-side and vote codes already translated to `"yes"` / `"no"` /
+`"abstain"`. Ordered by `momentum_timestamp DESC` (newest first).
+Returns `404` if the pillar name is unknown.
+
+```bash
+curl -s -H "Authorization: Bearer $TOKEN" \
+     http://localhost:8080/api/v1/pillars/alphanet-1/voting-report | jq
+```
+
+One call replaces enumerate-projects + paginate-`votes` +
+filter-by-pillar.

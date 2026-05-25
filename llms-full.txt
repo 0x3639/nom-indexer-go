@@ -531,6 +531,22 @@ curl -s -H "Authorization: Bearer $TOKEN" \
      'http://localhost:8080/api/v1/pillars/alphanet-1/delegators?page=1&page_size=20' | jq
 ```
 
+## Voting history — `GET /api/v1/pillars/{name}/voting-report`
+
+Returns one pillar's complete voting record across every
+Accelerator-Z project AND phase, with project + phase names joined
+server-side and vote codes already translated to `"yes"` / `"no"` /
+`"abstain"`. Ordered by `momentum_timestamp DESC` (newest first).
+Returns `404` if the pillar name is unknown.
+
+```bash
+curl -s -H "Authorization: Bearer $TOKEN" \
+     http://localhost:8080/api/v1/pillars/alphanet-1/voting-report | jq
+```
+
+One call replaces enumerate-projects + paginate-`votes` +
+filter-by-pillar.
+
 
 === docs/api/endpoints/projects.md ===
 
@@ -574,6 +590,23 @@ curl -s -H "Authorization: Bearer $TOKEN" \
 ```
 
 `vote` values: `0` = yes, `1` = no, `2` = abstain.
+
+## Voting report — `GET /api/v1/projects/{id}/voting-report`
+
+Server-aggregated. Returns the project's own proposal vote AND every
+phase's vote pre-tallied against the current active pillar set
+(`is_revoked = false`). Each tally lists `yes_pillars`, `no_pillars`,
+`abstain_pillars`, and `no_vote_pillars` by name — `no_vote_pillars`
+captures active pillars who never voted on that specific proposal.
+
+```bash
+curl -s -H "Authorization: Bearer $TOKEN" \
+     http://localhost:8080/api/v1/projects/<project-id>/voting-report | jq
+```
+
+One call replaces the enumerate-pillars + paginate-`votes` +
+filter-by-pillar pattern. Phases are returned in creation order.
+Pillar lists are alphabetized for stable diffs.
 
 
 === docs/api/endpoints/rewards.md ===
@@ -4413,7 +4446,7 @@ On failure the server returns HTTP 401 with a JSON-RPC error envelope:
 ## Tool catalog
 
 Tools are one-per-logical-query and mirror the REST endpoints — see
-[Tools](tools.md) for the full list. As of v1 there are 31 tools across
+[Tools](tools.md) for the full list. As of v1 there are 33 tools across
 the same domains the REST API surfaces (momentums, accounts, tokens,
 pillars, sentinels, stakes, fusions, projects, rewards, bridge).
 
@@ -4737,6 +4770,7 @@ caller can move between transports without re-learning the data.
 | `list_pillars` | `include_revoked, page, page_size` | `Page<Pillar>` |
 | `get_pillar_by_name` | `name` | `dto.Pillar` |
 | `list_pillar_delegators` | `name, page, page_size` | `Page<PillarDelegator>` — resolves the pillar name to its owner address first |
+| `get_pillar_voting_history` | `name` | `dto.PillarVotingHistory` — one named pillar's complete vote record across every project + phase, with project + phase names already joined and codes translated to `"yes"` / `"no"` / `"abstain"`. Ordered newest-first. Use instead of paging through `list_project_votes` and filtering. |
 
 ## Sentinels
 
@@ -4773,6 +4807,7 @@ caller can move between transports without re-learning the data.
 | `get_project` | `id` (64-char hex) | `dto.Project` |
 | `list_project_phases` | `id` | `{data: [ProjectPhase]}` — ascending phase order |
 | `list_project_votes` | `id, page, page_size` | `Page<Vote>` — pillar votes on the project or any of its phases |
+| `get_project_voting_report` | `id` | `dto.ProjectVotingReport` — one project + every phase pre-aggregated against the active pillar set. Each tally lists `yes_pillars`, `no_pillars`, `abstain_pillars`, `no_vote_pillars` by name. One call replaces enumerate-pillars + paginate-list_project_votes. |
 
 ## Bridge
 

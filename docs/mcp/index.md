@@ -128,7 +128,7 @@ On failure the server returns HTTP 401 with a JSON-RPC error envelope:
 ## Tool catalog
 
 Tools are one-per-logical-query and mirror the REST endpoints — see
-[Tools](tools.md) for the full list. As of v1 there are 31 tools across
+[Tools](tools.md) for the full list. As of v1 there are 33 tools across
 the same domains the REST API surfaces (momentums, accounts, tokens,
 pillars, sentinels, stakes, fusions, projects, rewards, bridge).
 
