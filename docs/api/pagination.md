@@ -37,8 +37,12 @@ defensively from breaking.
 | `pagination.page_size` | int | Echo of the requested page_size (after clamping). |
 | `pagination.total` | int64 | Total rows matching the query across all pages, not just the current page. **Exact** for scoped queries (by-address, by-pillar, by-token, etc.); **approximate** for the two whole-table list endpoints noted below. |
 
-For most endpoints `total` is computed inline via `COUNT(*) OVER ()`
-— one round trip per request, exact, no LIMIT/OFFSET drift.
+For most scoped endpoints `total` is computed inline via
+`COUNT(*) OVER ()` — one round trip per request, exact, no
+LIMIT/OFFSET drift. Address-scoped account transactions are the main
+exception: `/api/v1/accounts/{address}/transactions` reads the exact
+cached [`accounts.tx_count`](../schema/accounts.md) counter instead of
+counting `account_blocks` at request time.
 
 ### Approximate totals on large list endpoints
 
@@ -56,9 +60,11 @@ cheap-but-approximate source per table:
 | `/api/v1/momentums` | `SELECT MAX(height) FROM momentums` | Upper bound — equals the row count only when there are no backfill gaps. ~15 ms. |
 | `/api/v1/account_blocks` | `SELECT reltuples FROM pg_class` | Lag matches the autovacuum cadence (Postgres default: every few minutes for a hot table). ~5 ms. |
 
-Scoped variants (`/api/v1/accounts/{address}/transactions`,
-`/api/v1/pillars/{name}/delegators`, etc.) keep the exact inline
-count — the WHERE clause shrinks the scan to a tractable size.
+Scoped variants such as `/api/v1/pillars/{name}/delegators` keep the
+exact inline count — the WHERE clause shrinks the scan to a tractable
+size. `/api/v1/accounts/{address}/transactions` is also exact, but its
+total comes from `accounts.tx_count` because busy addresses can still
+have hundreds of thousands of matching account blocks.
 
 ## Honest tradeoff: deep pagination on large tables
 
@@ -92,9 +98,12 @@ sorted by `holder_count DESC`) intentionally do not accept `sort`.
 
 ## Total count cost
 
-For filtered queries against indexed columns, `COUNT(*) OVER ()` is
-one round trip and the planner can satisfy it from the same scan
-that produces the page. For the two large-table list endpoints
-noted above, the cost was prohibitive at production scale, so they
-switched to the approximate sources documented in
+For most filtered queries against indexed columns, `COUNT(*) OVER ()`
+is one round trip and the planner can satisfy it from the same scan
+that produces the page. For the account transactions endpoint, even
+the filtered scan can be too large for busy addresses, so it uses the
+cached exact `accounts.tx_count` counter documented in
+[Accounts](endpoints/accounts.md). For the two large-table list
+endpoints noted above, the cost was prohibitive at production scale,
+so they switched to the approximate sources documented in
 [Approximate totals on large list endpoints](#approximate-totals-on-large-list-endpoints).

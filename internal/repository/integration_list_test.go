@@ -105,6 +105,18 @@ func TestIntegration_AccountBlockRepo_List(t *testing.T) {
 		t.Errorf("List total = %d, want ~4 (pg_class.reltuples)", total)
 	}
 
+	// ListByAddress sources total from accounts.tx_count, so seed it.
+	// In production the indexer maintains this in the same transaction as
+	// the block insert; here we mirror what BumpTxCountBatch would write.
+	if _, err := pool.Exec(ctx, `
+		INSERT INTO accounts (address, block_count, public_key, tx_count) VALUES
+			($1, 0, '', 4),
+			($2, 0, '', 4)
+		ON CONFLICT (address) DO UPDATE SET tx_count = EXCLUDED.tx_count`,
+		"z1qsender", "z1qrecv"); err != nil {
+		t.Fatalf("seed accounts: %v", err)
+	}
+
 	byAddr, total2, _ := repo.ListByAddress(ctx, "z1qsender", allOpts())
 	if total2 != 4 || len(byAddr) != 4 {
 		t.Errorf("ListByAddress(sender) got %d/%d, want 4/4", len(byAddr), total2)
@@ -113,6 +125,27 @@ func TestIntegration_AccountBlockRepo_List(t *testing.T) {
 	if total3 != 4 || len(byAddrRecv) != 4 {
 		t.Errorf("ListByAddress(recipient) got %d/%d, want 4/4", len(byAddrRecv), total3)
 	}
+
+	// Address with no account row: 0 total (not an error).
+	_, totalMissing, err := repo.ListByAddress(ctx, "z1qunseen", allOpts())
+	if err != nil {
+		t.Fatalf("ListByAddress(unseen): %v", err)
+	}
+	if totalMissing != 0 {
+		t.Errorf("ListByAddress(unseen) total = %d, want 0", totalMissing)
+	}
+
+	// Cached-path proof: deliberately desync the counter from the block
+	// rows. The handler must return the cached value, not a freshly
+	// computed COUNT(*) — that's the whole point of this optimization.
+	if _, err := pool.Exec(ctx, `UPDATE accounts SET tx_count = 999 WHERE address = $1`, "z1qsender"); err != nil {
+		t.Fatalf("desync: %v", err)
+	}
+	_, totalCached, _ := repo.ListByAddress(ctx, "z1qsender", allOpts())
+	if totalCached != 999 {
+		t.Errorf("ListByAddress(cached) total = %d, want 999 (from accounts.tx_count)", totalCached)
+	}
+
 	if _, _, err := repo.ListByAddress(ctx, "", allOpts()); err == nil {
 		t.Error("expected error on empty address")
 	}
