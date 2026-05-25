@@ -65,8 +65,18 @@ func (f *fakeTokenHoldersRepo) ListByToken(_ context.Context, ts string, o repos
 }
 
 func TestAccountsGet(t *testing.T) {
+	firstSeen := int64(1_700_000_000)
+	lastSeen := int64(1_700_000_500)
 	repo := &fakeAccountsRepo{byAddr: map[string]*models.Account{
-		"z1qq": {Address: "z1qq", BlockCount: 5, GenesisZnnBalance: 1_000_000_000_000},
+		"z1qq": {
+			Address:           "z1qq",
+			BlockCount:        5,
+			GenesisZnnBalance: 1_000_000_000_000,
+			FirstSeen:         &firstSeen,
+			LastSeen:          &lastSeen,
+			TxCount:           42,
+		},
+		"z1empty": {Address: "z1empty"},
 	}}
 	r := chi.NewRouter()
 	r.Get("/api/v1/accounts/{address}", AccountsGet(repo))
@@ -83,6 +93,35 @@ func TestAccountsGet(t *testing.T) {
 		}
 		if !strings.Contains(body, `"genesis_znn_balance":"1000000000000"`) {
 			t.Errorf("expected stringified amount in %s", body)
+		}
+		if !strings.Contains(body, `"first_seen":1700000000`) {
+			t.Errorf("missing first_seen in %s", body)
+		}
+		if !strings.Contains(body, `"last_seen":1700000500`) {
+			t.Errorf("missing last_seen in %s", body)
+		}
+		if !strings.Contains(body, `"tx_count":42`) {
+			t.Errorf("missing tx_count in %s", body)
+		}
+	})
+
+	t.Run("ok_null_seen", func(t *testing.T) {
+		w := httptest.NewRecorder()
+		r.ServeHTTP(w, httptest.NewRequest(http.MethodGet, "/api/v1/accounts/z1empty", nil))
+		if w.Code != http.StatusOK {
+			t.Fatalf("status = %d", w.Code)
+		}
+		body := w.Body.String()
+		// Unseen address: first_seen/last_seen must serialize as JSON null,
+		// not be omitted (the spec marks them required).
+		if !strings.Contains(body, `"first_seen":null`) {
+			t.Errorf("expected first_seen:null in %s", body)
+		}
+		if !strings.Contains(body, `"last_seen":null`) {
+			t.Errorf("expected last_seen:null in %s", body)
+		}
+		if !strings.Contains(body, `"tx_count":0`) {
+			t.Errorf("expected tx_count:0 in %s", body)
 		}
 	})
 

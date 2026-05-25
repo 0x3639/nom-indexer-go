@@ -20,8 +20,10 @@ func registerAccounts(srv *mcp.Server, repos *repository.Repositories) {
 	mcp.AddTool(srv, &mcp.Tool{
 		Name: "get_account",
 		Description: "Return an account's profile: lifetime ZNN/QSR flow metrics, current " +
-			"delegation, first/last activity timestamps. Returns an error if the indexer " +
-			"has never observed this address.",
+			"delegation, first/last activity timestamps (chain-owner blocks only), and " +
+			"first_seen/last_seen/tx_count covering blocks where the address appears as " +
+			"sender OR recipient (to_address). Returns an error if the indexer has never observed " +
+			"this address.",
 	}, getAccount(repos))
 
 	mcp.AddTool(srv, &mcp.Tool{

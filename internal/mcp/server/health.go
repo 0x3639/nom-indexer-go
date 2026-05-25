@@ -15,7 +15,7 @@ import (
 // can serve against. Mirrors the REST API's gate (router.minSchemaVersion)
 // because both processes read the same tables. Bump this in the same PR
 // that adds a migration the MCP server depends on.
-const minSchemaVersion = 11
+const minSchemaVersion = 12
 
 // Healthz reports that the process is alive. Always 200; no DB ping.
 // Use as the k8s liveness probe.

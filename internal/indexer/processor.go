@@ -371,6 +371,16 @@ func (i *Indexer) processAccountBlocks(ctx context.Context, batch *pgx.Batch, m 
 			}
 		}
 
+		// Bump tx_count + first_seen/last_seen for every role the address
+		// plays in this block. Mirrors the WHERE address=$1 OR to_address=$1
+		// filter on /accounts/{address}/transactions so the totals match.
+		// Self-sends (sender == recipient) count once, matching the OR.
+		i.repos.Account.BumpTxCountBatch(batch, sender, ts)
+		recipient := block.ToAddress.String()
+		if recipient != "" && recipient != sender {
+			i.repos.Account.BumpTxCountBatch(batch, recipient, ts)
+		}
+
 		// Update paired block reference
 		if block.PairedAccountBlock != nil {
 			i.repos.AccountBlock.UpdatePairedBlockBatch(batch, block.PairedAccountBlock.Hash.String(), block.Hash.String())

@@ -159,8 +159,8 @@ func healthz(w http.ResponseWriter, _ *http.Request) {
 // some /api/v1/* endpoint will 500 on a missing table; bumping too
 // aggressively (i.e. before the migration actually ships in operators'
 // indexer image) means /readyz stays 503 after a deploy. Today the API
-// reads bridge/config/delegation/stat-history tables added through 011.
-const minSchemaVersion = 11
+// reads account counter columns added through 012.
+const minSchemaVersion = 12
 
 // readyz verifies the database is reachable AND that the indexer schema
 // has been migrated far enough for every endpoint to serve. A bare Ping
