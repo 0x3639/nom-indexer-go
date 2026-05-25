@@ -46,6 +46,15 @@ Paginated. Matches the address on either the sender (`address`) or
 recipient (`to_address`) side, mirroring the repository's
 `WHERE address = $1 OR to_address = $1` clause.
 
+`pagination.total` is sourced from the cached
+[`accounts.tx_count`](../../schema/accounts.md) counter — an O(1) PK
+lookup rather than a `COUNT(*)` over the per-address scan. The counter
+is bumped in the same transaction as each block insert, so it equals
+`COUNT(*) WHERE address = X OR to_address = X` by construction; on a
+busy address (hundreds of thousands of rows) this drops cold response
+time from tens of seconds to a few milliseconds. Unseen addresses
+return `total: 0` and an empty `data` array (no 404).
+
 ## Stakes / Fusions — `/stakes`, `/fusions`
 
 See [Stakes & Fusions](stakes_fusions.md) for the address-scoped

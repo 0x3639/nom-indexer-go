@@ -163,8 +163,8 @@ func (r *AccountBlockRepository) GetRewardDetails(ctx context.Context, receiveBl
 	}, nil
 }
 
-// accountBlockCols is the SELECT-list (plus COUNT(*) OVER ()) used by every
-// List method. Kept in one place so column order stays in sync with Scan.
+// accountBlockCols is the shared SELECT-list for account_block reads. Kept in
+// one place so column order stays in sync with Scan.
 const accountBlockCols = `hash, momentum_hash, momentum_timestamp, momentum_height, block_type,
 	height, address, to_address, amount, token_standard, data, method, input,
 	paired_account_block, descendant_of`
@@ -196,10 +196,10 @@ func scanAccountBlock(rows pgx.Row, ab *models.AccountBlock, total *int64) error
 // which Postgres maintains via ANALYZE and autovacuum.
 //
 // reltuples is approximate: it lags behind autovacuum by however long
-// the table has been growing since the last stats update. The
-// scoped variant ListByAddress keeps the exact COUNT(*) OVER ()
-// because its WHERE clause shrinks the scan to per-address row counts
-// (typically far under a thousand) where the exact count is cheap.
+// the table has been growing since the last stats update. The address
+// scoped variant ListByAddress keeps an exact total by reading the
+// cached accounts.tx_count counter instead of counting account_blocks
+// at request time.
 func (r *AccountBlockRepository) List(ctx context.Context, opts ListOpts) ([]*models.AccountBlock, int64, error) {
 	query := fmt.Sprintf(`
 		SELECT `+accountBlockCols+`
@@ -235,12 +235,22 @@ func (r *AccountBlockRepository) List(ctx context.Context, opts ListOpts) ([]*mo
 
 // ListByAddress returns account blocks where the address is either sender
 // or recipient. Useful for "transactions for an account" queries.
+//
+// pagination.total is sourced from the cached accounts.tx_count (a
+// per-account counter incremented in the same transaction as each
+// block insert, see repository.AccountRepository.BumpTxCountBatch).
+// By construction it equals COUNT(*) WHERE address = $1 OR to_address
+// = $1, but is an O(1) PK lookup rather than a full address scan —
+// production accounts have hundreds of thousands of rows, and the
+// inline COUNT(*) OVER () we used to compute here took 30s+ wall time
+// on every page load regardless of page/page_size. Missing account
+// row means "address never observed", so total = 0.
 func (r *AccountBlockRepository) ListByAddress(ctx context.Context, address string, opts ListOpts) ([]*models.AccountBlock, int64, error) {
 	if address == "" {
 		return nil, 0, errors.New("address is required")
 	}
 	query := fmt.Sprintf(`
-		SELECT `+accountBlockCols+`, COUNT(*) OVER () AS total
+		SELECT `+accountBlockCols+`
 		FROM account_blocks
 		WHERE address = $1 OR to_address = $1
 		ORDER BY momentum_height %s
@@ -251,13 +261,10 @@ func (r *AccountBlockRepository) ListByAddress(ctx context.Context, address stri
 	}
 	defer rows.Close()
 
-	var (
-		out   []*models.AccountBlock
-		total int64
-	)
+	var out []*models.AccountBlock
 	for rows.Next() {
 		var ab models.AccountBlock
-		if err := scanAccountBlock(rows, &ab, &total); err != nil {
+		if err := scanAccountBlock(rows, &ab, nil); err != nil {
 			return nil, 0, err
 		}
 		out = append(out, &ab)
@@ -265,13 +272,14 @@ func (r *AccountBlockRepository) ListByAddress(ctx context.Context, address stri
 	if err := rows.Err(); err != nil {
 		return nil, 0, err
 	}
-	if len(out) == 0 && opts.Offset > 0 {
-		var err error
-		total, err = fallbackCount(ctx, r.pool,
-			`SELECT COUNT(*) FROM account_blocks WHERE address = $1 OR to_address = $1`, address)
-		if err != nil {
+
+	var total int64
+	if err := r.pool.QueryRow(ctx,
+		`SELECT tx_count FROM accounts WHERE address = $1`, address).Scan(&total); err != nil {
+		if !errors.Is(err, pgx.ErrNoRows) {
 			return nil, 0, err
 		}
+		total = 0
 	}
 	return out, total, nil
 }

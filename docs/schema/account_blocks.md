@@ -74,6 +74,13 @@ NUL bytes are scrubbed before insert (see
 - **Reward-receive detection** — see
   [`indexing/rewards.md`](../indexing/rewards.md) for the canonical pattern.
 
+The page count returned by `/api/v1/accounts/{address}/transactions` does
+**not** come from a `COUNT(*)` over this table — it's read from the cached
+[`accounts.tx_count`](accounts.md) counter. The two values are equal by
+construction (the counter is bumped in the same transaction as each
+insert here), but the cached read is an O(1) PK lookup rather than a
+full per-address scan.
+
 ## Gotchas
 
 - The empty token standard `zts1qqqqqqqqqqqqqqqqtq587y` is **not** a
