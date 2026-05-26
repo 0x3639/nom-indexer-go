@@ -38,6 +38,7 @@ transparently — see
 |---|---|
 | Public test node (`wss://test.hc1node.com`) | Development, demos, integration tests. Slow under load. |
 | Self-hosted alphanet node | Production. Set `NODE_URL_WS=ws://your-node:35998`. |
+| Compose-bundled local znnd | Self-host via the `local-node` compose profile — `znnd` is built from source and snapshot-bootstrapped automatically. Indexer points at `ws://znnd:35998`. See [`operations/znnd-bootstrap.md`](../operations/znnd-bootstrap.md). |
 | Public mainnet community node | Only if you trust the operator — the indexer trusts every response. |
 
 For production, run your own. Indexing assumes the node is honest;

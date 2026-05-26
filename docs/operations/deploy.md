@@ -14,7 +14,10 @@ in `.env`.
 - Docker Engine 24+ with Compose v2.
 - Free disk: at least 10 GB for a fresh test-network DB; 50+ GB if
   syncing from genesis on a production chain.
-- Outbound WebSocket access to your Zenon node.
+- Outbound WebSocket access to your Zenon node, **or** the optional
+  bundled local znnd (see
+  [`znnd-bootstrap.md`](znnd-bootstrap.md) — opt-in via the
+  `local-node` compose profile).
 
 ## First-time setup
 
@@ -34,6 +37,11 @@ docker compose up -d postgres indexer
 
 # Or the full stack including the read-only HTTP API and MCP containers:
 docker compose up -d
+
+# Or include a bundled local znnd node + snapshot bootstrap:
+docker compose --profile local-node up -d --build
+# (also set NODE_URL_WS=ws://znnd:35998 in .env so the indexer talks to
+#  the bundled node instead of the public test node — see znnd-bootstrap.md)
 ```
 
 The compose file:
@@ -97,8 +105,11 @@ docker compose up -d --build
 
 - **Persist `./data`** on durable storage. Losing the Postgres volume
   forces a sync from genesis.
-- **Run your own Zenon node.** See
-  [`config/node-selection.md`](../config/node-selection.md).
+- **Run your own Zenon node.** Either point `NODE_URL_WS` at an external
+  self-hosted node, or use the bundled `local-node` compose profile
+  ([`znnd-bootstrap.md`](znnd-bootstrap.md)). See
+  [`config/node-selection.md`](../config/node-selection.md) for the
+  tradeoffs.
 - **Set `BACKFILL_ON_STARTUP=false`** (the default) so restarts don't
   block on gap-filling.
 - **Don't commit `.env`.** It contains the DB password.

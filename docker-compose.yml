@@ -18,6 +18,66 @@ services:
     networks:
       - nom-indexer
 
+  # Optional local Zenon node. Gated behind the `local-node` profile so the
+  # default `docker compose up -d` keeps using the configured NODE_URL_WS
+  # (default wss://test.hc1node.com) without building go-zenon from source.
+  #
+  # Bring up with:
+  #   docker compose --profile local-node up -d --build
+  # Then set NODE_URL_WS=ws://znnd:35998 in .env so the indexer points at
+  # this container instead of the public test node.
+  znnd-bootstrap:
+    profiles: ["local-node"]
+    build:
+      context: .
+      dockerfile: Dockerfile.znnd-bootstrap
+    container_name: nom-indexer-znnd-bootstrap
+    # One-shot: no-ops if /data/nom already exists (and FORCE_BOOTSTRAP != true)
+    # or if BOOTSTRAP_URL is empty (indexer will then sync znnd from genesis).
+    restart: "no"
+    environment:
+      BOOTSTRAP_URL: ${ZNND_BOOTSTRAP_URL:-}
+      FORCE_BOOTSTRAP: ${ZNND_FORCE_BOOTSTRAP:-false}
+    volumes:
+      - znnd_data:/data
+    networks:
+      - nom-indexer
+
+  znnd:
+    profiles: ["local-node"]
+    build:
+      context: .
+      dockerfile: Dockerfile.znnd
+      args:
+        ZNND_GIT_REF: ${ZNND_GIT_REF:-master}
+    container_name: nom-indexer-znnd
+    restart: unless-stopped
+    depends_on:
+      znnd-bootstrap:
+        condition: service_completed_successfully
+    ports:
+      # P2P only; RPC/WS stay internal to the compose network and are
+      # reached by the indexer at ws://znnd:35998.
+      - "35995:35995/tcp"
+      - "35995:35995/udp"
+    volumes:
+      - znnd_data:/root/.znn
+      # Override znnd's HTTPVirtualHosts (default is empty -> localhost-only),
+      # so the indexer on the docker network can reach the HTTP/WS RPC.
+      - ./configs/znnd.config.json:/root/.znn/config.json:ro
+    healthcheck:
+      # znnd's RPC rejects localhost-Host requests with 403 (whitelist-based),
+      # but the daemon is still alive and serving the docker network. We
+      # treat "got any HTTP response" as healthy — i.e. the RPC is bound and
+      # the process is responsive.
+      test: ["CMD-SHELL", "curl -sS -o /dev/null --connect-timeout 5 http://localhost:35997 || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 60s
+    networks:
+      - nom-indexer
+
   indexer:
     build:
       context: .
@@ -122,3 +182,9 @@ services:
 networks:
   nom-indexer:
     driver: bridge
+
+volumes:
+  # Chain data for the optional local znnd service (local-node profile).
+  # Named (not bind-mounted) so the znnd-bootstrap one-shot can share it
+  # with znnd at /data and /root/.znn respectively.
+  znnd_data:

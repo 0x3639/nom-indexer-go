@@ -120,6 +120,24 @@ forwards them to the Postgres container:
 | `POSTGRES_PASSWORD` | — | **Required.** Same value the indexer's `DATABASE_PASSWORD` should use. |
 | `POSTGRES_DB` | `nom_indexer` | Initial database name. |
 
+## Local znnd (compose `local-node` profile)
+
+These are read only when you opt into the bundled local znnd via
+`docker compose --profile local-node up -d`. Without the profile the
+`znnd` and `znnd-bootstrap` services are not created and these vars are
+ignored. See [`operations/znnd-bootstrap.md`](../operations/znnd-bootstrap.md)
+for the full walkthrough.
+
+| Variable | Default | Description |
+|---|---|---|
+| `ZNND_GIT_REF` | `master` | go-zenon git tag/branch/commit the `znnd` image builds from. Pin to a release tag for reproducible builds. |
+| `ZNND_BOOTSTRAP_URL` | — | Public snapshot zip URL. The sibling `.hash` URL (same path, `.hash` extension) must contain the sha256. Empty = skip snapshot install and sync znnd from genesis. |
+| `ZNND_FORCE_BOOTSTRAP` | `false` | Force the bootstrap to run even if `/data/nom` already exists. Existing chain-data dirs are moved aside with a timestamp suffix (not deleted). Set true for a one-shot re-bootstrap, then unset. |
+
+When the local-node profile is active, set `NODE_URL_WS=ws://znnd:35998`
+in `.env` so the indexer container resolves znnd by docker-network
+service name instead of dialing the public test node.
+
 The `api` compose service requires `API_JWT_SECRET` in `.env` (the
 container refuses to start without it). The `mcp` compose service
 requires either `API_JWT_SECRET` or `MCP_JWT_SECRET`; set
