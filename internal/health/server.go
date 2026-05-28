@@ -9,6 +9,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"time"
 )
 
 // Snapshot is the minimal view of indexer health surfaced by /readyz.
@@ -57,7 +58,14 @@ func NewServer(snapshot func() Snapshot) *Server {
 // ListenAndServe binds the handler to addr (host:port). Blocks until
 // the server stops; returns http.ErrServerClosed on clean shutdown.
 func (s *Server) ListenAndServe(addr string) error {
-	return (&http.Server{Addr: addr, Handler: s.Handler}).ListenAndServe()
+	return (&http.Server{
+		Addr:              addr,
+		Handler:           s.Handler,
+		ReadHeaderTimeout: 5 * time.Second,
+		ReadTimeout:       10 * time.Second,
+		WriteTimeout:      10 * time.Second,
+		IdleTimeout:       60 * time.Second,
+	}).ListenAndServe()
 }
 
 func writeJSON(w http.ResponseWriter, code int, v any) {
