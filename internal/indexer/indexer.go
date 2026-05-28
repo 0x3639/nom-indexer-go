@@ -37,6 +37,16 @@ type Indexer struct {
 	restartSubCh chan struct{}
 
 	lastProgressAt atomic.Int64 // Unix seconds; updated by sync() and runSubscriptionSession on successful processMomentum
+
+	// Watchdog state (Task 13). nodePool is nil for indexers built via
+	// NewIndexerWithCron — the watchdog goroutine only launches when both
+	// nodePool != nil AND watchdogCfg.Enabled.
+	nodePool *NodePool
+
+	syncStateMu       sync.RWMutex
+	syncStateInternal *syncState
+
+	watchdogCfg WatchdogConfigForIndexer
 }
 
 // CronConfig controls the periodic refresh of derived data (voting activity,
@@ -67,6 +77,24 @@ func NewIndexerWithCron(client *rpc_client.RpcClient, pool *pgxpool.Pool, logger
 	return i
 }
 
+// NewIndexerWithNodes constructs an Indexer with a node pool, enabling
+// the watchdog goroutine (failover/failback + drift detection). The
+// initial client must already be built from nodes[0].URL by the caller.
+func NewIndexerWithNodes(
+	pool *pgxpool.Pool,
+	nodePool *NodePool,
+	client *rpc_client.RpcClient,
+	logger *zap.Logger,
+	cron CronConfig,
+	watchdog WatchdogConfigForIndexer,
+) *Indexer {
+	i := NewIndexerWithCron(client, pool, logger, cron)
+	i.nodePool = nodePool
+	i.syncStateInternal = newSyncState(nodePool.Len())
+	i.watchdogCfg = watchdog
+	return i
+}
+
 // client returns the currently-active SDK client. All RPC call sites
 // must read through this accessor — the underlying value changes when
 // the watchdog fails over to a different node.
@@ -84,22 +112,87 @@ func (i *Indexer) signalSubscriptionRestart() {
 	}
 }
 
+// registerCallbacks attaches SDK connection callbacks to the given
+// client. Called from Run() for the initial client and from
+// swapActiveClient for every replacement.
+func (i *Indexer) registerCallbacks(c *rpc_client.RpcClient) {
+	c.AddOnConnectionEstablishedCallback(func() {
+		i.logger.Info("SDK connection established, signaling subscription restart")
+		i.signalSubscriptionRestart()
+	})
+	c.AddOnConnectionLostCallback(func(err error) {
+		i.logger.Warn("SDK connection lost, will auto-reconnect", zap.Error(err))
+	})
+}
+
+// swapActiveClient builds a fresh SDK client for the given URL, registers
+// callbacks, atomically replaces the active client, and schedules the
+// old client's Stop after a 60-second grace (longer than withRetry's
+// ~32s worst case so no in-flight RPC sees a closed client mid-call).
+// Also signals the subscription loop to restart against the new client.
+func (i *Indexer) swapActiveClient(url string) error {
+	newClient, err := rpc_client.NewRpcClient(url)
+	if err != nil {
+		return fmt.Errorf("build client for %q: %w", url, err)
+	}
+	i.registerCallbacks(newClient)
+	old := i.activeClient.Swap(newClient)
+	i.signalSubscriptionRestart()
+	go func() {
+		time.Sleep(60 * time.Second)
+		if old != nil {
+			old.Stop()
+		}
+	}()
+	return nil
+}
+
+// HealthSnapshot returns a copy of the current sync state for the
+// indexer's /readyz handler. Safe for concurrent reads — held briefly
+// under syncStateMu.
+type HealthSnapshot struct {
+	Ready     bool
+	State     string // last classification
+	NodeLabel string
+	Drift     int64
+}
+
+// HealthSnapshot reports the watchdog's current health view. When the
+// watchdog is disabled (no node pool wired) the result always reports
+// Ready=true so legacy single-node deployments stay green.
+func (i *Indexer) HealthSnapshot() HealthSnapshot {
+	if i.nodePool == nil || i.syncStateInternal == nil {
+		// Watchdog disabled — always ready.
+		return HealthSnapshot{Ready: true, State: "watchdog_disabled"}
+	}
+	i.syncStateMu.RLock()
+	defer i.syncStateMu.RUnlock()
+
+	activeIdx := i.syncStateInternal.activeIdx
+	st := i.syncStateInternal.streaks[activeIdx]
+	threshold := i.watchdogCfg.UnhealthyStreak
+	if threshold <= 0 {
+		threshold = 2 // fallback to default
+	}
+
+	return HealthSnapshot{
+		Ready:     st.unhealthy < threshold,
+		State:     i.syncStateInternal.lastClass, // populated by runWatchdogTick
+		NodeLabel: i.nodePool.Entry(activeIdx).Label,
+	}
+}
+
 // Run starts the indexer main loop. Run blocks until ctx is canceled, then
 // waits for the bridge/cached-data background goroutines to exit before
 // returning so callers can rely on a clean shutdown.
 func (i *Indexer) Run(ctx context.Context) error {
 	i.logger.Info("starting indexer")
 
-	// Register SDK callbacks for connection events
-	// The SDK handles reconnection automatically; we just need to restart subscriptions
-	i.client().AddOnConnectionEstablishedCallback(func() {
-		i.logger.Info("SDK connection established, signaling subscription restart")
-		i.signalSubscriptionRestart()
-	})
-
-	i.client().AddOnConnectionLostCallback(func(err error) {
-		i.logger.Warn("SDK connection lost, will auto-reconnect", zap.Error(err))
-	})
+	// Register SDK callbacks for connection events on the initial client.
+	// The SDK handles reconnection automatically; we just need to restart
+	// subscriptions. swapActiveClient re-registers callbacks on any
+	// replacement client.
+	i.registerCallbacks(i.client())
 
 	votingInterval := i.cron.VotingActivityInterval
 	if votingInterval <= 0 {
@@ -126,6 +219,13 @@ func (i *Indexer) Run(ctx context.Context) error {
 		defer wg.Done()
 		i.runCronLoop(ctx, votingInterval, tokenHoldersInterval)
 	}()
+	if i.nodePool != nil && i.watchdogCfg.Enabled {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			i.runSyncWatchdogLoop(ctx)
+		}()
+	}
 	defer wg.Wait()
 
 	// Initial sync to catch up to current height

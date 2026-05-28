@@ -3,7 +3,25 @@ package indexer
 import (
 	"context"
 	"time"
+
+	"go.uber.org/zap"
+
+	"github.com/0x3639/nom-indexer-go/internal/models"
 )
+
+// WatchdogConfigForIndexer is the subset of internal/config.WatchdogConfig
+// that the indexer package needs. Kept here so internal/indexer doesn't
+// have to import internal/config (which would create a cycle once
+// cmd/indexer wires both).
+type WatchdogConfigForIndexer struct {
+	Enabled               bool
+	Interval              time.Duration
+	StallThreshold        time.Duration
+	IndexerDriftThreshold int64
+	NodeDriftThreshold    int64
+	UnhealthyStreak       int
+	FailbackStreak        int
+}
 
 // syncClass is the result of classifying a single watchdog tick.
 //
@@ -79,6 +97,8 @@ type syncState struct {
 	streaks         map[int]nodeStreaks
 	chainIdentifier string // genesis hash, populated on first successful probe
 	failedOverAt    *int64 // unix seconds; nil when on primary
+
+	lastClass string // last classification string (e.g. "synced"); populated by runWatchdogTick
 }
 
 // newSyncState builds a fresh state with empty streaks for each node.
@@ -196,4 +216,179 @@ func selectFailback(s *syncState, candidateIdx int, cfg watchdogReactConfig) int
 		return candidateIdx
 	}
 	return -1
+}
+
+// runSyncWatchdogLoop ticks at watchdog.Interval, classifying drift and
+// reacting (subscription restart, failover, failback). Returns when ctx
+// is cancelled.
+func (i *Indexer) runSyncWatchdogLoop(ctx context.Context) {
+	ticker := time.NewTicker(i.watchdogCfg.Interval)
+	defer ticker.Stop()
+
+	classifyCfg := classifyConfig{
+		StallThreshold:        i.watchdogCfg.StallThreshold,
+		IndexerDriftThreshold: i.watchdogCfg.IndexerDriftThreshold,
+		NodeDriftThreshold:    i.watchdogCfg.NodeDriftThreshold,
+	}
+	reactCfg := watchdogReactConfig{
+		UnhealthyStreak: i.watchdogCfg.UnhealthyStreak,
+		FailbackStreak:  i.watchdogCfg.FailbackStreak,
+	}
+
+	i.logger.Info("sync watchdog started",
+		zap.Duration("interval", i.watchdogCfg.Interval),
+		zap.Int("nodes", i.nodePool.Len()),
+	)
+
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+		}
+		i.runWatchdogTick(ctx, classifyCfg, reactCfg)
+	}
+}
+
+// runWatchdogTick performs a single watchdog iteration: probe, classify,
+// react, optionally fail over or fail back, and finally publish the
+// current sync status to the database.
+func (i *Indexer) runWatchdogTick(ctx context.Context, cCfg classifyConfig, rCfg watchdogReactConfig) {
+	i.syncStateMu.RLock()
+	activeIdx := i.syncStateInternal.activeIdx
+	chainID := i.syncStateInternal.chainIdentifier
+	i.syncStateMu.RUnlock()
+
+	probe, probeErr := i.nodePool.Probe(ctx, activeIdx)
+
+	dbHeightU, dbErr := i.repos.Momentum.GetLatestHeight(ctx)
+	if dbErr != nil {
+		i.logger.Warn("watchdog: GetLatestHeight failed", zap.Error(dbErr))
+		return
+	}
+	dbHeight := int64(dbHeightU)
+
+	lastProgress := time.Unix(i.lastProgressAt.Load(), 0)
+	now := time.Now()
+	class := classify(probe, probeErr, dbHeight, lastProgress, now, cCfg)
+
+	i.syncStateMu.Lock()
+	intent := react(i.syncStateInternal, activeIdx, class, rCfg)
+	if probeErr == nil && i.syncStateInternal.chainIdentifier == "" {
+		i.syncStateInternal.chainIdentifier = probe.GenesisHash
+		chainID = probe.GenesisHash
+	}
+	i.syncStateInternal.lastClass = class.String()
+	i.syncStateMu.Unlock()
+
+	// Failover when react() signals intent. Target chosen by
+	// selectFailoverTarget (which may return -1).
+	if intent.failoverIdx != -1 {
+		target := selectFailoverTarget(ctx, i.nodePool, activeIdx, chainID, cCfg)
+		if target == -1 {
+			i.logger.Error("watchdog: no healthy fallback available",
+				zap.Int("active_idx", activeIdx),
+				zap.String("class", class.String()),
+			)
+		} else if err := i.swapActiveClient(i.nodePool.Entry(target).URL); err != nil {
+			i.logger.Error("watchdog: swap failed", zap.Error(err), zap.Int("target", target))
+		} else {
+			i.syncStateMu.Lock()
+			i.syncStateInternal.activeIdx = target
+			n := now.Unix()
+			i.syncStateInternal.failedOverAt = &n
+			for k := range i.syncStateInternal.streaks {
+				i.syncStateInternal.streaks[k] = nodeStreaks{}
+			}
+			i.syncStateMu.Unlock()
+			i.logger.Info("watchdog: failed over",
+				zap.String("from", i.nodePool.Entry(activeIdx).Label),
+				zap.String("to", i.nodePool.Entry(target).Label),
+			)
+		}
+	}
+
+	// Failback when class is synced and we're on a fallback.
+	if class == classSynced && activeIdx > 0 && intent.failoverIdx == -1 {
+		for candidateIdx := 0; candidateIdx < activeIdx; candidateIdx++ {
+			cProbe, err := i.nodePool.Probe(ctx, candidateIdx)
+			if err != nil || cProbe.GenesisHash != chainID {
+				i.syncStateMu.Lock()
+				st := i.syncStateInternal.streaks[candidateIdx]
+				st.healthy = 0
+				i.syncStateInternal.streaks[candidateIdx] = st
+				i.syncStateMu.Unlock()
+				continue
+			}
+			i.syncStateMu.Lock()
+			picked := selectFailback(i.syncStateInternal, candidateIdx, rCfg)
+			i.syncStateMu.Unlock()
+			if picked != -1 {
+				if err := i.swapActiveClient(i.nodePool.Entry(picked).URL); err != nil {
+					i.logger.Error("watchdog: failback swap failed", zap.Error(err))
+					break
+				}
+				i.syncStateMu.Lock()
+				i.syncStateInternal.activeIdx = picked
+				i.syncStateInternal.failedOverAt = nil
+				for k := range i.syncStateInternal.streaks {
+					i.syncStateInternal.streaks[k] = nodeStreaks{}
+				}
+				i.syncStateMu.Unlock()
+				i.logger.Info("watchdog: failed back",
+					zap.String("to", i.nodePool.Entry(picked).Label),
+				)
+				break
+			}
+		}
+	}
+
+	if intent.signalRestart {
+		i.signalSubscriptionRestart()
+	}
+
+	i.publishSyncStatus(ctx, probe, probeErr, dbHeight, class, activeIdx, now)
+}
+
+// publishSyncStatus writes the current watchdog state into the singleton
+// indexer_sync_status row. Best-effort: a failure is logged but does not
+// abort the tick (the next tick will try again).
+func (i *Indexer) publishSyncStatus(
+	ctx context.Context,
+	probe ProbeResult,
+	probeErr error,
+	dbHeight int64,
+	class syncClass,
+	activeIdx int,
+	now time.Time,
+) {
+	i.syncStateMu.RLock()
+	st := i.syncStateInternal.streaks[activeIdx]
+	chainID := i.syncStateInternal.chainIdentifier
+	failedOverAt := i.syncStateInternal.failedOverAt
+	i.syncStateMu.RUnlock()
+
+	entry := i.nodePool.Entry(activeIdx)
+
+	// When probe errored, frontier/target may be zero — record as zero,
+	// log the error context once via the State field.
+	record := &models.SyncStatus{
+		DBHeight:             dbHeight,
+		ZnndFrontierHeight:   int64(probe.Frontier),
+		ZnndTargetHeight:     int64(probe.Target),
+		DriftMomentums:       int64(probe.Frontier) - dbHeight,
+		NodeLagMomentums:     int64(probe.Target) - int64(probe.Frontier),
+		State:                class.String(),
+		ConsecutiveBadChecks: st.unhealthy,
+		ActiveNodeURL:        entry.URL,
+		ActiveNodeLabel:      entry.Label,
+		ChainIdentifier:      chainID,
+		FailedOverAt:         failedOverAt,
+		LastProgressAt:       i.lastProgressAt.Load(),
+		CheckedAt:            now.Unix(),
+	}
+	if err := i.repos.SyncStatus.Upsert(ctx, record); err != nil {
+		i.logger.Warn("watchdog: upsert sync_status failed", zap.Error(err))
+	}
+	_ = probeErr // class already encodes the failure
 }

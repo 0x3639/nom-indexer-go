@@ -357,3 +357,30 @@ func TestSelectFailbackPreservesHealthyAfterCrossingThreshold(t *testing.T) {
 		t.Fatalf("expected healthy=2 after threshold-crossing, got %d", state.streaks[0].healthy)
 	}
 }
+
+func TestWatchdogConfigForIndexerZeroValueDisabled(t *testing.T) {
+	// The zero value must leave the watchdog disabled so that single-node
+	// deployments built via NewIndexerWithCron never accidentally start
+	// the watchdog goroutine.
+	var cfg WatchdogConfigForIndexer
+	if cfg.Enabled {
+		t.Fatal("zero-value WatchdogConfigForIndexer should have Enabled=false")
+	}
+	if cfg.Interval != 0 || cfg.StallThreshold != 0 {
+		t.Fatal("zero-value WatchdogConfigForIndexer should have zero durations")
+	}
+}
+
+func TestHealthSnapshotDisabledWhenNoNodePool(t *testing.T) {
+	// An Indexer without a node pool (the NewIndexerWithCron path) must
+	// report Ready=true and a watchdog_disabled state so that legacy
+	// single-node setups don't show as unhealthy.
+	i := &Indexer{}
+	snap := i.HealthSnapshot()
+	if !snap.Ready {
+		t.Fatal("snapshot should be Ready=true when node pool is nil")
+	}
+	if snap.State != "watchdog_disabled" {
+		t.Fatalf("expected state=watchdog_disabled, got %q", snap.State)
+	}
+}
