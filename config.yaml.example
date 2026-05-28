@@ -72,8 +72,14 @@ indexer:
   # nodes[0] with label "primary" and NODE_URL_FALLBACKS (comma-
   # separated) becomes nodes[1..] with auto-labels "fallback-1", etc.
   nodes:
-    - url: "ws://znnd:35998"
-      label: "local-znnd"
+    # Default: use the docker-compose default upstream (public testnet).
+    # Most operators leave this as-is and override via NODE_URL_WS.
+    - url: "wss://test.hc1node.com"
+      label: "primary"
+    # Uncomment when running with `docker compose --profile local-node`:
+    # - url: "ws://znnd:35998"
+    #   label: "local-znnd"
+    # And/or add remote fallbacks the watchdog can swap to on failure:
     # - url: "wss://my.hc1node.com:35998"
     #   label: "hc1node-remote"
   # Sync watchdog (drift detection + failover). Default off; opt-in via
