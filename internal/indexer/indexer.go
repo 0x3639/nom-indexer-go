@@ -35,6 +35,8 @@ type Indexer struct {
 
 	// Channel to signal subscription restart needed (triggered by SDK reconnection callback)
 	restartSubCh chan struct{}
+
+	lastProgressAt atomic.Int64 // Unix seconds; updated by sync() and runSubscriptionSession on successful processMomentum
 }
 
 // CronConfig controls the periodic refresh of derived data (voting activity,
@@ -107,6 +109,8 @@ func (i *Indexer) Run(ctx context.Context) error {
 	if tokenHoldersInterval <= 0 {
 		tokenHoldersInterval = 10 * time.Minute
 	}
+
+	i.lastProgressAt.Store(time.Now().Unix())
 
 	var wg sync.WaitGroup
 	wg.Add(3)
@@ -219,6 +223,8 @@ func (i *Indexer) sync(ctx context.Context) error {
 
 			if err := i.processMomentum(ctx, m); err != nil {
 				return fmt.Errorf("failed to process momentum %d: %w", m.Height, err)
+			} else {
+				i.lastProgressAt.Store(time.Now().Unix())
 			}
 		}
 
@@ -316,6 +322,8 @@ func (i *Indexer) runSubscriptionSession(ctx context.Context) error {
 					i.logger.Error("failed to process momentum",
 						zap.Uint64("height", m.Height),
 						zap.Error(err))
+				} else {
+					i.lastProgressAt.Store(time.Now().Unix())
 				}
 			}
 		}
