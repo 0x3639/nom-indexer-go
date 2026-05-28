@@ -382,11 +382,9 @@ The MCP server's `/readyz` gets the same treatment for parity.
 ## Error handling
 
 - **`stats.syncInfo` not supported by the node.** Some node builds may
-  not expose it. On first probe failure for that specific RPC, log
-  WARN and fall back to a frontier-only classification (treat node as
-  `synced` if probe.frontier matches expectation). Configurable via
-  `watchdog.tolerate_missing_syncinfo: true` (default true) — refuses
-  to start if false and RPC unavailable.
+  not expose it. The watchdog gracefully degrades: a probe RPC error
+  produces a `probe_failed` classification and the standard streak-based
+  failover applies. No special tolerance flag is needed.
 - **Probe transient errors.** `withRetry` (existing) wraps each probe
   RPC: 3 attempts, 0.5s → 2s backoff. Watchdog cadence (30s) absorbs
   the latency.

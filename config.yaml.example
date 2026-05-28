@@ -100,7 +100,6 @@ indexer:
     node_drift_threshold: 3
     unhealthy_streak: 2
     failback_streak: 5
-    tolerate_missing_syncinfo: true
   # Indexer-side HTTP server for /healthz and /readyz.
   health:
     enabled: true

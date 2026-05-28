@@ -264,9 +264,6 @@ func TestWatchdogConfigDefaults(t *testing.T) {
 	if cfg.Indexer.Watchdog.FailbackStreak != 5 {
 		t.Fatalf("default failback_streak: %d", cfg.Indexer.Watchdog.FailbackStreak)
 	}
-	if !cfg.Indexer.Watchdog.TolerateMissingSyncInfo {
-		t.Fatal("default tolerate_missing_syncinfo should be true")
-	}
 	if cfg.Indexer.Health.Port != 9092 {
 		t.Fatalf("default health port: %d", cfg.Indexer.Health.Port)
 	}

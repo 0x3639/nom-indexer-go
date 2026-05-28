@@ -80,11 +80,6 @@ type WatchdogConfig struct {
 	// higher-priority node are required before failing back to it.
 	// Should be > UnhealthyStreak to prevent flapping.
 	FailbackStreak int `mapstructure:"failback_streak"`
-	// TolerateMissingSyncInfo controls behaviour when the configured
-	// node does not expose stats.syncInfo. When true (default), the
-	// watchdog falls back to frontier-only classification and logs a
-	// warning. When false, missing syncInfo support is a startup error.
-	TolerateMissingSyncInfo bool `mapstructure:"tolerate_missing_syncinfo"`
 }
 
 // HealthConfig configures the indexer-side HTTP server that exposes
@@ -248,7 +243,6 @@ func Load() (*Config, error) {
 	v.SetDefault("indexer.watchdog.node_drift_threshold", 3)
 	v.SetDefault("indexer.watchdog.unhealthy_streak", 2)
 	v.SetDefault("indexer.watchdog.failback_streak", 5)
-	v.SetDefault("indexer.watchdog.tolerate_missing_syncinfo", true)
 	v.SetDefault("indexer.health.enabled", true)
 	v.SetDefault("indexer.health.port", 9092)
 
