@@ -24,28 +24,62 @@ type Config struct {
 	BackfillOnStartup bool           `mapstructure:"backfill_on_startup"`
 }
 
+// IndexerConfig groups the indexer-process-only settings: the prioritised
+// list of upstream nodes, the sync watchdog policy, and the indexer's
+// own HTTP health server. The API and MCP processes do not consult it.
 type IndexerConfig struct {
 	Nodes    []NodeEntry    `mapstructure:"nodes"`
 	Watchdog WatchdogConfig `mapstructure:"watchdog"`
 	Health   HealthConfig   `mapstructure:"health"`
 }
 
+// NodeEntry is one upstream Zenon node. URL accepts ws://, wss://,
+// http://, or https://; the subscription requires WS, but probes can
+// use either. Label appears in logs and the indexer_sync_status row.
 type NodeEntry struct {
 	URL   string `mapstructure:"url"`
 	Label string `mapstructure:"label"`
 }
 
+// WatchdogConfig controls the sync watchdog goroutine. See
+// docs/operations/watchdog.md for failure-mode coverage and the
+// rationale behind the asymmetric streak thresholds.
 type WatchdogConfig struct {
-	Enabled                 bool          `mapstructure:"enabled"`
-	Interval                time.Duration `mapstructure:"interval"`
-	StallThreshold          time.Duration `mapstructure:"stall_threshold"`
-	IndexerDriftThreshold   int64         `mapstructure:"indexer_drift_threshold"`
-	NodeDriftThreshold      int64         `mapstructure:"node_drift_threshold"`
-	UnhealthyStreak         int           `mapstructure:"unhealthy_streak"`
-	FailbackStreak          int           `mapstructure:"failback_streak"`
-	TolerateMissingSyncInfo bool          `mapstructure:"tolerate_missing_syncinfo"`
+	// Enabled turns the watchdog on. When false, drift detection and
+	// node failover are disabled — existing SDK reconnect behaviour
+	// is unaffected.
+	Enabled bool `mapstructure:"enabled"`
+	// Interval is the cadence of the watchdog tick.
+	Interval time.Duration `mapstructure:"interval"`
+	// StallThreshold flags a stall when no momentum has been committed
+	// for this long. Measured against an atomic Unix-seconds counter
+	// updated by the subscription loop.
+	StallThreshold time.Duration `mapstructure:"stall_threshold"`
+	// IndexerDriftThreshold is the maximum acceptable gap (in momentums)
+	// between znnd's frontier and the DB's last indexed height before
+	// the watchdog flags indexer_lagging and forces a subscription restart.
+	IndexerDriftThreshold int64 `mapstructure:"indexer_drift_threshold"`
+	// NodeDriftThreshold is the maximum acceptable gap (in momentums)
+	// between znnd's targetHeight (what its peers know) and currentHeight
+	// (what it has) before the watchdog flags node_lagging.
+	NodeDriftThreshold int64 `mapstructure:"node_drift_threshold"`
+	// UnhealthyStreak is how many consecutive bad ticks trigger a
+	// failover to the next configured node. Lower = faster failover.
+	UnhealthyStreak int `mapstructure:"unhealthy_streak"`
+	// FailbackStreak is how many consecutive healthy probes of a
+	// higher-priority node are required before failing back to it.
+	// Should be > UnhealthyStreak to prevent flapping.
+	FailbackStreak int `mapstructure:"failback_streak"`
+	// TolerateMissingSyncInfo controls behaviour when the configured
+	// node does not expose stats.syncInfo. When true (default), the
+	// watchdog falls back to frontier-only classification and logs a
+	// warning. When false, missing syncInfo support is a startup error.
+	TolerateMissingSyncInfo bool `mapstructure:"tolerate_missing_syncinfo"`
 }
 
+// HealthConfig configures the indexer-side HTTP server that exposes
+// /healthz (process alive) and /readyz (caught up). Internal-only;
+// the docker compose healthcheck probes it.
 type HealthConfig struct {
 	Enabled bool `mapstructure:"enabled"`
 	Port    int  `mapstructure:"port"`
@@ -235,6 +269,12 @@ func Load() (*Config, error) {
 	_ = v.BindEnv("mcp.rate_limit_per_minute", "MCP_RATE_LIMIT_PER_MINUTE")
 	_ = v.BindEnv("indexer.watchdog.enabled", "INDEXER_WATCHDOG_ENABLED")
 	_ = v.BindEnv("indexer.watchdog.interval", "INDEXER_WATCHDOG_INTERVAL")
+	_ = v.BindEnv("indexer.watchdog.stall_threshold", "INDEXER_WATCHDOG_STALL_THRESHOLD")
+	_ = v.BindEnv("indexer.watchdog.indexer_drift_threshold", "INDEXER_WATCHDOG_INDEXER_DRIFT_THRESHOLD")
+	_ = v.BindEnv("indexer.watchdog.node_drift_threshold", "INDEXER_WATCHDOG_NODE_DRIFT_THRESHOLD")
+	_ = v.BindEnv("indexer.watchdog.unhealthy_streak", "INDEXER_WATCHDOG_UNHEALTHY_STREAK")
+	_ = v.BindEnv("indexer.watchdog.failback_streak", "INDEXER_WATCHDOG_FAILBACK_STREAK")
+	_ = v.BindEnv("indexer.health.enabled", "INDEXER_HEALTH_ENABLED")
 	_ = v.BindEnv("indexer.health.port", "INDEXER_HEALTH_PORT")
 
 	// Try to read config file (optional)
@@ -247,10 +287,9 @@ func Load() (*Config, error) {
 	}
 
 	var cfg Config
-	if err := v.Unmarshal(&cfg, viper.DecodeHook(mapstructure.ComposeDecodeHookFunc(
+	if err := v.Unmarshal(&cfg, viper.DecodeHook(
 		mapstructure.StringToTimeDurationHookFunc(),
-		mapstructure.StringToSliceHookFunc(","),
-	))); err != nil {
+	)); err != nil {
 		return nil, fmt.Errorf("error unmarshaling config: %w", err)
 	}
 
@@ -262,15 +301,17 @@ func Load() (*Config, error) {
 			Label: "primary",
 		})
 		if fb := os.Getenv("NODE_URL_FALLBACKS"); fb != "" {
-			for i, u := range strings.Split(fb, ",") {
+			seq := 1
+			for _, u := range strings.Split(fb, ",") {
 				u = strings.TrimSpace(u)
 				if u == "" {
 					continue
 				}
 				cfg.Indexer.Nodes = append(cfg.Indexer.Nodes, NodeEntry{
 					URL:   u,
-					Label: fmt.Sprintf("fallback-%d", i+1),
+					Label: fmt.Sprintf("fallback-%d", seq),
 				})
+				seq++
 			}
 		}
 	}

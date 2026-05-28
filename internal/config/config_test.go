@@ -196,6 +196,27 @@ func TestNodesConfigFromEnvBackcompat(t *testing.T) {
 	}
 }
 
+func TestNodesFallbacksSkipEmptySegments(t *testing.T) {
+	t.Setenv("DATABASE_PASSWORD", "x")
+	t.Setenv("API_JWT_SECRET", "y")
+	t.Setenv("NODE_URL_WS", "ws://znnd:35998")
+	t.Setenv("NODE_URL_FALLBACKS", "wss://a.example.com:35998,,https://b.example.com:35997")
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if got, want := len(cfg.Indexer.Nodes), 3; got != want {
+		t.Fatalf("nodes len = %d, want %d", got, want)
+	}
+	if cfg.Indexer.Nodes[1].Label != "fallback-1" {
+		t.Fatalf("nodes[1].Label = %q, want fallback-1", cfg.Indexer.Nodes[1].Label)
+	}
+	if cfg.Indexer.Nodes[2].Label != "fallback-2" {
+		t.Fatalf("nodes[2].Label = %q, want fallback-2 (sequential, not fallback-3)",
+			cfg.Indexer.Nodes[2].Label)
+	}
+}
+
 func TestWatchdogConfigDefaults(t *testing.T) {
 	t.Setenv("DATABASE_PASSWORD", "x")
 	t.Setenv("API_JWT_SECRET", "y")
