@@ -3,8 +3,11 @@ package config
 import (
 	"errors"
 	"fmt"
+	"os"
 	"strings"
+	"time"
 
+	"github.com/go-viper/mapstructure/v2"
 	"github.com/spf13/viper"
 	"go.uber.org/zap"
 	"go.uber.org/zap/zapcore"
@@ -17,7 +20,35 @@ type Config struct {
 	Cron              CronConfig     `mapstructure:"cron"`
 	API               APIConfig      `mapstructure:"api"`
 	MCP               MCPConfig      `mapstructure:"mcp"`
+	Indexer           IndexerConfig  `mapstructure:"indexer"`
 	BackfillOnStartup bool           `mapstructure:"backfill_on_startup"`
+}
+
+type IndexerConfig struct {
+	Nodes    []NodeEntry    `mapstructure:"nodes"`
+	Watchdog WatchdogConfig `mapstructure:"watchdog"`
+	Health   HealthConfig   `mapstructure:"health"`
+}
+
+type NodeEntry struct {
+	URL   string `mapstructure:"url"`
+	Label string `mapstructure:"label"`
+}
+
+type WatchdogConfig struct {
+	Enabled                 bool          `mapstructure:"enabled"`
+	Interval                time.Duration `mapstructure:"interval"`
+	StallThreshold          time.Duration `mapstructure:"stall_threshold"`
+	IndexerDriftThreshold   int64         `mapstructure:"indexer_drift_threshold"`
+	NodeDriftThreshold      int64         `mapstructure:"node_drift_threshold"`
+	UnhealthyStreak         int           `mapstructure:"unhealthy_streak"`
+	FailbackStreak          int           `mapstructure:"failback_streak"`
+	TolerateMissingSyncInfo bool          `mapstructure:"tolerate_missing_syncinfo"`
+}
+
+type HealthConfig struct {
+	Enabled bool `mapstructure:"enabled"`
+	Port    int  `mapstructure:"port"`
 }
 
 type NodeConfig struct {
@@ -166,6 +197,16 @@ func Load() (*Config, error) {
 	// (see MCPConfig.EffectiveJWTSecret). Set MCP_JWT_SECRET only for
 	// independent key material.
 	v.SetDefault("backfill_on_startup", false)
+	v.SetDefault("indexer.watchdog.enabled", false)
+	v.SetDefault("indexer.watchdog.interval", "30s")
+	v.SetDefault("indexer.watchdog.stall_threshold", "60s")
+	v.SetDefault("indexer.watchdog.indexer_drift_threshold", 3)
+	v.SetDefault("indexer.watchdog.node_drift_threshold", 3)
+	v.SetDefault("indexer.watchdog.unhealthy_streak", 2)
+	v.SetDefault("indexer.watchdog.failback_streak", 5)
+	v.SetDefault("indexer.watchdog.tolerate_missing_syncinfo", true)
+	v.SetDefault("indexer.health.enabled", true)
+	v.SetDefault("indexer.health.port", 9092)
 
 	// Enable environment variable binding
 	v.AutomaticEnv()
@@ -192,6 +233,9 @@ func Load() (*Config, error) {
 	_ = v.BindEnv("mcp.jwt_secret", "MCP_JWT_SECRET")
 	_ = v.BindEnv("mcp.cors_allowed_origins", "MCP_CORS_ALLOWED_ORIGINS")
 	_ = v.BindEnv("mcp.rate_limit_per_minute", "MCP_RATE_LIMIT_PER_MINUTE")
+	_ = v.BindEnv("indexer.watchdog.enabled", "INDEXER_WATCHDOG_ENABLED")
+	_ = v.BindEnv("indexer.watchdog.interval", "INDEXER_WATCHDOG_INTERVAL")
+	_ = v.BindEnv("indexer.health.port", "INDEXER_HEALTH_PORT")
 
 	// Try to read config file (optional)
 	if err := v.ReadInConfig(); err != nil {
@@ -203,8 +247,32 @@ func Load() (*Config, error) {
 	}
 
 	var cfg Config
-	if err := v.Unmarshal(&cfg); err != nil {
+	if err := v.Unmarshal(&cfg, viper.DecodeHook(mapstructure.ComposeDecodeHookFunc(
+		mapstructure.StringToTimeDurationHookFunc(),
+		mapstructure.StringToSliceHookFunc(","),
+	))); err != nil {
 		return nil, fmt.Errorf("error unmarshaling config: %w", err)
+	}
+
+	// If indexer.nodes wasn't set by YAML, build it from the legacy
+	// NODE_URL_WS (primary) + NODE_URL_FALLBACKS (comma-separated).
+	if len(cfg.Indexer.Nodes) == 0 && cfg.Node.WebSocketURL != "" {
+		cfg.Indexer.Nodes = append(cfg.Indexer.Nodes, NodeEntry{
+			URL:   cfg.Node.WebSocketURL,
+			Label: "primary",
+		})
+		if fb := os.Getenv("NODE_URL_FALLBACKS"); fb != "" {
+			for i, u := range strings.Split(fb, ",") {
+				u = strings.TrimSpace(u)
+				if u == "" {
+					continue
+				}
+				cfg.Indexer.Nodes = append(cfg.Indexer.Nodes, NodeEntry{
+					URL:   u,
+					Label: fmt.Sprintf("fallback-%d", i+1),
+				})
+			}
+		}
 	}
 
 	if err := cfg.Validate(); err != nil {

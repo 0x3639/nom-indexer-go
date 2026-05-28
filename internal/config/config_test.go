@@ -3,6 +3,7 @@ package config
 import (
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestDatabaseConfig_ConnectionString(t *testing.T) {
@@ -169,5 +170,53 @@ func TestConfig_ValidateBoundaryPorts(t *testing.T) {
 	cfg.Database.Port = 65535
 	if err := cfg.Validate(); err != nil {
 		t.Errorf("Validate() with port 65535 should succeed, got: %v", err)
+	}
+}
+
+func TestNodesConfigFromEnvBackcompat(t *testing.T) {
+	t.Setenv("DATABASE_PASSWORD", "x")
+	t.Setenv("API_JWT_SECRET", "y")
+	t.Setenv("NODE_URL_WS", "ws://znnd:35998")
+	t.Setenv("NODE_URL_FALLBACKS", "wss://my.hc1node.com:35998,https://my.hc1node.com:35997")
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if got, want := len(cfg.Indexer.Nodes), 3; got != want {
+		t.Fatalf("nodes len = %d, want %d", got, want)
+	}
+	if cfg.Indexer.Nodes[0].URL != "ws://znnd:35998" {
+		t.Fatalf("primary URL: %q", cfg.Indexer.Nodes[0].URL)
+	}
+	if cfg.Indexer.Nodes[0].Label != "primary" {
+		t.Fatalf("primary auto-label: %q", cfg.Indexer.Nodes[0].Label)
+	}
+	if cfg.Indexer.Nodes[2].URL != "https://my.hc1node.com:35997" {
+		t.Fatalf("fallback-2 URL: %q", cfg.Indexer.Nodes[2].URL)
+	}
+}
+
+func TestWatchdogConfigDefaults(t *testing.T) {
+	t.Setenv("DATABASE_PASSWORD", "x")
+	t.Setenv("API_JWT_SECRET", "y")
+	t.Setenv("NODE_URL_WS", "ws://znnd:35998")
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if cfg.Indexer.Watchdog.Interval != 30*time.Second {
+		t.Fatalf("default interval: %v", cfg.Indexer.Watchdog.Interval)
+	}
+	if cfg.Indexer.Watchdog.UnhealthyStreak != 2 {
+		t.Fatalf("default unhealthy_streak: %d", cfg.Indexer.Watchdog.UnhealthyStreak)
+	}
+	if cfg.Indexer.Watchdog.FailbackStreak != 5 {
+		t.Fatalf("default failback_streak: %d", cfg.Indexer.Watchdog.FailbackStreak)
+	}
+	if !cfg.Indexer.Watchdog.TolerateMissingSyncInfo {
+		t.Fatal("default tolerate_missing_syncinfo should be true")
+	}
+	if cfg.Indexer.Health.Port != 9092 {
+		t.Fatalf("default health port: %d", cfg.Indexer.Health.Port)
 	}
 }
