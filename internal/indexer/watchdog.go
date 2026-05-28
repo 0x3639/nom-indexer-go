@@ -1,6 +1,9 @@
 package indexer
 
-import "time"
+import (
+	"context"
+	"time"
+)
 
 // syncClass is the result of classifying a single watchdog tick.
 //
@@ -148,4 +151,49 @@ func react(s *syncState, activeIdx int, c syncClass, cfg watchdogReactConfig) re
 		}
 	}
 	return intent
+}
+
+// selectFailoverTarget walks candidates starting *after* currentIdx and
+// returns the first one whose probe is healthy (probe succeeds + target -
+// frontier <= cfg.NodeDriftThreshold) AND whose chain matches
+// storedGenesis. Returns -1 if no candidate qualifies.
+//
+// storedGenesis == "" means "first run, accept any chain" — the watchdog
+// will record the candidate's genesis as canonical after the swap.
+func selectFailoverTarget(
+	ctx context.Context,
+	pool *NodePool,
+	currentIdx int,
+	storedGenesis string,
+	cfg classifyConfig,
+) int {
+	for idx := currentIdx + 1; idx < pool.Len(); idx++ {
+		probe, err := pool.Probe(ctx, idx)
+		if err != nil {
+			continue
+		}
+		if int64(probe.Target)-int64(probe.Frontier) > cfg.NodeDriftThreshold {
+			continue
+		}
+		if storedGenesis != "" && probe.GenesisHash != storedGenesis {
+			continue
+		}
+		return idx
+	}
+	return -1
+}
+
+// selectFailback advances s.streaks[candidateIdx].healthy and returns
+// candidateIdx when the streak reaches cfg.FailbackStreak. Otherwise
+// returns -1. Mutates s.streaks[candidateIdx]; does NOT reset on
+// threshold-crossing (the watchdog goroutine resets all streaks after
+// a successful swap).
+func selectFailback(s *syncState, candidateIdx int, cfg watchdogReactConfig) int {
+	st := s.streaks[candidateIdx]
+	st.healthy++
+	s.streaks[candidateIdx] = st
+	if st.healthy >= cfg.FailbackStreak {
+		return candidateIdx
+	}
+	return -1
 }

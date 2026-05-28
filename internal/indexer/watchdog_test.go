@@ -1,9 +1,13 @@
 package indexer
 
 import (
+	"context"
 	"errors"
+	"net/http/httptest"
 	"testing"
 	"time"
+
+	"go.uber.org/zap"
 )
 
 func TestClassify(t *testing.T) {
@@ -234,5 +238,122 @@ func TestNewSyncStateInitsStreaksForEachNode(t *testing.T) {
 		if st, ok := s.streaks[i]; !ok || st != (nodeStreaks{}) {
 			t.Errorf("node %d streak should be zero-valued, got %+v ok=%v", i, st, ok)
 		}
+	}
+}
+
+// Helper for tests below — a node that's "healthy" reports synced
+// targetHeight == currentHeight at the given height. Genesis G.
+func okNode(t *testing.T, height uint64, genesis string) *httptest.Server {
+	t.Helper()
+	return fakeJSONRPC(t, map[string]any{
+		"stats.syncInfo":             map[string]any{"state": 2, "currentHeight": height, "targetHeight": height},
+		"ledger.getFrontierMomentum": map[string]any{"height": height},
+		"ledger.getMomentumsByHeight": map[string]any{
+			"count": 1,
+			"list":  []any{map[string]any{"hash": genesis}},
+		},
+	})
+}
+
+func laggingNode(t *testing.T, frontier, target uint64, genesis string) *httptest.Server {
+	t.Helper()
+	return fakeJSONRPC(t, map[string]any{
+		"stats.syncInfo":             map[string]any{"state": 1, "currentHeight": frontier, "targetHeight": target},
+		"ledger.getFrontierMomentum": map[string]any{"height": frontier},
+		"ledger.getMomentumsByHeight": map[string]any{
+			"count": 1,
+			"list":  []any{map[string]any{"hash": genesis}},
+		},
+	})
+}
+
+func TestSelectFailoverPicksFirstHealthy(t *testing.T) {
+	badSrv := laggingNode(t, 100, 200, "G") // node_lagging: target far ahead of frontier
+	goodSrv := okNode(t, 100, "G")
+
+	pool := NewNodePool([]NodeEntry{
+		{URL: "http://primary-dead", Label: "primary"},
+		{URL: badSrv.URL, Label: "bad-fb"},
+		{URL: goodSrv.URL, Label: "good-fb"},
+	}, zap.NewNop())
+
+	cfg := classifyConfig{NodeDriftThreshold: 3}
+	idx := selectFailoverTarget(context.Background(), pool, 0, "G", cfg)
+	if idx != 2 {
+		t.Fatalf("expected idx 2, got %d", idx)
+	}
+}
+
+func TestSelectFailoverSkipsChainMismatch(t *testing.T) {
+	wrongChain := okNode(t, 100, "X")
+	rightChain := okNode(t, 100, "G")
+	pool := NewNodePool([]NodeEntry{
+		{URL: "http://primary", Label: "primary"},
+		{URL: wrongChain.URL, Label: "wrong-chain"},
+		{URL: rightChain.URL, Label: "right-chain"},
+	}, zap.NewNop())
+
+	cfg := classifyConfig{NodeDriftThreshold: 3}
+	idx := selectFailoverTarget(context.Background(), pool, 0, "G", cfg)
+	if idx != 2 {
+		t.Fatalf("expected idx 2 (chain G), got %d", idx)
+	}
+}
+
+func TestSelectFailoverReturnsMinusOneWhenAllFail(t *testing.T) {
+	badSrv := laggingNode(t, 100, 200, "G")
+	pool := NewNodePool([]NodeEntry{
+		{URL: "http://primary", Label: "primary"},
+		{URL: "http://127.0.0.1:1", Label: "dead"},
+		{URL: badSrv.URL, Label: "lagging"},
+	}, zap.NewNop())
+
+	cfg := classifyConfig{NodeDriftThreshold: 3}
+	if idx := selectFailoverTarget(context.Background(), pool, 0, "G", cfg); idx != -1 {
+		t.Fatalf("expected -1, got %d", idx)
+	}
+}
+
+func TestSelectFailoverAcceptsFirstRunEmptyGenesis(t *testing.T) {
+	s := okNode(t, 100, "G") // any genesis is fine when storedGenesis is ""
+	pool := NewNodePool([]NodeEntry{
+		{URL: "http://primary", Label: "primary"},
+		{URL: s.URL, Label: "first-ok"},
+	}, zap.NewNop())
+	cfg := classifyConfig{NodeDriftThreshold: 3}
+	idx := selectFailoverTarget(context.Background(), pool, 0, "", cfg)
+	if idx != 1 {
+		t.Fatalf("expected idx 1, got %d", idx)
+	}
+}
+
+func TestSelectFailbackRequiresStreak(t *testing.T) {
+	state := newSyncState(2)
+	state.activeIdx = 1
+	cfg := watchdogReactConfig{FailbackStreak: 3}
+
+	// 1st healthy primary probe — streak advances to 1
+	if selectFailback(state, 0, cfg) != -1 {
+		t.Fatal("should not failback at streak 1")
+	}
+	if selectFailback(state, 0, cfg) != -1 {
+		t.Fatal("should not failback at streak 2")
+	}
+	if got := selectFailback(state, 0, cfg); got != 0 {
+		t.Fatalf("should failback at streak 3, got %d", got)
+	}
+}
+
+func TestSelectFailbackPreservesHealthyAfterCrossingThreshold(t *testing.T) {
+	// After selectFailback returns the idx, the watchdog will swap and
+	// reset all streaks. We don't reset here — the caller's responsibility.
+	// Verify the streak isn't reset by selectFailback itself.
+	state := newSyncState(2)
+	cfg := watchdogReactConfig{FailbackStreak: 2}
+
+	selectFailback(state, 0, cfg)
+	selectFailback(state, 0, cfg)
+	if state.streaks[0].healthy != 2 {
+		t.Fatalf("expected healthy=2 after threshold-crossing, got %d", state.streaks[0].healthy)
 	}
 }
