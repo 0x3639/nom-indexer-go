@@ -147,6 +147,23 @@ func (i *Indexer) swapActiveClient(url string) error {
 	return nil
 }
 
+// StartupSwap forces the active client over to the given node idx during
+// the synchronous startup phase. Unlike runtime failover, this does not
+// require a prior chainIdentifier seed — the next watchdog tick will
+// record the new genesis as canonical.
+func (i *Indexer) StartupSwap(idx int) error {
+	entry := i.nodePool.Entry(idx)
+	if err := i.swapActiveClient(entry.URL); err != nil {
+		return err
+	}
+	i.syncStateMu.Lock()
+	i.syncStateInternal.activeIdx = idx
+	now := time.Now().Unix()
+	i.syncStateInternal.failedOverAt = &now
+	i.syncStateMu.Unlock()
+	return nil
+}
+
 // HealthSnapshot returns a copy of the current sync state for the
 // indexer's /readyz handler. Safe for concurrent reads — held briefly
 // under syncStateMu.
