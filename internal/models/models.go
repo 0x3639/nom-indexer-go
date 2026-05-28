@@ -461,7 +461,7 @@ type SyncStatus struct {
 	ZnndTargetHeight     int64  `db:"znnd_target_height"`
 	DriftMomentums       int64  `db:"drift_momentums"`
 	NodeLagMomentums     int64  `db:"node_lag_momentums"`
-	State                string `db:"state"`
+	State                string `db:"state"` // synced | indexer_lagging | node_lagging | stalled | probe_failed
 	ConsecutiveBadChecks int    `db:"consecutive_bad_checks"`
 	ActiveNodeURL        string `db:"active_node_url"`
 	ActiveNodeLabel      string `db:"active_node_label"`
