@@ -47,7 +47,7 @@ What's not covered:
 
 - Active recovery of znnd itself (e.g., restarting the znnd container
   from inside the indexer). Out of scope; high blast radius.
-- Multi-chain support. We verify chain-id on switch to *prevent*
+- Multi-chain support. We verify chain identity (genesis hash) on switch to *prevent*
   cross-chain writes, not to support them.
 - Sub-second failover. Defaults target ~60s drift detection and
   ~2.5min failback (asymmetric).
@@ -82,7 +82,7 @@ drift detection and node selection. The SDK client becomes an
                          │   │        signalSubscriptionRestart()         │     │
                          │   │   4. on node_lagging > N ticks:            │     │
                          │   │        probe higher-priority candidates    │     │
-                         │   │        verify chain-id, atomic swap        │     │
+                         │   │        verify chain identity (genesis hash), atomic swap        │     │
                          │   │   5. on fallback AND primary healthy       │     │
                          │   │      for M consecutive ticks: fail back    │     │
                          │   │   6. upsert indexer_sync_status row        │     │
@@ -101,9 +101,9 @@ drift detection and node selection. The SDK client becomes an
 | # | Path | Type | Purpose |
 |---|---|---|---|
 | 1 | `internal/indexer/watchdog.go` | new | `runSyncWatchdogLoop(ctx, cfg)`. Owns the tick, classification, and reaction. |
-| 2 | `internal/indexer/syncinfo.go` | new | Raw JSON-RPC wrapper around the SDK client for `stats.syncInfo`. Returns `{currentHeight, targetHeight, state}`. |
-| 3 | `internal/indexer/nodepool.go` | new | Holds ordered `[]NodeConfig{URL, Label}`. `Probe(ctx, idx)` returns `{frontier, target, chainID, latency, err}`. Caches probe clients per URL. |
-| 4 | `internal/indexer/client_switch.go` | new | `swapClient(ctx, idx)`: builds new client, verifies chain-id matches stored, atomically stores, signals restart, closes old client after grace period. |
+| 2 | `internal/indexer/syncinfo.go` | new | Raw JSON-RPC wrapper around the SDK client for `stats.syncInfo`. Returns `{state, currentHeight, targetHeight}` (verified against live znnd: `{"state":2,"currentHeight":N,"targetHeight":N}`; `state=2` means synced). |
+| 3 | `internal/indexer/nodepool.go` | new | Holds ordered `[]NodeConfig{URL, Label}`. `Probe(ctx, idx)` returns `{frontier, target, genesisHash, latency, err}`. The `genesisHash` is fetched via `ledger.getMomentumsByHeight(1, 1)` and used as the chain identifier (since `stats.syncInfo` does not expose one). Caches probe clients per URL. |
+| 4 | `internal/indexer/client_switch.go` | new | `swapClient(ctx, idx)`: builds new client, verifies chain identity (genesis hash) matches stored, atomically stores, signals restart, closes old client after grace period. |
 | 5 | `internal/health/server.go` | new | Tiny `net/http` listener: `/healthz` (process alive) + `/readyz` (in-mem watchdog state). |
 | 6 | `internal/models/sync_status.go` | new | `SyncStatus` struct. |
 | 7 | `internal/repository/sync_status.go` | new | `Upsert(ctx, s)`, `Get(ctx)`. Single-row table. |
@@ -180,8 +180,8 @@ goroutine writes to it. A successful failover or failback resets
      probe ← nodePool.Probe(ctx, idx)
      if probe.err || (probe.target - probe.frontier) > node_drift_threshold:
          continue
-     if chainID_stored != probe.chainID:
-         log.Error("chain-id mismatch", refuse switch); continue
+     if genesisHash_stored != probe.genesisHash:
+         log.Error("chain identity (genesis hash) mismatch", refuse switch); continue
      break
 2. If no candidate found:
      log.Error("no healthy fallback"); stay on active; keep degrading /readyz.
@@ -203,7 +203,7 @@ goroutine writes to it. A successful failover or failback resets
 ```
 1. For idx in (0 .. active-1):                              # higher priority only
      probe ← nodePool.Probe(ctx, idx)
-     if probe.healthy AND probe.chainID == stored:
+     if probe.healthy AND probe.genesisHash == stored:
          healthyStreak[idx]++
          if healthyStreak[idx] >= failback_streak:
              swapClient(idx); reset all healthyStreaks; break
@@ -221,10 +221,10 @@ Prevents one good probe from yanking us back during a flaky window.
 1. Indexer.Run() constructs nodePool from config.nodes.
 2. activeClient ← nodes[0] client.
 3. Synchronous initial watchdog probe BEFORE existing sync():
-     a. If primary probes healthy + chain-id matches stored → proceed.
+     a. If primary probes healthy + chain identity (genesis hash) matches stored → proceed.
      b. If primary fails + a fallback succeeds → swap, then sync().
-     c. If chain-id not yet stored (fresh DB) → record primary's
-        chain-id as the canonical value.
+     c. If chain identity (genesis hash) not yet stored (fresh DB) → record primary's
+        chain identity (genesis hash) as the canonical value.
      d. If all candidates fail → fatal error, exit (existing config-error pattern).
 4. Existing sync() runs against the (possibly already failed-over) active client.
 5. Subscription loop starts.
@@ -272,7 +272,7 @@ CREATE TABLE indexer_sync_status (
     consecutive_bad_checks INTEGER      NOT NULL DEFAULT 0,
     active_node_url        TEXT         NOT NULL,
     active_node_label      TEXT         NOT NULL,
-    chain_identifier       TEXT         NOT NULL,         -- canonical chain id, set on first probe
+    chain_identifier       TEXT         NOT NULL,         -- genesis momentum hash, set on first probe
     failed_over_at         BIGINT,                        -- unix seconds; null if on primary
     last_progress_at       BIGINT       NOT NULL,         -- unix seconds; last processMomentum commit
     checked_at             BIGINT       NOT NULL          -- unix seconds; this tick
@@ -436,7 +436,7 @@ The MCP server's `/healthz` gets the same treatment for parity.
     subscription resumes against secondary.
   - Then secondary stays healthy and primary recovers. Verify
     failback after `failback_streak` ticks, not before.
-  - Chain-id mismatch case: secondary returns different chain-id.
+  - Chain-id mismatch case: secondary returns different chain identity (genesis hash).
     Verify swap refused, ERROR logged, no `activeClient` change.
 
 ### Smoke (manual)
