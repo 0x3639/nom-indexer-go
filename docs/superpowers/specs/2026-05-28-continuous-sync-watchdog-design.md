@@ -36,7 +36,8 @@ What's not covered:
 1. Detect indexer-vs-znnd drift independent of websocket events, and
    recover by reusing the existing `signalSubscriptionRestart()` path.
 2. Detect znnd-vs-chain drift via `stats.syncInfo`, surface it as a
-   metric, in the API's `/healthz`, and on a new indexer-side `/readyz`.
+   metric, in the API's existing `/readyz`, and on a new indexer-side
+   `/readyz`.
 3. Fail over to a configured alternate node when the active node is
    unrecoverable, then fail back to higher-priority nodes once they
    recover (hysteresis to prevent flapping).
@@ -110,7 +111,7 @@ drift detection and node selection. The SDK client becomes an
 | 8 | `migrations/0NNN_indexer_sync_status.up.sql` | new | Schema (below). |
 | 9 | `internal/indexer/indexer.go` | edit | Replace `client *RpcClient` field with `activeClient atomic.Pointer[*RpcClient]`. Update all read sites. Start watchdog + health server in `Run()`. |
 | 10 | `internal/config/config.go` | edit | Add `Nodes []NodeConfig` and `Watchdog WatchdogConfig`. Keep `NODE_URL_WS` env back-compat (becomes `nodes[0].url`). Add `NODE_URL_FALLBACKS` env (comma-separated). |
-| 11 | `cmd/api/server.go` | edit | Existing `/healthz` handler joins `indexer_sync_status` row; returns 503 when `state != synced` AND `consecutive_bad_checks >= unhealthy_streak`. Body includes active node label. |
+| 11 | `internal/api/router/router.go` | edit | Existing `readyz` handler (already does DB+schema-version checks) joins `indexer_sync_status` row; returns 503 when `state != synced` AND `consecutive_bad_checks >= unhealthy_streak`. Body includes active node label. Bumps `minSchemaVersion` constant from `12` to the new migration number. |
 | 12 | `docker-compose.yml` | edit | Indexer healthcheck pointed at new port. New env vars wired. Internal-only port (no host mapping). |
 | 13 | `config.yaml.example` | edit | Document the new keys. |
 
@@ -322,19 +323,26 @@ Env-var equivalents (back-compat with current `NODE_URL_WS`):
 If `nodes:` is set in `config.yaml`, it wins over the env vars (existing
 precedence rule from `docs/config/reference.md`).
 
-## API `/healthz` extension
+## API `/readyz` extension
 
-`cmd/api`'s existing `/healthz` handler today returns `{"status":"ok"}`
-if Postgres ping succeeds. New behavior:
+The API already separates `/healthz` (process alive, no checks — stays as
+is) and `/readyz` (substantive: DB ping + schema-version check via
+`minSchemaVersion`). We extend `/readyz`.
+
+New behavior:
 
 ```go
-// Pseudocode
-status := pingPostgres()
-if !status.ok { return 503, "db unreachable" }
+// Pseudocode added to existing readyz handler in internal/api/router/router.go
+// after the existing DB-version check passes:
 
 sync, err := repo.SyncStatus.Get(ctx)
-if err != nil { return 200, "ok, sync_status unavailable" } // first-run case
-
+if errors.Is(err, sql.ErrNoRows) {
+    // First run: no watchdog row yet. Don't fail readiness.
+    return 200, {"status": "ok"}
+}
+if err != nil {
+    return 503, {"status": "degraded", "reason": "sync_status_unreadable"}
+}
 if sync.State != "synced" && sync.ConsecutiveBadChecks >= cfg.UnhealthyStreak {
     return 503, {
         "status": "degraded",
@@ -350,7 +358,11 @@ return 200, {
 }
 ```
 
-The MCP server's `/healthz` gets the same treatment for parity.
+The new migration touches `indexer_sync_status` (a new table the API
+reads in `/readyz`), so `minSchemaVersion` in `internal/api/router/router.go`
+must be bumped from `12` to the new migration number in the same change.
+
+The MCP server's `/readyz` gets the same treatment for parity.
 
 ## Indexer `/readyz` semantics
 
