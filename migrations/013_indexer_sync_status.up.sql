@@ -1,5 +1,5 @@
 -- migrations/013_indexer_sync_status.up.sql
-CREATE TABLE indexer_sync_status (
+CREATE TABLE IF NOT EXISTS indexer_sync_status (
     id                     SMALLINT PRIMARY KEY CHECK (id = 1),
     db_height              BIGINT       NOT NULL,
     znnd_frontier_height   BIGINT       NOT NULL,
