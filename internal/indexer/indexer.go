@@ -47,6 +47,13 @@ type Indexer struct {
 	syncStateInternal *syncState
 
 	watchdogCfg WatchdogConfigForIndexer
+
+	// clientFactory builds a fresh SDK client for a given URL. nil means
+	// "use rpc_client.NewRpcClient" (production). Integration tests
+	// override this to bypass the SDK's real WebSocket dial, which would
+	// reject httptest URLs and try to connect to a non-existent WS
+	// endpoint.
+	clientFactory func(url string) (*rpc_client.RpcClient, error)
 }
 
 // CronConfig controls the periodic refresh of derived data (voting activity,
@@ -131,7 +138,11 @@ func (i *Indexer) registerCallbacks(c *rpc_client.RpcClient) {
 // ~32s worst case so no in-flight RPC sees a closed client mid-call).
 // Also signals the subscription loop to restart against the new client.
 func (i *Indexer) swapActiveClient(url string) error {
-	newClient, err := rpc_client.NewRpcClient(url)
+	factory := i.clientFactory
+	if factory == nil {
+		factory = rpc_client.NewRpcClient
+	}
+	newClient, err := factory(url)
 	if err != nil {
 		return fmt.Errorf("build client for %q: %w", url, err)
 	}
