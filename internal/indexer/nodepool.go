@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -137,7 +138,7 @@ func rpcCall(ctx context.Context, url, method string, params []any) (any, error)
 	}
 	req.Header.Set("Content-Type", "application/json")
 
-	resp, err := (&http.Client{Timeout: 5 * time.Second}).Do(req)
+	resp, err := rpcHTTPClient.Do(req)
 	if err != nil {
 		return nil, err
 	}
@@ -170,9 +171,9 @@ func navigate(v any, path string) (any, error) {
 		case map[string]any:
 			v = cur[p]
 		case []any:
-			var idx int
-			if _, err := fmt.Sscanf(p, "%d", &idx); err != nil {
-				return nil, fmt.Errorf("non-numeric segment %q for slice", p)
+			idx, err := strconv.Atoi(p)
+			if err != nil {
+				return nil, fmt.Errorf("non-numeric slice segment %q: %w", p, err)
 			}
 			if idx < 0 || idx >= len(cur) {
 				return nil, fmt.Errorf("index %d out of range at %q", idx, p)

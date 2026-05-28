@@ -6,9 +6,13 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
-	"strings"
 	"time"
 )
+
+// rpcHTTPClient is reused across all watchdog HTTP RPC calls
+// (fetchSyncInfo + nodepool's rpcCall). One client = one Transport =
+// pooled TCP connections across probes.
+var rpcHTTPClient = &http.Client{Timeout: 5 * time.Second}
 
 // SyncInfo mirrors the result of stats.syncInfo as observed on the live
 // znnd: {"state":N,"currentHeight":N,"targetHeight":N}. state == 2 means
@@ -27,21 +31,18 @@ func (s SyncInfo) IsSynced() bool { return s.State == 2 }
 // http:// and https:// — znnd serves JSON-RPC over HTTP on the same
 // host/port pair.
 func fetchSyncInfo(ctx context.Context, url string) (SyncInfo, error) {
-	httpURL := strings.Replace(strings.Replace(url, "wss://", "https://", 1), "ws://", "http://", 1)
-
 	body, _ := json.Marshal(map[string]any{
 		"jsonrpc": "2.0", "id": 1,
 		"method": "stats.syncInfo", "params": []any{},
 	})
 
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, httpURL, bytes.NewReader(body))
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, rpcURL(url), bytes.NewReader(body))
 	if err != nil {
 		return SyncInfo{}, fmt.Errorf("syncInfo build request: %w", err)
 	}
 	req.Header.Set("Content-Type", "application/json")
 
-	client := &http.Client{Timeout: 5 * time.Second}
-	resp, err := client.Do(req)
+	resp, err := rpcHTTPClient.Do(req)
 	if err != nil {
 		return SyncInfo{}, fmt.Errorf("syncInfo POST: %w", err)
 	}
