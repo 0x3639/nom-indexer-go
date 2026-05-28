@@ -111,3 +111,128 @@ func TestSyncClassString(t *testing.T) {
 		}
 	}
 }
+
+func TestReactSyncedResetsUnhealthyIncrementsHealthy(t *testing.T) {
+	state := newSyncState(2)
+	state.streaks[0] = nodeStreaks{unhealthy: 5}
+	cfg := watchdogReactConfig{UnhealthyStreak: 2, FailbackStreak: 5}
+
+	intent := react(state, 0, classSynced, cfg)
+	if intent.signalRestart || intent.failoverIdx != -1 || intent.failbackIdx != -1 {
+		t.Fatalf("synced should produce no intent on primary: %+v", intent)
+	}
+	if state.streaks[0].unhealthy != 0 {
+		t.Fatalf("expected unhealthy reset, got %d", state.streaks[0].unhealthy)
+	}
+	if state.streaks[0].healthy != 1 {
+		t.Fatalf("expected healthy=1, got %d", state.streaks[0].healthy)
+	}
+}
+
+func TestReactIndexerLaggingSignalsRestartOnlyNoStreakTouch(t *testing.T) {
+	state := newSyncState(2)
+	state.streaks[0] = nodeStreaks{healthy: 3, unhealthy: 0}
+	cfg := watchdogReactConfig{UnhealthyStreak: 2, FailbackStreak: 5}
+
+	intent := react(state, 0, classIndexerLagging, cfg)
+	if !intent.signalRestart {
+		t.Fatal("expected restart signal")
+	}
+	if intent.failoverIdx != -1 {
+		t.Fatalf("expected no failover, got idx %d", intent.failoverIdx)
+	}
+	if state.streaks[0].healthy != 3 || state.streaks[0].unhealthy != 0 {
+		t.Fatalf("indexer_lagging should not touch streaks, got %+v", state.streaks[0])
+	}
+}
+
+func TestReactNodeLaggingFailoverAfterStreak(t *testing.T) {
+	state := newSyncState(2)
+	cfg := watchdogReactConfig{UnhealthyStreak: 2, FailbackStreak: 5}
+
+	// first bad tick → streak=1, no failover yet
+	intent := react(state, 0, classNodeLagging, cfg)
+	if intent.failoverIdx != -1 {
+		t.Fatalf("expected no failover at streak=1, got %d", intent.failoverIdx)
+	}
+	if state.streaks[0].unhealthy != 1 {
+		t.Fatalf("expected streak=1, got %d", state.streaks[0].unhealthy)
+	}
+
+	// second bad tick → streak=2, failover signalled
+	intent = react(state, 0, classNodeLagging, cfg)
+	if intent.failoverIdx == -1 {
+		t.Fatal("expected failover at streak=2")
+	}
+	if state.streaks[0].unhealthy != 2 {
+		t.Fatalf("expected streak=2, got %d", state.streaks[0].unhealthy)
+	}
+}
+
+func TestReactStalledTriggersRestartEveryTickAndStreaks(t *testing.T) {
+	state := newSyncState(2)
+	cfg := watchdogReactConfig{UnhealthyStreak: 3, FailbackStreak: 5}
+
+	intent := react(state, 0, classStalled, cfg)
+	if !intent.signalRestart {
+		t.Fatal("expected restart signal on first stalled tick")
+	}
+	if state.streaks[0].unhealthy != 1 {
+		t.Fatalf("expected unhealthy=1, got %d", state.streaks[0].unhealthy)
+	}
+	if intent.failoverIdx != -1 {
+		t.Fatalf("expected no failover at streak=1, got %d", intent.failoverIdx)
+	}
+
+	// Two more stalled ticks → restart still signalled each time, failover at streak=3
+	react(state, 0, classStalled, cfg)
+	intent = react(state, 0, classStalled, cfg)
+	if !intent.signalRestart {
+		t.Fatal("expected restart still signalled on third stalled tick")
+	}
+	if intent.failoverIdx == -1 {
+		t.Fatal("expected failover at streak=3")
+	}
+}
+
+func TestReactProbeFailedNoRestartFailoverAfterStreak(t *testing.T) {
+	state := newSyncState(2)
+	cfg := watchdogReactConfig{UnhealthyStreak: 2, FailbackStreak: 5}
+
+	intent := react(state, 0, classProbeFailed, cfg)
+	if intent.signalRestart {
+		t.Fatal("probe_failed should not signal restart (we cannot trust the probe)")
+	}
+	if intent.failoverIdx != -1 {
+		t.Fatalf("expected no failover at streak=1, got %d", intent.failoverIdx)
+	}
+
+	intent = react(state, 0, classProbeFailed, cfg)
+	if intent.failoverIdx == -1 {
+		t.Fatal("expected failover at streak=2")
+	}
+}
+
+func TestReactSyncedFailbackIdxAlwaysMinusOne(t *testing.T) {
+	// react() doesn't decide failback; that's selectFailback in Task 11.
+	state := newSyncState(3)
+	state.activeIdx = 2
+	cfg := watchdogReactConfig{UnhealthyStreak: 2, FailbackStreak: 3}
+
+	intent := react(state, 2, classSynced, cfg)
+	if intent.failbackIdx != -1 {
+		t.Fatalf("react should never set failbackIdx, got %d", intent.failbackIdx)
+	}
+}
+
+func TestNewSyncStateInitsStreaksForEachNode(t *testing.T) {
+	s := newSyncState(3)
+	if len(s.streaks) != 3 {
+		t.Fatalf("expected 3 streak entries, got %d", len(s.streaks))
+	}
+	for i := 0; i < 3; i++ {
+		if st, ok := s.streaks[i]; !ok || st != (nodeStreaks{}) {
+			t.Errorf("node %d streak should be zero-valued, got %+v ok=%v", i, st, ok)
+		}
+	}
+}

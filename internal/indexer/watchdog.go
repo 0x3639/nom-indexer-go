@@ -60,3 +60,92 @@ func classify(
 	}
 	return classSynced
 }
+
+// nodeStreaks tracks consecutive healthy/unhealthy ticks for one node.
+type nodeStreaks struct {
+	healthy   int
+	unhealthy int
+}
+
+// syncState is the in-memory state owned by the watchdog goroutine. It
+// is mutated only by the goroutine; reads from elsewhere (e.g. the
+// indexer's /readyz handler) must use a sync.RWMutex-protected snapshot.
+type syncState struct {
+	activeIdx       int
+	lastProgressAt  time.Time
+	streaks         map[int]nodeStreaks
+	chainIdentifier string // genesis hash, populated on first successful probe
+	failedOverAt    *int64 // unix seconds; nil when on primary
+}
+
+// newSyncState builds a fresh state with empty streaks for each node.
+func newSyncState(numNodes int) *syncState {
+	s := &syncState{streaks: make(map[int]nodeStreaks, numNodes)}
+	for i := 0; i < numNodes; i++ {
+		s.streaks[i] = nodeStreaks{}
+	}
+	return s
+}
+
+// watchdogReactConfig is the subset of WatchdogConfig that react() reads.
+type watchdogReactConfig struct {
+	UnhealthyStreak int
+	FailbackStreak  int
+}
+
+// reactIntent is the side-effect plan returned by react(). The watchdog
+// goroutine reads it and issues the actual restart/swap calls. Keeping
+// react() pure means we can table-test streak logic without spinning
+// up goroutines or fake clients.
+type reactIntent struct {
+	signalRestart bool
+	failoverIdx   int // -1 if no failover
+	failbackIdx   int // -1 if no failback (failback selection itself happens in selectFailback)
+}
+
+// react updates s.streaks[activeIdx] for the given classification and
+// returns the intent the watchdog should act on this tick.
+//
+// failbackIdx is always -1 here — failback requires probing other
+// nodes (see selectFailback in Task 11) and so cannot be decided from
+// classification alone. The watchdog goroutine layers that decision on
+// top of react()'s output when c == classSynced and activeIdx > 0.
+func react(s *syncState, activeIdx int, c syncClass, cfg watchdogReactConfig) reactIntent {
+	intent := reactIntent{failoverIdx: -1, failbackIdx: -1}
+	st := s.streaks[activeIdx]
+
+	switch c {
+	case classSynced:
+		st.unhealthy = 0
+		st.healthy++
+		s.streaks[activeIdx] = st
+
+	case classIndexerLagging:
+		intent.signalRestart = true
+		// do not touch streaks — indexer is the laggard, not the node
+
+	case classNodeLagging:
+		st.unhealthy++
+		st.healthy = 0
+		s.streaks[activeIdx] = st
+		if st.unhealthy >= cfg.UnhealthyStreak {
+			intent.failoverIdx = activeIdx
+		}
+
+	case classStalled:
+		intent.signalRestart = true
+		st.unhealthy++
+		s.streaks[activeIdx] = st
+		if st.unhealthy >= cfg.UnhealthyStreak {
+			intent.failoverIdx = activeIdx
+		}
+
+	case classProbeFailed:
+		st.unhealthy++
+		s.streaks[activeIdx] = st
+		if st.unhealthy >= cfg.UnhealthyStreak {
+			intent.failoverIdx = activeIdx
+		}
+	}
+	return intent
+}
