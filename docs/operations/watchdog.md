@@ -108,3 +108,26 @@ docker start nom-indexer-znnd
 docker exec nom-indexer-postgres psql -U postgres -d nom_indexer \
   -c 'SELECT state, active_node_label, failed_over_at FROM indexer_sync_status;'
 ```
+
+## Known issues
+
+### False-positive failover during initial sync or backfill
+
+`lastProgressAt` is seeded to the indexer's start time, but the watchdog
+loop launches before initial `sync()` returns. If catch-up takes longer
+than `stall_threshold` (default 60s) — for example a fresh deployment
+with a large gap, or `BACKFILL_ON_STARTUP=true` — the watchdog will
+classify `stalled` and after `unhealthy_streak` ticks fail over to the
+next configured node even though the indexer is healthy.
+
+Mitigations:
+- For deployments that expect long initial catch-ups, raise
+  `indexer.watchdog.stall_threshold` to comfortably exceed the worst-case
+  initial-sync duration.
+- Keep `indexer.watchdog.enabled: false` during the first run; flip to
+  `true` after the indexer has caught up.
+- Configure the fallback node identical to the primary so a false
+  failover doesn't change runtime behaviour.
+
+This is tracked as a follow-up — see issue tracker for the planned fix.
+
