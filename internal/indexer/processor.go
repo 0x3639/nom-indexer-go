@@ -242,7 +242,7 @@ func queueAccountBlockNotify(batch *pgx.Batch, ab *models.AccountBlock, txData *
 // updateBalances updates balances for all addresses in a momentum
 func (i *Indexer) updateBalances(ctx context.Context, batch *pgx.Batch, headers []*types.AccountHeader, momentumTimestamp int64) error {
 	for _, header := range headers {
-		accountInfo, err := i.client.LedgerApi.GetAccountInfoByAddress(header.Address)
+		accountInfo, err := i.client().LedgerApi.GetAccountInfoByAddress(header.Address)
 		if err != nil {
 			i.logger.Warn("failed to get account info",
 				zap.String("address", header.Address.String()),
@@ -278,7 +278,7 @@ func (i *Indexer) updateBalances(ctx context.Context, batch *pgx.Batch, headers 
 // processAccountBlocks processes all account blocks in a momentum
 func (i *Indexer) processAccountBlocks(ctx context.Context, batch *pgx.Batch, m *api.Momentum) error {
 	for _, header := range m.Content {
-		block, err := i.client.LedgerApi.GetAccountBlockByHash(header.Hash)
+		block, err := i.client().LedgerApi.GetAccountBlockByHash(header.Hash)
 		if err != nil {
 			i.logger.Warn("failed to get account block",
 				zap.String("hash", header.Hash.String()),

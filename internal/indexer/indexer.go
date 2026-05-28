@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/0x3639/znn-sdk-go/embedded"
@@ -19,11 +20,11 @@ import (
 
 // Indexer handles the indexing of blockchain data
 type Indexer struct {
-	client *rpc_client.RpcClient
-	pool   *pgxpool.Pool
-	repos  *repository.Repositories
-	logger *zap.Logger
-	cron   CronConfig
+	activeClient atomic.Pointer[rpc_client.RpcClient]
+	pool         *pgxpool.Pool
+	repos        *repository.Repositories
+	logger       *zap.Logger
+	cron         CronConfig
 
 	// Cached data from node
 	pillars  []*models.Pillar
@@ -52,8 +53,7 @@ func NewIndexer(client *rpc_client.RpcClient, pool *pgxpool.Pool, logger *zap.Lo
 // NewIndexerWithCron creates an indexer with explicit cron intervals.
 // Zero durations fall back to defaults inside the cron loop.
 func NewIndexerWithCron(client *rpc_client.RpcClient, pool *pgxpool.Pool, logger *zap.Logger, cron CronConfig) *Indexer {
-	return &Indexer{
-		client:            client,
+	i := &Indexer{
 		pool:              pool,
 		repos:             repository.NewRepositories(pool),
 		logger:            logger,
@@ -61,6 +61,15 @@ func NewIndexerWithCron(client *rpc_client.RpcClient, pool *pgxpool.Pool, logger
 		pillarNameToOwner: make(map[string]string),
 		restartSubCh:      make(chan struct{}, 1),
 	}
+	i.activeClient.Store(client)
+	return i
+}
+
+// client returns the currently-active SDK client. All RPC call sites
+// must read through this accessor — the underlying value changes when
+// the watchdog fails over to a different node.
+func (i *Indexer) client() *rpc_client.RpcClient {
+	return i.activeClient.Load()
 }
 
 // signalSubscriptionRestart signals that a subscription restart is needed
@@ -81,12 +90,12 @@ func (i *Indexer) Run(ctx context.Context) error {
 
 	// Register SDK callbacks for connection events
 	// The SDK handles reconnection automatically; we just need to restart subscriptions
-	i.client.AddOnConnectionEstablishedCallback(func() {
+	i.client().AddOnConnectionEstablishedCallback(func() {
 		i.logger.Info("SDK connection established, signaling subscription restart")
 		i.signalSubscriptionRestart()
 	})
 
-	i.client.AddOnConnectionLostCallback(func(err error) {
+	i.client().AddOnConnectionLostCallback(func(err error) {
 		i.logger.Warn("SDK connection lost, will auto-reconnect", zap.Error(err))
 	})
 
@@ -154,7 +163,7 @@ func (i *Indexer) sync(ctx context.Context) error {
 
 		var frontierHeight uint64
 		if err := withRetry(ctx, i.logger, "GetFrontierMomentum", func() error {
-			m, err := i.client.LedgerApi.GetFrontierMomentum()
+			m, err := i.client().LedgerApi.GetFrontierMomentum()
 			if err != nil {
 				return err
 			}
@@ -181,7 +190,7 @@ func (i *Indexer) sync(ctx context.Context) error {
 		batchSize := uint64(100)
 		var momentums *api.MomentumList
 		if err := withRetry(ctx, i.logger, "GetMomentumsByHeight", func() error {
-			m, err := i.client.LedgerApi.GetMomentumsByHeight(startHeight, batchSize)
+			m, err := i.client().LedgerApi.GetMomentumsByHeight(startHeight, batchSize)
 			if err != nil {
 				return err
 			}
@@ -267,7 +276,7 @@ func (i *Indexer) runSubscriptionSession(ctx context.Context) error {
 	}
 
 	// Create subscription to momentums
-	sub, momentumCh, err := i.client.SubscriberApi.ToMomentums(ctx)
+	sub, momentumCh, err := i.client().SubscriberApi.ToMomentums(ctx)
 	if err != nil {
 		return fmt.Errorf("failed to subscribe to momentums: %w", err)
 	}
@@ -295,7 +304,7 @@ func (i *Indexer) runSubscriptionSession(ctx context.Context) error {
 					zap.Uint64("height", m.Height))
 
 				// Fetch full momentum details
-				fullMomentum, err := i.client.LedgerApi.GetMomentumsByHeight(m.Height, 1)
+				fullMomentum, err := i.client().LedgerApi.GetMomentumsByHeight(m.Height, 1)
 				if err != nil || fullMomentum == nil || len(fullMomentum.List) == 0 {
 					i.logger.Error("failed to get momentum details",
 						zap.Uint64("height", m.Height),
@@ -319,7 +328,7 @@ func (i *Indexer) updateCachedData(ctx context.Context) error {
 
 	// Update pillars
 	i.logger.Info("updateCachedData: fetching pillars")
-	pillarList, err := i.client.PillarApi.GetAll(0, 200)
+	pillarList, err := i.client().PillarApi.GetAll(0, 200)
 	if err != nil {
 		return fmt.Errorf("failed to get pillars: %w", err)
 	}
@@ -370,7 +379,7 @@ func (i *Indexer) updateCachedData(ctx context.Context) error {
 	sentinelPageSize := uint32(10)
 
 	for {
-		sentinelList, err := i.client.SentinelApi.GetAllActive(sentinelPageIndex, sentinelPageSize)
+		sentinelList, err := i.client().SentinelApi.GetAllActive(sentinelPageIndex, sentinelPageSize)
 		if err != nil {
 			i.logger.Warn("failed to get sentinels", zap.Error(err))
 			break
@@ -410,7 +419,7 @@ func (i *Indexer) updateCachedData(ctx context.Context) error {
 	projectPageSize := uint32(10)
 
 	for {
-		projectList, err := i.client.AcceleratorApi.GetAll(projectPageIndex, projectPageSize)
+		projectList, err := i.client().AcceleratorApi.GetAll(projectPageIndex, projectPageSize)
 		if err != nil {
 			i.logger.Warn("failed to get projects", zap.Error(err))
 			break
@@ -592,7 +601,7 @@ func (i *Indexer) syncBridgeData(ctx context.Context) {
 func (i *Indexer) updateBridgeConfig(ctx context.Context) error {
 	now := time.Now().Unix()
 
-	if info, err := i.client.BridgeApi.GetBridgeInfo(); err != nil {
+	if info, err := i.client().BridgeApi.GetBridgeInfo(); err != nil {
 		i.logger.Warn("bridge config: GetBridgeInfo failed", zap.Error(err))
 	} else if info != nil {
 		if err := i.repos.BridgeConfig.UpsertAdmin(ctx, &models.BridgeAdmin{
@@ -611,7 +620,7 @@ func (i *Indexer) updateBridgeConfig(ctx context.Context) error {
 		}
 	}
 
-	if sec, err := i.client.BridgeApi.GetSecurityInfo(); err != nil {
+	if sec, err := i.client().BridgeApi.GetSecurityInfo(); err != nil {
 		i.logger.Warn("bridge config: GetSecurityInfo failed", zap.Error(err))
 	} else if sec != nil {
 		if err := i.repos.BridgeConfig.UpsertSecurityInfo(ctx, &models.BridgeSecurityInfo{
@@ -656,7 +665,7 @@ func (i *Indexer) updateBridgeConfig(ctx context.Context) error {
 		}
 	}
 
-	if orch, err := i.client.BridgeApi.GetOrchestratorInfo(); err != nil {
+	if orch, err := i.client().BridgeApi.GetOrchestratorInfo(); err != nil {
 		i.logger.Warn("bridge config: GetOrchestratorInfo failed", zap.Error(err))
 	} else if orch != nil {
 		if err := i.repos.BridgeConfig.UpsertOrchestratorInfo(ctx, &models.BridgeOrchestratorInfo{
@@ -675,7 +684,7 @@ func (i *Indexer) updateBridgeConfig(ctx context.Context) error {
 	pageSize := uint32(50)
 	pageIndex := uint32(0)
 	for {
-		list, err := i.client.BridgeApi.GetAllNetworks(pageIndex, pageSize)
+		list, err := i.client().BridgeApi.GetAllNetworks(pageIndex, pageSize)
 		if err != nil {
 			i.logger.Warn("bridge config: GetAllNetworks failed",
 				zap.Uint32("page", pageIndex), zap.Error(err))
@@ -749,7 +758,7 @@ func (i *Indexer) updateBridgeWrapRequests(ctx context.Context) error {
 	i.logger.Debug("wrap sync starting", zap.Int64("stopHeight", stopHeight))
 
 	for {
-		wrapList, err := i.client.BridgeApi.GetAllWrapTokenRequests(pageIndex, pageSize)
+		wrapList, err := i.client().BridgeApi.GetAllWrapTokenRequests(pageIndex, pageSize)
 		if err != nil {
 			return err
 		}
@@ -824,7 +833,7 @@ func (i *Indexer) updateBridgeUnwrapRequests(ctx context.Context) error {
 	i.logger.Debug("unwrap sync starting", zap.Int64("stopHeight", stopHeight))
 
 	for {
-		unwrapList, err := i.client.BridgeApi.GetAllUnwrapTokenRequests(pageIndex, pageSize)
+		unwrapList, err := i.client().BridgeApi.GetAllUnwrapTokenRequests(pageIndex, pageSize)
 		if err != nil {
 			return err
 		}
@@ -1087,7 +1096,7 @@ func (i *Indexer) Backfill(ctx context.Context) error {
 			zap.Int("total", len(missingHeights)))
 
 		// Fetch momentum from node
-		momentums, err := i.client.LedgerApi.GetMomentumsByHeight(height, 1)
+		momentums, err := i.client().LedgerApi.GetMomentumsByHeight(height, 1)
 		if err != nil {
 			i.logger.Error("backfill: failed to fetch momentum",
 				zap.Uint64("height", height),
