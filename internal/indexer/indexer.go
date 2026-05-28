@@ -179,6 +179,7 @@ func (i *Indexer) HealthSnapshot() HealthSnapshot {
 		Ready:     st.unhealthy < threshold,
 		State:     i.syncStateInternal.lastClass, // populated by runWatchdogTick
 		NodeLabel: i.nodePool.Entry(activeIdx).Label,
+		Drift:     i.syncStateInternal.lastDrift,
 	}
 }
 

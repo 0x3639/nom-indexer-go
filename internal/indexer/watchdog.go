@@ -99,6 +99,7 @@ type syncState struct {
 	failedOverAt    *int64 // unix seconds; nil when on primary
 
 	lastClass string // last classification string (e.g. "synced"); populated by runWatchdogTick
+	lastDrift int64  // frontier - dbHeight, signed (negative possible)
 }
 
 // newSyncState builds a fresh state with empty streaks for each node.
@@ -279,6 +280,7 @@ func (i *Indexer) runWatchdogTick(ctx context.Context, cCfg classifyConfig, rCfg
 		chainID = probe.GenesisHash
 	}
 	i.syncStateInternal.lastClass = class.String()
+	i.syncStateInternal.lastDrift = int64(probe.Frontier) - dbHeight
 	i.syncStateMu.Unlock()
 
 	// Failover when react() signals intent. Target chosen by
