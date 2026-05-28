@@ -4,9 +4,11 @@ package repository
 
 import (
 	"context"
+	"errors"
 	"testing"
 
 	"github.com/0x3639/nom-indexer-go/internal/models"
+	"github.com/jackc/pgx/v5"
 )
 
 func TestSyncStatusUpsertGet(t *testing.T) {
@@ -32,8 +34,15 @@ func TestSyncStatusUpsertGet(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Get: %v", err)
 	}
-	if got.DBHeight != want.DBHeight || got.State != want.State {
-		t.Fatalf("round-trip mismatch:\n got %#v\n want %#v", got, want)
+	if got.DBHeight != want.DBHeight || got.State != want.State ||
+		got.ZnndFrontierHeight != want.ZnndFrontierHeight ||
+		got.ZnndTargetHeight != want.ZnndTargetHeight ||
+		got.ActiveNodeURL != want.ActiveNodeURL ||
+		got.ActiveNodeLabel != want.ActiveNodeLabel ||
+		got.ChainIdentifier != want.ChainIdentifier ||
+		got.LastProgressAt != want.LastProgressAt ||
+		got.CheckedAt != want.CheckedAt {
+		t.Fatalf("field mismatch:\n got %+v\n want %+v", got, want)
 	}
 	if got.FailedOverAt != nil {
 		t.Fatalf("expected nil FailedOverAt, got %d", *got.FailedOverAt)
@@ -75,5 +84,15 @@ func TestSyncStatusSingletonConstraint(t *testing.T) {
          VALUES (2, 0, 0, 0, 0, 0, 'synced', '', '', '', 0, 0)`)
 	if err == nil {
 		t.Fatal("expected CHECK (id = 1) to reject id=2 insert")
+	}
+}
+
+func TestSyncStatusGetEmptyTable(t *testing.T) {
+	ctx := context.Background()
+	pool := newTestDB(t)
+	repo := NewSyncStatusRepository(pool)
+	_, err := repo.Get(ctx)
+	if !errors.Is(err, pgx.ErrNoRows) {
+		t.Fatalf("expected pgx.ErrNoRows, got %v", err)
 	}
 }
