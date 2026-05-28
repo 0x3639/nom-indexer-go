@@ -3,7 +3,9 @@ package config
 import (
 	"errors"
 	"fmt"
+	"net/url"
 	"os"
+	"strconv"
 	"strings"
 	"time"
 
@@ -36,9 +38,17 @@ type IndexerConfig struct {
 // NodeEntry is one upstream Zenon node. URL accepts ws://, wss://,
 // http://, or https://; the subscription requires WS, but probes can
 // use either. Label appears in logs and the indexer_sync_status row.
+//
+// ProbeURL is optional and overrides the JSON-RPC endpoint used by the
+// watchdog's HTTP probes. When unset, the probe endpoint defaults to
+// rewriting URL's scheme (ws→http, wss→https) with the port preserved.
+// Set ProbeURL explicitly when the node splits its WS and HTTP-RPC
+// listeners across different ports — the canonical Zenon convention is
+// WS on N, HTTP-RPC on N-1 (e.g. WS=35998, HTTP=35997).
 type NodeEntry struct {
-	URL   string `mapstructure:"url"`
-	Label string `mapstructure:"label"`
+	URL      string `mapstructure:"url"`
+	Label    string `mapstructure:"label"`
+	ProbeURL string `mapstructure:"probe_url"` // optional; HTTP JSON-RPC endpoint for watchdog probes
 }
 
 // WatchdogConfig controls the sync watchdog goroutine. See
@@ -296,10 +306,14 @@ func Load() (*Config, error) {
 	// If indexer.nodes wasn't set by YAML, build it from the legacy
 	// NODE_URL_WS (primary) + NODE_URL_FALLBACKS (comma-separated).
 	if len(cfg.Indexer.Nodes) == 0 && cfg.Node.WebSocketURL != "" {
-		cfg.Indexer.Nodes = append(cfg.Indexer.Nodes, NodeEntry{
+		primary := NodeEntry{
 			URL:   cfg.Node.WebSocketURL,
 			Label: "primary",
-		})
+		}
+		if derived := deriveProbeURL(cfg.Node.WebSocketURL); derived != "" {
+			primary.ProbeURL = derived
+		}
+		cfg.Indexer.Nodes = append(cfg.Indexer.Nodes, primary)
 		if fb := os.Getenv("NODE_URL_FALLBACKS"); fb != "" {
 			seq := 1
 			for _, u := range strings.Split(fb, ",") {
@@ -307,10 +321,14 @@ func Load() (*Config, error) {
 				if u == "" {
 					continue
 				}
-				cfg.Indexer.Nodes = append(cfg.Indexer.Nodes, NodeEntry{
+				entry := NodeEntry{
 					URL:   u,
 					Label: fmt.Sprintf("fallback-%d", seq),
-				})
+				}
+				if derived := deriveProbeURL(u); derived != "" {
+					entry.ProbeURL = derived
+				}
+				cfg.Indexer.Nodes = append(cfg.Indexer.Nodes, entry)
 				seq++
 			}
 		}
@@ -376,4 +394,29 @@ func (c *Config) Validate() error {
 	}
 
 	return nil
+}
+
+// deriveProbeURL applies the canonical Zenon port convention (WS=N,
+// HTTP-RPC=N-1) to fill in the JSON-RPC probe URL when the operator
+// didn't set one explicitly. Only fires on the well-known WS port
+// 35998 so the heuristic stays predictable; other ports return "" and
+// callers fall back to the scheme-only rewrite that preserves the port.
+func deriveProbeURL(wsURL string) string {
+	u, err := url.Parse(wsURL)
+	if err != nil || (u.Scheme != "ws" && u.Scheme != "wss") {
+		return ""
+	}
+	port := u.Port()
+	if port == "" {
+		return "" // no explicit port → don't try
+	}
+	portNum, err := strconv.Atoi(port)
+	if err != nil || portNum != 35998 {
+		return ""
+	}
+	scheme := "http"
+	if u.Scheme == "wss" {
+		scheme = "https"
+	}
+	return fmt.Sprintf("%s://%s:%d%s", scheme, u.Hostname(), portNum-1, u.Path)
 }

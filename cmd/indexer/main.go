@@ -192,7 +192,7 @@ func main() {
 func toIndexerNodes(in []config.NodeEntry) []indexer.NodeEntry {
 	out := make([]indexer.NodeEntry, len(in))
 	for i, n := range in {
-		out[i] = indexer.NodeEntry{URL: n.URL, Label: n.Label}
+		out[i] = indexer.NodeEntry{URL: n.URL, Label: n.Label, ProbeURL: n.ProbeURL}
 	}
 	return out
 }

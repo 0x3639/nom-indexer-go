@@ -104,6 +104,24 @@ func TestNodePoolGenesisHashCached(t *testing.T) {
 	}
 }
 
+func TestProbeUsesProbeURLWhenSet(t *testing.T) {
+	httpSrv := fakeJSONRPC(t, map[string]any{
+		"stats.syncInfo":             map[string]any{"state": 2, "currentHeight": 100, "targetHeight": 100},
+		"ledger.getFrontierMomentum": map[string]any{"height": 100},
+		"ledger.getMomentumsByHeight": map[string]any{
+			"count": 1, "list": []any{map[string]any{"hash": "g"}},
+		},
+	})
+
+	pool := NewNodePool([]NodeEntry{
+		{URL: "ws://unreachable:35998", Label: "x", ProbeURL: httpSrv.URL},
+	}, zap.NewNop())
+
+	if _, err := pool.Probe(context.Background(), 0); err != nil {
+		t.Fatalf("Probe: %v", err)
+	}
+}
+
 func TestNodePoolProbeOutOfRange(t *testing.T) {
 	pool := NewNodePool([]NodeEntry{{URL: "http://x", Label: "x"}}, zap.NewNop())
 	if _, err := pool.Probe(context.Background(), 1); err == nil {

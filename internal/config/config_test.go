@@ -217,6 +217,36 @@ func TestNodesFallbacksSkipEmptySegments(t *testing.T) {
 	}
 }
 
+func TestNodesFallbacksDeriveProbeURL(t *testing.T) {
+	t.Setenv("DATABASE_PASSWORD", "x")
+	t.Setenv("API_JWT_SECRET", "y")
+	t.Setenv("NODE_URL_WS", "ws://znnd:35998")
+	t.Setenv("NODE_URL_FALLBACKS", "wss://my.hc1node.com:35998")
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if got := cfg.Indexer.Nodes[0].ProbeURL; got != "http://znnd:35997" {
+		t.Fatalf("primary ProbeURL = %q", got)
+	}
+	if got := cfg.Indexer.Nodes[1].ProbeURL; got != "https://my.hc1node.com:35997" {
+		t.Fatalf("fallback ProbeURL = %q", got)
+	}
+}
+
+func TestNodesFallbacksDoNotDeriveWhenPortMissing(t *testing.T) {
+	t.Setenv("DATABASE_PASSWORD", "x")
+	t.Setenv("API_JWT_SECRET", "y")
+	t.Setenv("NODE_URL_WS", "wss://test.hc1node.com")
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if got := cfg.Indexer.Nodes[0].ProbeURL; got != "" {
+		t.Fatalf("expected no ProbeURL derivation when port absent, got %q", got)
+	}
+}
+
 func TestWatchdogConfigDefaults(t *testing.T) {
 	t.Setenv("DATABASE_PASSWORD", "x")
 	t.Setenv("API_JWT_SECRET", "y")

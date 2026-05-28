@@ -18,13 +18,34 @@ import (
 // URL accepts ws://, wss://, http://, or https://. Label appears in
 // logs and the indexer_sync_status row.
 //
+// ProbeURL is optional; when set, it is used as the JSON-RPC endpoint
+// for the watchdog's HTTP probes (stats.syncInfo, ledger.*). When
+// empty, the probe URL is derived from URL by scheme rewrite (ws→http,
+// wss→https) with the port preserved. The canonical Zenon convention
+// splits ports: WS on N, HTTP-RPC on N-1; operators running such nodes
+// must set ProbeURL explicitly (or rely on the env-var defaulting in
+// internal/config which fills it in for the WS=35998 → HTTP=35997 case).
+//
 // This is distinct from internal/config.NodeEntry (same shape, two
 // packages). cmd/indexer adapts between the two with toIndexerNodes()
 // in a later task; we don't import internal/config here because the
 // watchdog should be testable without the full config stack.
 type NodeEntry struct {
-	URL   string
-	Label string
+	URL      string
+	Label    string
+	ProbeURL string // optional; HTTP JSON-RPC endpoint for watchdog probes
+}
+
+// probeEndpoint returns the URL to use for JSON-RPC probes. If ProbeURL
+// is set on the entry, it wins. Otherwise we derive from URL: ws:// →
+// http:// and wss:// → https://, with the port preserved. This works for
+// nodes that share a port between WS and HTTP-RPC; nodes that split them
+// (the canonical Zenon convention: WS=N, HTTP=N-1) must set ProbeURL.
+func (e NodeEntry) probeEndpoint() string {
+	if e.ProbeURL != "" {
+		return e.ProbeURL
+	}
+	return rpcURL(e.URL)
 }
 
 // NodePool owns the ordered list of node entries and a cache of per-URL
@@ -69,20 +90,20 @@ func (p *NodePool) Probe(ctx context.Context, idx int) (ProbeResult, error) {
 	if idx < 0 || idx >= len(p.entries) {
 		return ProbeResult{}, fmt.Errorf("probe: idx %d out of range (len=%d)", idx, len(p.entries))
 	}
-	url := p.entries[idx].URL
+	probeURL := p.entries[idx].probeEndpoint()
 	start := time.Now()
 
-	info, err := fetchSyncInfo(ctx, url)
+	info, err := fetchSyncInfo(ctx, probeURL)
 	if err != nil {
 		return ProbeResult{}, fmt.Errorf("syncInfo: %w", err)
 	}
 
-	frontier, err := callForUint64(ctx, url, "ledger.getFrontierMomentum", []any{}, "height")
+	frontier, err := callForUint64(ctx, probeURL, "ledger.getFrontierMomentum", []any{}, "height")
 	if err != nil {
 		return ProbeResult{}, fmt.Errorf("frontier: %w", err)
 	}
 
-	genesis, err := p.genesisFor(ctx, idx, url)
+	genesis, err := p.genesisFor(ctx, idx, probeURL)
 	if err != nil {
 		return ProbeResult{}, fmt.Errorf("genesis: %w", err)
 	}
