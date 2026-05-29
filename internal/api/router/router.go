@@ -8,12 +8,14 @@ package router
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net/http"
 	"strings"
 	"time"
 
 	"github.com/go-chi/chi/v5"
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"go.uber.org/zap"
 
@@ -23,6 +25,7 @@ import (
 	apimw "github.com/0x3639/nom-indexer-go/internal/api/middleware"
 	"github.com/0x3639/nom-indexer-go/internal/api/stream"
 	"github.com/0x3639/nom-indexer-go/internal/auth"
+	"github.com/0x3639/nom-indexer-go/internal/models"
 	"github.com/0x3639/nom-indexer-go/internal/repository"
 )
 
@@ -69,7 +72,16 @@ func New(d Deps) http.Handler {
 
 	// Unauthenticated routes.
 	r.Get("/healthz", healthz)
-	r.Get("/readyz", readyz(d.Pool))
+	// Wire the sync-status getter as a clean nil interface when the
+	// repository isn't constructed (test path uses a zero Repositories
+	// struct). Passing a typed-nil *SyncStatusRepository into the
+	// interface would yield a non-nil interface wrapping a nil pointer,
+	// causing a panic inside the handler.
+	var syncForReady syncStatusGetter
+	if d.Repos != nil && d.Repos.SyncStatus != nil {
+		syncForReady = d.Repos.SyncStatus
+	}
+	r.Get("/readyz", readyz(d.Pool, syncForReady))
 
 	// WebSocket stream — registered at the top level so it bypasses
 	// the /api/v1 chi Auth middleware. The handler does its own auth
@@ -159,8 +171,22 @@ func healthz(w http.ResponseWriter, _ *http.Request) {
 // some /api/v1/* endpoint will 500 on a missing table; bumping too
 // aggressively (i.e. before the migration actually ships in operators'
 // indexer image) means /readyz stays 503 after a deploy. Today the API
-// reads account counter columns added through 012.
-const minSchemaVersion = 12
+// reads account counter columns added through 012 and indexer_sync_status
+// added in 013.
+const minSchemaVersion = 13 // bumped from 12 — adds indexer_sync_status table for /readyz drift checks
+
+// unhealthyStreakForReady is the number of consecutive non-"synced" ticks
+// the watchdog must record before /readyz starts returning 503. Matches
+// the watchdog's own default streak threshold so the two stay in sync
+// without threading config through the router.
+const unhealthyStreakForReady = 2 // matches indexer watchdog default
+
+// syncStatusGetter is the subset of *repository.SyncStatusRepository
+// that readyz needs. Defined as an interface so tests can supply a
+// stub and avoid spinning up a Postgres for the drift-check path.
+type syncStatusGetter interface {
+	Get(ctx context.Context) (*models.SyncStatus, error)
+}
 
 // readyz verifies the database is reachable AND that the indexer schema
 // has been migrated far enough for every endpoint to serve. A bare Ping
@@ -173,9 +199,17 @@ const minSchemaVersion = 12
 // schema_migrations missing → migrations never ran. dirty=true → the
 // last migration failed mid-run and someone must intervene.
 //
+// After the schema check passes, we ALSO read indexer_sync_status (the
+// row written by the indexer's watchdog) and return 503 with code
+// indexer_drift when the watchdog has reported a non-"synced" state for
+// at least unhealthyStreakForReady consecutive ticks. A fresh deployment
+// where the watchdog hasn't written yet (pgx.ErrNoRows) is treated as
+// ready to avoid a startup-only outage. A nil sync getter (test mode)
+// skips the drift check entirely.
+//
 // A nil pool (test mode) is treated as ready since there's nothing to
 // verify.
-func readyz(pool *pgxpool.Pool) http.HandlerFunc {
+func readyz(pool *pgxpool.Pool, sync syncStatusGetter) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		if pool == nil {
 			httpx.WriteJSON(w, http.StatusOK, map[string]string{"status": "ready"})
@@ -217,6 +251,34 @@ func readyz(pool *pgxpool.Pool) http.HandlerFunc {
 					version, minSchemaVersion))
 			return
 		}
+
+		// Drift check against the watchdog's last tick.
+		if sync != nil {
+			ss, err := sync.Get(ctx)
+			if err != nil {
+				if errors.Is(err, pgx.ErrNoRows) {
+					// First run — watchdog hasn't written a row yet.
+					// Don't fail readiness on a fresh deployment.
+					httpx.WriteJSON(w, http.StatusOK, map[string]string{"status": "ready"})
+					return
+				}
+				httpx.WriteProblem(w, http.StatusServiceUnavailable, "sync_status_unreadable", err.Error())
+				return
+			}
+			if ss.State != "synced" && ss.ConsecutiveBadChecks >= unhealthyStreakForReady {
+				httpx.WriteProblem(w, http.StatusServiceUnavailable, "indexer_drift",
+					fmt.Sprintf("state=%s drift=%d node=%s", ss.State, ss.DriftMomentums, ss.ActiveNodeLabel))
+				return
+			}
+			httpx.WriteJSON(w, http.StatusOK, map[string]any{
+				"status": "ready",
+				"node":   ss.ActiveNodeLabel,
+				"drift":  ss.DriftMomentums,
+				"state":  ss.State,
+			})
+			return
+		}
+
 		httpx.WriteJSON(w, http.StatusOK, map[string]string{"status": "ready"})
 	}
 }

@@ -25,6 +25,7 @@ type Repositories struct {
 	BridgeConfig *BridgeConfigRepository
 	Delegation   *DelegationRepository
 	StatHistory  *StatHistoryRepository
+	SyncStatus   *SyncStatusRepository
 }
 
 // NewRepositories creates all repository instances
@@ -49,5 +50,6 @@ func NewRepositories(pool *pgxpool.Pool) *Repositories {
 		BridgeConfig: NewBridgeConfigRepository(pool),
 		Delegation:   NewDelegationRepository(pool),
 		StatHistory:  NewStatHistoryRepository(pool),
+		SyncStatus:   NewSyncStatusRepository(pool),
 	}
 }

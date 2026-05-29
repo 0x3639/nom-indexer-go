@@ -1,7 +1,9 @@
 package router
 
 import (
+	"context"
 	"net/http"
+	"net/http/httptest"
 	"path/filepath"
 	"runtime"
 	"sort"
@@ -10,9 +12,11 @@ import (
 
 	"github.com/getkin/kin-openapi/openapi3"
 	"github.com/go-chi/chi/v5"
+	"github.com/jackc/pgx/v5"
 	"go.uber.org/zap"
 
 	"github.com/0x3639/nom-indexer-go/internal/auth"
+	"github.com/0x3639/nom-indexer-go/internal/models"
 	"github.com/0x3639/nom-indexer-go/internal/repository"
 )
 
@@ -131,4 +135,47 @@ func toSet(in []string) map[string]bool {
 		out[s] = true
 	}
 	return out
+}
+
+// stubSyncStatus is a syncStatusGetter for tests that lets each test pick
+// the response or error to return without touching Postgres.
+type stubSyncStatus struct {
+	row *models.SyncStatus
+	err error
+}
+
+func (s *stubSyncStatus) Get(_ context.Context) (*models.SyncStatus, error) {
+	return s.row, s.err
+}
+
+// TestReadyzNilPoolReturnsOK exercises the short-circuit branch used by
+// the test router: with no pool, readyz responds 200 without consulting
+// the sync getter (so a nil getter is also safe here).
+func TestReadyzNilPoolReturnsOK(t *testing.T) {
+	h := readyz(nil, nil)
+	rr := httptest.NewRecorder()
+	h(rr, httptest.NewRequest(http.MethodGet, "/readyz", nil))
+	if rr.Code != http.StatusOK {
+		t.Fatalf("readyz code = %d, want 200", rr.Code)
+	}
+}
+
+// TestReadyzNilPoolWithStubGetterIgnored confirms the pool == nil branch
+// returns ready even when a stub sync getter is wired in — the pool gate
+// runs first.
+func TestReadyzNilPoolWithStubGetterIgnored(t *testing.T) {
+	h := readyz(nil, &stubSyncStatus{err: pgx.ErrNoRows})
+	rr := httptest.NewRecorder()
+	h(rr, httptest.NewRequest(http.MethodGet, "/readyz", nil))
+	if rr.Code != http.StatusOK {
+		t.Fatalf("readyz code = %d, want 200", rr.Code)
+	}
+}
+
+// TestReadyzDriftBranchCoverage is deferred to the watchdog integration
+// suite (T18). Exercising the drift branch requires a live pool that
+// passes Ping and schema_migrations checks AND a stubbed sync_status
+// row, which is most ergonomic against a real Postgres harness.
+func TestReadyzDriftBranchCoverage(t *testing.T) {
+	t.Skip("requires non-nil pool with successful Ping AND a stub sync status — defer to T18 integration coverage")
 }

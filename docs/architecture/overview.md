@@ -36,7 +36,7 @@ flowchart LR
 
 ## Process layout
 
-One Go process. Inside, the foreground sync/subscription loop and three
+One Go process. Inside, the foreground sync/subscription loop and four
 managed background loops share the same pgx connection pool; the SDK
 also manages its own connection lifecycle:
 
@@ -47,14 +47,15 @@ also manages its own connection lifecycle:
 | 3 | Cached data sync | 5 min | Pillars, sentinels, accelerator projects + phases. |
 | 4 | Cron loop | 10 min / 1 hr | Voting activity, token holder counts, daily stat snapshots. |
 | 5 | SDK connection | reactive | Owned by the SDK; calls back into (1) on reconnect. |
+| 6 | Sync watchdog | 30s | Drift detection (indexer-vs-znnd, znnd-vs-chain), automatic resubscribe on drift, node failover/failback when configured. Writes `indexer_sync_status` row. |
 
 The main sync lane is the only one that processes momentums — the
 others are independent maintenance lanes.
 
-A `WaitGroup` in `Indexer.Run` makes shutdown wait for the three
-managed goroutines (bridge, cached data, cron) before returning. The
-sync goroutine is the foreground; it returns when ctx is cancelled or
-sync fails terminally.
+A `WaitGroup` in `Indexer.Run` makes shutdown wait for the four
+managed goroutines (bridge, cached data, cron, watchdog) before
+returning. The sync goroutine is the foreground; it returns when ctx
+is cancelled or sync fails terminally.
 
 ## Package layout
 

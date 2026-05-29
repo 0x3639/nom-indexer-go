@@ -59,3 +59,48 @@ mcp:
   cors_allowed_origins: ""
   # Per-subject rate limit, MCP transport requests/minute.
   rate_limit_per_minute: 60
+
+# Indexer-process-only settings (cmd/indexer). The API and MCP processes
+# ignore this block.
+indexer:
+  # Ordered priority list of upstream nodes. nodes[0] is the primary
+  # (must be WS-capable since the subscription requires WebSockets).
+  # Subsequent entries are fallback candidates that the sync watchdog
+  # fails over to when the primary degrades.
+  #
+  # If this block is omitted, the legacy NODE_URL_WS env var becomes
+  # nodes[0] with label "primary" and NODE_URL_FALLBACKS (comma-
+  # separated) becomes nodes[1..] with auto-labels "fallback-1", etc.
+  nodes:
+    # Default: use the docker-compose default upstream (public testnet).
+    # Most operators leave this as-is and override via NODE_URL_WS.
+    - url: "wss://test.hc1node.com"
+      label: "primary"
+    # Uncomment when running with `docker compose --profile local-node`:
+    # - url: "ws://znnd:35998"
+    #   label: "local-znnd"
+    #   probe_url: "http://znnd:35997"  # WS=35998, HTTP-RPC=35997 (Zenon convention)
+    # And/or add remote fallbacks the watchdog can swap to on failure:
+    # - url: "wss://my.hc1node.com:35998"
+    #   label: "hc1node-remote"
+    #   probe_url: "https://my.hc1node.com:35997"
+    #
+    # probe_url is optional. When omitted, the watchdog derives the
+    # JSON-RPC probe URL by rewriting URL's scheme (ws→http, wss→https)
+    # with the port preserved. For env-var configs using NODE_URL_WS /
+    # NODE_URL_FALLBACKS, port 35998 auto-derives to 35997; other ports
+    # require setting probe_url explicitly here.
+  # Sync watchdog (drift detection + failover). Default off; opt-in via
+  # config.yaml or INDEXER_WATCHDOG_ENABLED=true.
+  watchdog:
+    enabled: false
+    interval: "30s"
+    stall_threshold: "60s"
+    indexer_drift_threshold: 3
+    node_drift_threshold: 3
+    unhealthy_streak: 2
+    failback_streak: 5
+  # Indexer-side HTTP server for /healthz and /readyz.
+  health:
+    enabled: true
+    port: 9092

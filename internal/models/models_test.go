@@ -69,3 +69,13 @@ func TestTxData_JSONRoundTrip(t *testing.T) {
 		t.Errorf("round-trip mismatch: %+v", got)
 	}
 }
+
+func TestSyncStatusZeroValue(t *testing.T) {
+	var s SyncStatus
+	if s.State != "" {
+		t.Fatalf("zero value State should be empty, got %q", s.State)
+	}
+	if s.DBHeight != 0 {
+		t.Fatalf("zero value DBHeight should be 0, got %d", s.DBHeight)
+	}
+}

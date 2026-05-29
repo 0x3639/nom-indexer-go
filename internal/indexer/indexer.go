@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/0x3639/znn-sdk-go/embedded"
@@ -19,11 +20,11 @@ import (
 
 // Indexer handles the indexing of blockchain data
 type Indexer struct {
-	client *rpc_client.RpcClient
-	pool   *pgxpool.Pool
-	repos  *repository.Repositories
-	logger *zap.Logger
-	cron   CronConfig
+	activeClient atomic.Pointer[rpc_client.RpcClient]
+	pool         *pgxpool.Pool
+	repos        *repository.Repositories
+	logger       *zap.Logger
+	cron         CronConfig
 
 	// Cached data from node
 	pillars  []*models.Pillar
@@ -34,6 +35,25 @@ type Indexer struct {
 
 	// Channel to signal subscription restart needed (triggered by SDK reconnection callback)
 	restartSubCh chan struct{}
+
+	lastProgressAt atomic.Int64 // Unix seconds; updated by sync() and runSubscriptionSession on successful processMomentum
+
+	// Watchdog state (Task 13). nodePool is nil for indexers built via
+	// NewIndexerWithCron — the watchdog goroutine only launches when both
+	// nodePool != nil AND watchdogCfg.Enabled.
+	nodePool *NodePool
+
+	syncStateMu       sync.RWMutex
+	syncStateInternal *syncState
+
+	watchdogCfg WatchdogConfigForIndexer
+
+	// clientFactory builds a fresh SDK client for a given URL. nil means
+	// "use rpc_client.NewRpcClient" (production). Integration tests
+	// override this to bypass the SDK's real WebSocket dial, which would
+	// reject httptest URLs and try to connect to a non-existent WS
+	// endpoint.
+	clientFactory func(url string) (*rpc_client.RpcClient, error)
 }
 
 // CronConfig controls the periodic refresh of derived data (voting activity,
@@ -52,8 +72,7 @@ func NewIndexer(client *rpc_client.RpcClient, pool *pgxpool.Pool, logger *zap.Lo
 // NewIndexerWithCron creates an indexer with explicit cron intervals.
 // Zero durations fall back to defaults inside the cron loop.
 func NewIndexerWithCron(client *rpc_client.RpcClient, pool *pgxpool.Pool, logger *zap.Logger, cron CronConfig) *Indexer {
-	return &Indexer{
-		client:            client,
+	i := &Indexer{
 		pool:              pool,
 		repos:             repository.NewRepositories(pool),
 		logger:            logger,
@@ -61,6 +80,33 @@ func NewIndexerWithCron(client *rpc_client.RpcClient, pool *pgxpool.Pool, logger
 		pillarNameToOwner: make(map[string]string),
 		restartSubCh:      make(chan struct{}, 1),
 	}
+	i.activeClient.Store(client)
+	return i
+}
+
+// NewIndexerWithNodes constructs an Indexer with a node pool, enabling
+// the watchdog goroutine (failover/failback + drift detection). The
+// initial client must already be built from nodes[0].URL by the caller.
+func NewIndexerWithNodes(
+	pool *pgxpool.Pool,
+	nodePool *NodePool,
+	client *rpc_client.RpcClient,
+	logger *zap.Logger,
+	cron CronConfig,
+	watchdog WatchdogConfigForIndexer,
+) *Indexer {
+	i := NewIndexerWithCron(client, pool, logger, cron)
+	i.nodePool = nodePool
+	i.syncStateInternal = newSyncState(nodePool.Len())
+	i.watchdogCfg = watchdog
+	return i
+}
+
+// client returns the currently-active SDK client. All RPC call sites
+// must read through this accessor — the underlying value changes when
+// the watchdog fails over to a different node.
+func (i *Indexer) client() *rpc_client.RpcClient {
+	return i.activeClient.Load()
 }
 
 // signalSubscriptionRestart signals that a subscription restart is needed
@@ -73,22 +119,109 @@ func (i *Indexer) signalSubscriptionRestart() {
 	}
 }
 
+// registerCallbacks attaches SDK connection callbacks to the given
+// client. Called from Run() for the initial client and from
+// swapActiveClient for every replacement.
+func (i *Indexer) registerCallbacks(c *rpc_client.RpcClient) {
+	c.AddOnConnectionEstablishedCallback(func() {
+		i.logger.Info("SDK connection established, signaling subscription restart")
+		i.signalSubscriptionRestart()
+	})
+	c.AddOnConnectionLostCallback(func(err error) {
+		i.logger.Warn("SDK connection lost, will auto-reconnect", zap.Error(err))
+	})
+}
+
+// swapActiveClient builds a fresh SDK client for the given URL, registers
+// callbacks, atomically replaces the active client, and schedules the
+// old client's Stop after a 60-second grace (longer than withRetry's
+// ~32s worst case so no in-flight RPC sees a closed client mid-call).
+// Also signals the subscription loop to restart against the new client.
+func (i *Indexer) swapActiveClient(url string) error {
+	factory := i.clientFactory
+	if factory == nil {
+		factory = rpc_client.NewRpcClient
+	}
+	newClient, err := factory(url)
+	if err != nil {
+		return fmt.Errorf("build client for %q: %w", url, err)
+	}
+	i.registerCallbacks(newClient)
+	old := i.activeClient.Swap(newClient)
+	i.signalSubscriptionRestart()
+	go func() {
+		time.Sleep(60 * time.Second)
+		if old != nil {
+			old.Stop()
+		}
+	}()
+	return nil
+}
+
+// StartupSwap forces the active client over to the given node idx during
+// the synchronous startup phase. Unlike runtime failover, this does not
+// require a prior chainIdentifier seed — the next watchdog tick will
+// record the new genesis as canonical.
+func (i *Indexer) StartupSwap(idx int) error {
+	entry := i.nodePool.Entry(idx)
+	if err := i.swapActiveClient(entry.URL); err != nil {
+		return err
+	}
+	i.syncStateMu.Lock()
+	i.syncStateInternal.activeIdx = idx
+	now := time.Now().Unix()
+	i.syncStateInternal.failedOverAt = &now
+	i.syncStateMu.Unlock()
+	return nil
+}
+
+// HealthSnapshot returns a copy of the current sync state for the
+// indexer's /readyz handler. Safe for concurrent reads — held briefly
+// under syncStateMu.
+type HealthSnapshot struct {
+	Ready     bool
+	State     string // last classification
+	NodeLabel string
+	Drift     int64
+}
+
+// HealthSnapshot reports the watchdog's current health view. When the
+// watchdog is disabled (no node pool wired) the result always reports
+// Ready=true so legacy single-node deployments stay green.
+func (i *Indexer) HealthSnapshot() HealthSnapshot {
+	if i.nodePool == nil || i.syncStateInternal == nil {
+		// Watchdog disabled — always ready.
+		return HealthSnapshot{Ready: true, State: "watchdog_disabled"}
+	}
+	i.syncStateMu.RLock()
+	defer i.syncStateMu.RUnlock()
+
+	activeIdx := i.syncStateInternal.activeIdx
+	st := i.syncStateInternal.streaks[activeIdx]
+	threshold := i.watchdogCfg.UnhealthyStreak
+	if threshold <= 0 {
+		threshold = 2 // fallback to default
+	}
+
+	return HealthSnapshot{
+		Ready:     st.unhealthy < threshold,
+		State:     i.syncStateInternal.lastClass, // populated by runWatchdogTick
+		NodeLabel: i.nodePool.Entry(activeIdx).Label,
+		Drift:     i.syncStateInternal.lastDrift,
+	}
+}
+
 // Run starts the indexer main loop. Run blocks until ctx is canceled, then
 // waits for the bridge/cached-data background goroutines to exit before
 // returning so callers can rely on a clean shutdown.
 func (i *Indexer) Run(ctx context.Context) error {
 	i.logger.Info("starting indexer")
 
-	// Register SDK callbacks for connection events
-	// The SDK handles reconnection automatically; we just need to restart subscriptions
-	i.client.AddOnConnectionEstablishedCallback(func() {
-		i.logger.Info("SDK connection established, signaling subscription restart")
-		i.signalSubscriptionRestart()
-	})
-
-	i.client.AddOnConnectionLostCallback(func(err error) {
-		i.logger.Warn("SDK connection lost, will auto-reconnect", zap.Error(err))
-	})
+	// Register SDK callbacks for connection events on the initial client.
+	// The SDK handles reconnection automatically; we just need to restart
+	// subscriptions. swapActiveClient re-registers callbacks on any
+	// replacement client.
+	i.registerCallbacks(i.client())
 
 	votingInterval := i.cron.VotingActivityInterval
 	if votingInterval <= 0 {
@@ -98,6 +231,8 @@ func (i *Indexer) Run(ctx context.Context) error {
 	if tokenHoldersInterval <= 0 {
 		tokenHoldersInterval = 10 * time.Minute
 	}
+
+	i.lastProgressAt.Store(time.Now().Unix())
 
 	var wg sync.WaitGroup
 	wg.Add(3)
@@ -113,6 +248,13 @@ func (i *Indexer) Run(ctx context.Context) error {
 		defer wg.Done()
 		i.runCronLoop(ctx, votingInterval, tokenHoldersInterval)
 	}()
+	if i.nodePool != nil && i.watchdogCfg.Enabled {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			i.runSyncWatchdogLoop(ctx)
+		}()
+	}
 	defer wg.Wait()
 
 	// Initial sync to catch up to current height
@@ -154,7 +296,7 @@ func (i *Indexer) sync(ctx context.Context) error {
 
 		var frontierHeight uint64
 		if err := withRetry(ctx, i.logger, "GetFrontierMomentum", func() error {
-			m, err := i.client.LedgerApi.GetFrontierMomentum()
+			m, err := i.client().LedgerApi.GetFrontierMomentum()
 			if err != nil {
 				return err
 			}
@@ -181,7 +323,7 @@ func (i *Indexer) sync(ctx context.Context) error {
 		batchSize := uint64(100)
 		var momentums *api.MomentumList
 		if err := withRetry(ctx, i.logger, "GetMomentumsByHeight", func() error {
-			m, err := i.client.LedgerApi.GetMomentumsByHeight(startHeight, batchSize)
+			m, err := i.client().LedgerApi.GetMomentumsByHeight(startHeight, batchSize)
 			if err != nil {
 				return err
 			}
@@ -210,6 +352,8 @@ func (i *Indexer) sync(ctx context.Context) error {
 
 			if err := i.processMomentum(ctx, m); err != nil {
 				return fmt.Errorf("failed to process momentum %d: %w", m.Height, err)
+			} else {
+				i.lastProgressAt.Store(time.Now().Unix())
 			}
 		}
 
@@ -267,7 +411,7 @@ func (i *Indexer) runSubscriptionSession(ctx context.Context) error {
 	}
 
 	// Create subscription to momentums
-	sub, momentumCh, err := i.client.SubscriberApi.ToMomentums(ctx)
+	sub, momentumCh, err := i.client().SubscriberApi.ToMomentums(ctx)
 	if err != nil {
 		return fmt.Errorf("failed to subscribe to momentums: %w", err)
 	}
@@ -295,7 +439,7 @@ func (i *Indexer) runSubscriptionSession(ctx context.Context) error {
 					zap.Uint64("height", m.Height))
 
 				// Fetch full momentum details
-				fullMomentum, err := i.client.LedgerApi.GetMomentumsByHeight(m.Height, 1)
+				fullMomentum, err := i.client().LedgerApi.GetMomentumsByHeight(m.Height, 1)
 				if err != nil || fullMomentum == nil || len(fullMomentum.List) == 0 {
 					i.logger.Error("failed to get momentum details",
 						zap.Uint64("height", m.Height),
@@ -307,6 +451,8 @@ func (i *Indexer) runSubscriptionSession(ctx context.Context) error {
 					i.logger.Error("failed to process momentum",
 						zap.Uint64("height", m.Height),
 						zap.Error(err))
+				} else {
+					i.lastProgressAt.Store(time.Now().Unix())
 				}
 			}
 		}
@@ -319,7 +465,7 @@ func (i *Indexer) updateCachedData(ctx context.Context) error {
 
 	// Update pillars
 	i.logger.Info("updateCachedData: fetching pillars")
-	pillarList, err := i.client.PillarApi.GetAll(0, 200)
+	pillarList, err := i.client().PillarApi.GetAll(0, 200)
 	if err != nil {
 		return fmt.Errorf("failed to get pillars: %w", err)
 	}
@@ -370,7 +516,7 @@ func (i *Indexer) updateCachedData(ctx context.Context) error {
 	sentinelPageSize := uint32(10)
 
 	for {
-		sentinelList, err := i.client.SentinelApi.GetAllActive(sentinelPageIndex, sentinelPageSize)
+		sentinelList, err := i.client().SentinelApi.GetAllActive(sentinelPageIndex, sentinelPageSize)
 		if err != nil {
 			i.logger.Warn("failed to get sentinels", zap.Error(err))
 			break
@@ -410,7 +556,7 @@ func (i *Indexer) updateCachedData(ctx context.Context) error {
 	projectPageSize := uint32(10)
 
 	for {
-		projectList, err := i.client.AcceleratorApi.GetAll(projectPageIndex, projectPageSize)
+		projectList, err := i.client().AcceleratorApi.GetAll(projectPageIndex, projectPageSize)
 		if err != nil {
 			i.logger.Warn("failed to get projects", zap.Error(err))
 			break
@@ -592,7 +738,7 @@ func (i *Indexer) syncBridgeData(ctx context.Context) {
 func (i *Indexer) updateBridgeConfig(ctx context.Context) error {
 	now := time.Now().Unix()
 
-	if info, err := i.client.BridgeApi.GetBridgeInfo(); err != nil {
+	if info, err := i.client().BridgeApi.GetBridgeInfo(); err != nil {
 		i.logger.Warn("bridge config: GetBridgeInfo failed", zap.Error(err))
 	} else if info != nil {
 		if err := i.repos.BridgeConfig.UpsertAdmin(ctx, &models.BridgeAdmin{
@@ -611,7 +757,7 @@ func (i *Indexer) updateBridgeConfig(ctx context.Context) error {
 		}
 	}
 
-	if sec, err := i.client.BridgeApi.GetSecurityInfo(); err != nil {
+	if sec, err := i.client().BridgeApi.GetSecurityInfo(); err != nil {
 		i.logger.Warn("bridge config: GetSecurityInfo failed", zap.Error(err))
 	} else if sec != nil {
 		if err := i.repos.BridgeConfig.UpsertSecurityInfo(ctx, &models.BridgeSecurityInfo{
@@ -656,7 +802,7 @@ func (i *Indexer) updateBridgeConfig(ctx context.Context) error {
 		}
 	}
 
-	if orch, err := i.client.BridgeApi.GetOrchestratorInfo(); err != nil {
+	if orch, err := i.client().BridgeApi.GetOrchestratorInfo(); err != nil {
 		i.logger.Warn("bridge config: GetOrchestratorInfo failed", zap.Error(err))
 	} else if orch != nil {
 		if err := i.repos.BridgeConfig.UpsertOrchestratorInfo(ctx, &models.BridgeOrchestratorInfo{
@@ -675,7 +821,7 @@ func (i *Indexer) updateBridgeConfig(ctx context.Context) error {
 	pageSize := uint32(50)
 	pageIndex := uint32(0)
 	for {
-		list, err := i.client.BridgeApi.GetAllNetworks(pageIndex, pageSize)
+		list, err := i.client().BridgeApi.GetAllNetworks(pageIndex, pageSize)
 		if err != nil {
 			i.logger.Warn("bridge config: GetAllNetworks failed",
 				zap.Uint32("page", pageIndex), zap.Error(err))
@@ -749,7 +895,7 @@ func (i *Indexer) updateBridgeWrapRequests(ctx context.Context) error {
 	i.logger.Debug("wrap sync starting", zap.Int64("stopHeight", stopHeight))
 
 	for {
-		wrapList, err := i.client.BridgeApi.GetAllWrapTokenRequests(pageIndex, pageSize)
+		wrapList, err := i.client().BridgeApi.GetAllWrapTokenRequests(pageIndex, pageSize)
 		if err != nil {
 			return err
 		}
@@ -824,7 +970,7 @@ func (i *Indexer) updateBridgeUnwrapRequests(ctx context.Context) error {
 	i.logger.Debug("unwrap sync starting", zap.Int64("stopHeight", stopHeight))
 
 	for {
-		unwrapList, err := i.client.BridgeApi.GetAllUnwrapTokenRequests(pageIndex, pageSize)
+		unwrapList, err := i.client().BridgeApi.GetAllUnwrapTokenRequests(pageIndex, pageSize)
 		if err != nil {
 			return err
 		}
@@ -1087,7 +1233,7 @@ func (i *Indexer) Backfill(ctx context.Context) error {
 			zap.Int("total", len(missingHeights)))
 
 		// Fetch momentum from node
-		momentums, err := i.client.LedgerApi.GetMomentumsByHeight(height, 1)
+		momentums, err := i.client().LedgerApi.GetMomentumsByHeight(height, 1)
 		if err != nil {
 			i.logger.Error("backfill: failed to fetch momentum",
 				zap.Uint64("height", height),

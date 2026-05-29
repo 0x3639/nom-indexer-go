@@ -95,6 +95,18 @@ services:
       DATABASE_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env (copy .env.example)}
       MIGRATIONS_PATH: /app/migrations
       BACKFILL_ON_STARTUP: ${BACKFILL_ON_STARTUP:-false}
+      INDEXER_HEALTH_PORT: ${INDEXER_HEALTH_PORT:-9092}
+      INDEXER_WATCHDOG_ENABLED: ${INDEXER_WATCHDOG_ENABLED:-false}
+      NODE_URL_FALLBACKS: ${NODE_URL_FALLBACKS:-}
+    expose:
+      - "9092"
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - wget -q -O- "http://localhost:9092/healthz" | grep -q ok || exit 1
+      interval: 10s
+      timeout: 3s
+      retries: 3
     restart: unless-stopped
     networks:
       - nom-indexer

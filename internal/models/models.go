@@ -452,3 +452,21 @@ type Delegation struct {
 	StartedAt          int64  `db:"started_at"`
 	EndedAt            *int64 `db:"ended_at"`
 }
+
+// SyncStatus is the in-DB projection of the watchdog's last tick.
+// The row is single-row (id=1) — see migrations/013.
+type SyncStatus struct {
+	DBHeight             int64  `db:"db_height"`
+	ZnndFrontierHeight   int64  `db:"znnd_frontier_height"`
+	ZnndTargetHeight     int64  `db:"znnd_target_height"`
+	DriftMomentums       int64  `db:"drift_momentums"`
+	NodeLagMomentums     int64  `db:"node_lag_momentums"`
+	State                string `db:"state"` // synced | indexer_lagging | node_lagging | stalled | probe_failed
+	ConsecutiveBadChecks int    `db:"consecutive_bad_checks"`
+	ActiveNodeURL        string `db:"active_node_url"`
+	ActiveNodeLabel      string `db:"active_node_label"`
+	ChainIdentifier      string `db:"chain_identifier"`
+	FailedOverAt         *int64 `db:"failed_over_at"`
+	LastProgressAt       int64  `db:"last_progress_at"`
+	CheckedAt            int64  `db:"checked_at"`
+}

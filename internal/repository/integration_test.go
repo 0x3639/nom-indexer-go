@@ -99,7 +99,8 @@ func newTestDB(t *testing.T) *pgxpool.Pool {
 		bridge_orchestrator_info, bridge_security_info,
 		delegations,
 		network_stat_histories, token_stat_histories, pillar_stat_histories,
-		bridge_stat_histories
+		bridge_stat_histories,
+		indexer_sync_status
 		RESTART IDENTITY`)
 	if err != nil {
 		t.Fatalf("truncate: %v", err)

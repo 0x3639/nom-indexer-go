@@ -80,6 +80,7 @@ Hash-formatted flat index of every documentation page, generated from mkdocs.yml
 - [Deploy](docs/operations/deploy.md): The canonical deployment is Docker Compose. The core stack is the
 - [Local znnd + bootstrap](docs/operations/znnd-bootstrap.md): The compose stack ships an optional **local-node** profile that bundles a
 - [Monitoring](docs/operations/monitoring.md): What "healthy" looks like and how to spot trouble.
+- [Sync watchdog](docs/operations/watchdog.md): The watchdog detects two failure modes and reacts in-process so the
 - [Backfill](docs/operations/backfill.md): Three paths exist for filling gaps in the indexer's tables. Pick by use case.
 - [Backup and restore](docs/operations/backup-restore.md): Two shell scripts ship with the repo:
 - [Failure modes](docs/operations/failure-modes.md): Known ways the indexer can stall or misbehave, with detection and
