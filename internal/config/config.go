@@ -201,15 +201,26 @@ func (d *DatabaseConfig) ConnectionString() string {
 		d.User, d.Password, d.Host, d.Port, d.Name)
 }
 
-// Load loads configuration from environment variables and config file
+// Load loads configuration from environment variables and an optional
+// config.yaml found in the current directory or /app (the container workdir).
 func Load() (*Config, error) {
+	return load([]string{".", "/app"})
+}
+
+// load builds the configuration, searching configPaths for an optional
+// config.yaml. Tests pass nil to exercise the env+defaults path hermetically,
+// without picking up an ambient config file — e.g. a developer's gitignored
+// config.yaml that CI uploads into the build context at /app, which would
+// otherwise satisfy indexer.nodes and skip the NODE_URL_FALLBACKS path.
+func load(configPaths []string) (*Config, error) {
 	v := viper.New()
 
 	// Set config file details
 	v.SetConfigName("config")
 	v.SetConfigType("yaml")
-	v.AddConfigPath(".")
-	v.AddConfigPath("/app")
+	for _, p := range configPaths {
+		v.AddConfigPath(p)
+	}
 
 	// Set defaults
 	v.SetDefault("node.ws_url", "wss://test.hc1node.com")

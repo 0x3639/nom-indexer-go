@@ -178,7 +178,7 @@ func TestNodesConfigFromEnvBackcompat(t *testing.T) {
 	t.Setenv("API_JWT_SECRET", "y")
 	t.Setenv("NODE_URL_WS", "ws://znnd:35998")
 	t.Setenv("NODE_URL_FALLBACKS", "wss://my.hc1node.com:35998,https://my.hc1node.com:35997")
-	cfg, err := Load()
+	cfg, err := load(nil)
 	if err != nil {
 		t.Fatalf("Load: %v", err)
 	}
@@ -201,7 +201,7 @@ func TestNodesFallbacksSkipEmptySegments(t *testing.T) {
 	t.Setenv("API_JWT_SECRET", "y")
 	t.Setenv("NODE_URL_WS", "ws://znnd:35998")
 	t.Setenv("NODE_URL_FALLBACKS", "wss://a.example.com:35998,,https://b.example.com:35997")
-	cfg, err := Load()
+	cfg, err := load(nil)
 	if err != nil {
 		t.Fatalf("Load: %v", err)
 	}
@@ -222,7 +222,7 @@ func TestNodesFallbacksDeriveProbeURL(t *testing.T) {
 	t.Setenv("API_JWT_SECRET", "y")
 	t.Setenv("NODE_URL_WS", "ws://znnd:35998")
 	t.Setenv("NODE_URL_FALLBACKS", "wss://my.hc1node.com:35998")
-	cfg, err := Load()
+	cfg, err := load(nil)
 	if err != nil {
 		t.Fatalf("Load: %v", err)
 	}
@@ -238,7 +238,7 @@ func TestNodesFallbacksDoNotDeriveWhenPortMissing(t *testing.T) {
 	t.Setenv("DATABASE_PASSWORD", "x")
 	t.Setenv("API_JWT_SECRET", "y")
 	t.Setenv("NODE_URL_WS", "wss://test.hc1node.com")
-	cfg, err := Load()
+	cfg, err := load(nil)
 	if err != nil {
 		t.Fatalf("Load: %v", err)
 	}
@@ -251,7 +251,7 @@ func TestWatchdogConfigDefaults(t *testing.T) {
 	t.Setenv("DATABASE_PASSWORD", "x")
 	t.Setenv("API_JWT_SECRET", "y")
 	t.Setenv("NODE_URL_WS", "ws://znnd:35998")
-	cfg, err := Load()
+	cfg, err := load(nil)
 	if err != nil {
 		t.Fatalf("Load: %v", err)
 	}
