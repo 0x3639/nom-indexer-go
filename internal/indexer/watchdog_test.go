@@ -163,7 +163,7 @@ func TestReactNodeLaggingFailoverAfterStreak(t *testing.T) {
 		t.Fatalf("expected streak=1, got %d", state.streaks[0].unhealthy)
 	}
 
-	// second bad tick → streak=2, failover signalled
+	// second bad tick → streak=2, failover signaled
 	intent = react(state, 0, classNodeLagging, cfg)
 	if intent.failoverIdx == -1 {
 		t.Fatal("expected failover at streak=2")
@@ -188,11 +188,11 @@ func TestReactStalledTriggersRestartEveryTickAndStreaks(t *testing.T) {
 		t.Fatalf("expected no failover at streak=1, got %d", intent.failoverIdx)
 	}
 
-	// Two more stalled ticks → restart still signalled each time, failover at streak=3
+	// Two more stalled ticks → restart still signaled each time, failover at streak=3
 	react(state, 0, classStalled, cfg)
 	intent = react(state, 0, classStalled, cfg)
 	if !intent.signalRestart {
-		t.Fatal("expected restart still signalled on third stalled tick")
+		t.Fatal("expected restart still signaled on third stalled tick")
 	}
 	if intent.failoverIdx == -1 {
 		t.Fatal("expected failover at streak=3")

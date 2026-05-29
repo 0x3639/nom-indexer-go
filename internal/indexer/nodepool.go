@@ -163,7 +163,7 @@ func rpcCall(ctx context.Context, url, method string, params []any) (any, error)
 	if err != nil {
 		return nil, err
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	var envelope struct {
 		Result any `json:"result"`

@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net/http"
 	"os"
@@ -161,7 +162,7 @@ func main() {
 		go func() {
 			addr := fmt.Sprintf(":%d", cfg.Indexer.Health.Port)
 			logger.Info("starting health server", zap.String("addr", addr))
-			if err := healthSrv.ListenAndServe(addr); err != nil && err != http.ErrServerClosed {
+			if err := healthSrv.ListenAndServe(addr); err != nil && !errors.Is(err, http.ErrServerClosed) {
 				logger.Error("health server crashed", zap.Error(err))
 			}
 		}()

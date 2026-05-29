@@ -93,7 +93,6 @@ type nodeStreaks struct {
 // indexer's /readyz handler) must use a sync.RWMutex-protected snapshot.
 type syncState struct {
 	activeIdx       int
-	lastProgressAt  time.Time
 	streaks         map[int]nodeStreaks
 	chainIdentifier string // genesis hash, populated on first successful probe
 	failedOverAt    *int64 // unix seconds; nil when on primary
@@ -221,7 +220,7 @@ func selectFailback(s *syncState, candidateIdx int, cfg watchdogReactConfig) int
 
 // runSyncWatchdogLoop ticks at watchdog.Interval, classifying drift and
 // reacting (subscription restart, failover, failback). Returns when ctx
-// is cancelled.
+// is canceled.
 func (i *Indexer) runSyncWatchdogLoop(ctx context.Context) {
 	ticker := time.NewTicker(i.watchdogCfg.Interval)
 	defer ticker.Stop()

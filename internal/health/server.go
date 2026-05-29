@@ -72,6 +72,6 @@ func writeJSON(w http.ResponseWriter, code int, v any) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(code)
 	if err := json.NewEncoder(w).Encode(v); err != nil {
-		fmt.Fprintf(w, `{"error":%q}`, err.Error())
+		_, _ = fmt.Fprintf(w, `{"error":%q}`, err.Error())
 	}
 }

@@ -26,7 +26,7 @@ type Config struct {
 	BackfillOnStartup bool           `mapstructure:"backfill_on_startup"`
 }
 
-// IndexerConfig groups the indexer-process-only settings: the prioritised
+// IndexerConfig groups the indexer-process-only settings: the prioritized
 // list of upstream nodes, the sync watchdog policy, and the indexer's
 // own HTTP health server. The API and MCP processes do not consult it.
 type IndexerConfig struct {
@@ -56,7 +56,7 @@ type NodeEntry struct {
 // rationale behind the asymmetric streak thresholds.
 type WatchdogConfig struct {
 	// Enabled turns the watchdog on. When false, drift detection and
-	// node failover are disabled — existing SDK reconnect behaviour
+	// node failover are disabled — existing SDK reconnect behavior
 	// is unaffected.
 	Enabled bool `mapstructure:"enabled"`
 	// Interval is the cadence of the watchdog tick.

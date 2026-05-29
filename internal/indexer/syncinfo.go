@@ -46,7 +46,7 @@ func fetchSyncInfo(ctx context.Context, url string) (SyncInfo, error) {
 	if err != nil {
 		return SyncInfo{}, fmt.Errorf("syncInfo POST: %w", err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	var envelope struct {
 		Result *SyncInfo `json:"result"`
