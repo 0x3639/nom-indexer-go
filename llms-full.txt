@@ -6385,6 +6385,28 @@ docker exec nom-indexer-postgres psql -U postgres -d nom_indexer \
   -c 'SELECT state, active_node_label, failed_over_at FROM indexer_sync_status;'
 ```
 
+## Known issues
+
+### False-positive failover during initial sync or backfill
+
+`lastProgressAt` is seeded to the indexer's start time, but the watchdog
+loop launches before initial `sync()` returns. If catch-up takes longer
+than `stall_threshold` (default 60s) — for example a fresh deployment
+with a large gap, or `BACKFILL_ON_STARTUP=true` — the watchdog will
+classify `stalled` and after `unhealthy_streak` ticks fail over to the
+next configured node even though the indexer is healthy.
+
+Mitigations:
+- For deployments that expect long initial catch-ups, raise
+  `indexer.watchdog.stall_threshold` to comfortably exceed the worst-case
+  initial-sync duration.
+- Keep `indexer.watchdog.enabled: false` during the first run; flip to
+  `true` after the indexer has caught up.
+- Configure the fallback node identical to the primary so a false
+  failover doesn't change runtime behaviour.
+
+This is tracked as a follow-up — see issue tracker for the planned fix.
+
 
 === docs/operations/znnd-bootstrap.md ===
 
@@ -13106,11 +13128,9 @@ The MCP server's `/readyz` gets the same treatment for parity.
 ## Error handling
 
 - **`stats.syncInfo` not supported by the node.** Some node builds may
-  not expose it. On first probe failure for that specific RPC, log
-  WARN and fall back to a frontier-only classification (treat node as
-  `synced` if probe.frontier matches expectation). Configurable via
-  `watchdog.tolerate_missing_syncinfo: true` (default true) — refuses
-  to start if false and RPC unavailable.
+  not expose it. The watchdog gracefully degrades: a probe RPC error
+  produces a `probe_failed` classification and the standard streak-based
+  failover applies. No special tolerance flag is needed.
 - **Probe transient errors.** `withRetry` (existing) wraps each probe
   RPC: 3 attempts, 0.5s → 2s backoff. Watchdog cadence (30s) absorbs
   the latency.
