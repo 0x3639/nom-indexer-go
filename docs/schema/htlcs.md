@@ -122,10 +122,10 @@ the paired send-block hash. This differs from [`stakes`](stakes.md) /
 [`fusions`](fusions.md), where the id is the paired send-block hash and the
 settling call is correlated through a separately ABI-derived `cancel_id`.
 
-> **Caveat / open item:** at the time of writing, the handler stored
-> `id = paired.Hash` (the send-block hash) on `Create`, which is the value the
-> live data shows `Unlock`/`Reclaim` do **not** reference. Under that id, every
-> settlement would no-op and entries would remain `active` forever. This
-> finding is recorded here for the controller to act on; the verification task
-> did not modify indexer code. If the handler is corrected to store the
-> `Create` receive-block hash (`block.Hash`), the linkage matches the chain.
+> **Fix applied:** the handler now stores `id = block.Hash` (the `Create`
+> receive-block hash) on `Create`, which is the value the live data confirms
+> `Unlock`/`Reclaim` reference — verified against **571/571** mainnet
+> settlements (509 `Unlock` + 62 `Reclaim`, 100% match). With this id,
+> `SettleBatch` updates the correct row, so entries transition out of `active`
+> when settled. (Earlier revisions stored `paired.Hash`, the send-block hash,
+> under which settlements matched no rows; that defect is now corrected.)

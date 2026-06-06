@@ -399,9 +399,12 @@ func hexMaybe(s string) string {
 // indexHtlcContract handles HTLC Create / Unlock / Reclaim events.
 //
 // HTLC blocks arrive as ContractReceive on the HTLC address paired with a user
-// send. The entry id is the paired send-block hash (same convention as Stake).
-// Create carries the lock params + the send's amount/token/sender; Unlock and
-// Reclaim carry the target id (and Unlock a preimage) to settle the entry.
+// send. The entry id is the Create receive-block hash (block.Hash). Unlike
+// Stake (which settles via a separately ABI-derived cancel_id), HTLC settles by
+// the receive-block hash directly: Unlock/Reclaim reference block.Hash as their
+// target id (verified against mainnet, 571/571 settlements match). Create
+// carries the lock params + the send's amount/token/sender (from paired); Unlock
+// and Reclaim carry the target id (and Unlock a preimage) to settle the entry.
 func (i *Indexer) indexHtlcContract(ctx context.Context, batch *pgx.Batch, block *api.AccountBlock, txData *models.TxData, m *api.Momentum) {
 	if block.PairedAccountBlock == nil {
 		return
@@ -410,7 +413,7 @@ func (i *Indexer) indexHtlcContract(ctx context.Context, batch *pgx.Batch, block
 
 	switch txData.Method {
 	case "Create":
-		id := paired.Hash.String()
+		id := block.Hash.String()
 
 		expirationStr := txData.Inputs["expirationTime"]
 		expiration, err := strconv.ParseInt(expirationStr, 10, 64)
