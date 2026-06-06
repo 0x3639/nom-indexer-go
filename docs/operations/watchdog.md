@@ -62,6 +62,14 @@ indexer-side degradation:
 - 200 ok if the indexer is synced.
 - 503 `indexer_drift` if the indexer has drifted past the streak
   threshold.
+- 200 `{"status":"ready","watchdog":"inactive","watchdog_stale_seconds":N}`
+  when the row hasn't been written for > 5 minutes. That row is written
+  only by the watchdog loop, so a stale `checked_at` means the watchdog is
+  **disabled or stopped** — its `node`/`drift`/`state` are frozen and would
+  be misleading, so `/readyz` reports them as inactive rather than serving
+  the stale values. (Expected whenever `indexer.watchdog.enabled: false`,
+  e.g. during an initial cold sync — use the indexer's `/api/v1/status`
+  `latest_height` for live progress in that mode.)
 
 Docker compose has a healthcheck wired to the indexer `/healthz`; this
 keeps the container restart policy informed of process liveness without
@@ -116,18 +124,27 @@ docker exec nom-indexer-postgres psql -U postgres -d nom_indexer \
 `lastProgressAt` is seeded to the indexer's start time, but the watchdog
 loop launches before initial `sync()` returns. If catch-up takes longer
 than `stall_threshold` (default 60s) — for example a fresh deployment
-with a large gap, or `BACKFILL_ON_STARTUP=true` — the watchdog will
+with a large gap, or `BACKFILL_ON_STARTUP=true` — the watchdog may
 classify `stalled` and after `unhealthy_streak` ticks fail over to the
 next configured node even though the indexer is healthy.
 
-Mitigations:
-- For deployments that expect long initial catch-ups, raise
-  `indexer.watchdog.stall_threshold` to comfortably exceed the worst-case
-  initial-sync duration.
+This transient false failover **no longer strands the indexer.** Failback
+is allowed whenever the active node is healthy and only the indexer is
+behind (`indexer_lagging`), not just when fully `synced`, and only to a
+primary that is itself at head. So after a false failover the watchdog
+returns to a recovered primary within ~`failback_streak × interval`
+(~2.5 min by default) — even mid-cold-sync. (Previously, failback was
+gated on `synced`, which never occurs during a multi-hour catch-up, so the
+indexer was stranded on the fallback for the entire sync.)
+
+To avoid the transient failover churn entirely during a large first sync:
 - Keep `indexer.watchdog.enabled: false` during the first run; flip to
-  `true` after the indexer has caught up.
+  `true` after the indexer has caught up. (Cleanest.)
+- Or raise `indexer.watchdog.stall_threshold` to comfortably exceed the
+  worst-case initial-sync stall.
 - Configure the fallback node identical to the primary so a false
   failover doesn't change runtime behaviour.
 
-This is tracked as a follow-up — see issue tracker for the planned fix.
+Remaining follow-up: suppress the false `stalled` classification during an
+active catch-up so the initial failover doesn't happen in the first place.
 

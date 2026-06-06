@@ -25,3 +25,7 @@ phase-outreach-*.md
 config.yaml
 /.venv-docs/
 /site/
+
+# Local JWT/token scratch files — never commit (bearer credentials)
+jwt.txt
+*.jwt
