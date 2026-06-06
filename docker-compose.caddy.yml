@@ -1,0 +1,43 @@
+# Caddy reverse proxy with automatic HTTPS for the public API + MCP.
+#
+# Additive overlay — run it alongside the base compose file:
+#
+#   docker compose -f docker-compose.yml -f docker-compose.caddy.yml --profile local-node up -d
+#
+# (Tip: rename this to docker-compose.override.yml and Compose auto-loads it.)
+#
+# Caddy is OPT-IN: omit this file for local dev and hit the host ports
+# directly (http://localhost:8080). Include it on a public server for TLS.
+#
+# The domains + ACME email are read from your environment and passed to the
+# Caddy container, which substitutes them into configs/Caddyfile. The
+# defaults below make a bare local run work with Caddy's internal CA
+# (api.localhost / mcp.localhost) — no public DNS or email required.
+services:
+  caddy:
+    image: caddy:2-alpine
+    container_name: nom-indexer-caddy
+    restart: unless-stopped
+    environment:
+      # Production: set real subdomains + a real email in .env.
+      # Local: leave unset to use the *.localhost internal-CA defaults.
+      API_DOMAIN: ${API_DOMAIN:-api.localhost}
+      MCP_DOMAIN: ${MCP_DOMAIN:-mcp.localhost}
+      ACME_EMAIL: ${ACME_EMAIL:-admin@localhost}
+    ports:
+      - "80:80"
+      - "443:443"
+      - "443:443/udp" # HTTP/3 (QUIC)
+    volumes:
+      - ./configs/Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data # persists ACME certs/keys — DO NOT lose this volume
+      - caddy_config:/config
+    networks:
+      - nom-indexer
+    depends_on:
+      - api
+      - mcp
+
+volumes:
+  caddy_data:
+  caddy_config:

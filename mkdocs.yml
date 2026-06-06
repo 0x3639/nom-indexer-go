@@ -156,6 +156,7 @@ nav:
     - ABI decoding: indexing/abi-decoding.md
   - Operations:
     - Deploy: operations/deploy.md
+    - Reverse proxy + TLS: operations/reverse-proxy.md
     - Local znnd + bootstrap: operations/znnd-bootstrap.md
     - Monitoring: operations/monitoring.md
     - Sync watchdog: operations/watchdog.md
