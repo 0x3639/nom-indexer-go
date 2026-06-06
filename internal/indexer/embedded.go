@@ -393,7 +393,7 @@ func hexMaybe(s string) string {
 	if _, err := hex.DecodeString(s); err == nil {
 		return strings.ToLower(s)
 	}
-	return hex.EncodeToString([]byte(s))
+	return bytesToHex([]byte(s))
 }
 
 // indexHtlcContract handles HTLC Create / Unlock / Reclaim events.
@@ -411,9 +411,31 @@ func (i *Indexer) indexHtlcContract(ctx context.Context, batch *pgx.Batch, block
 	switch txData.Method {
 	case "Create":
 		id := paired.Hash.String()
-		expiration, _ := strconv.ParseInt(txData.Inputs["expirationTime"], 10, 64)
-		hashType, _ := strconv.Atoi(txData.Inputs["hashType"])
-		keyMaxSize, _ := strconv.Atoi(txData.Inputs["keyMaxSize"])
+
+		expirationStr := txData.Inputs["expirationTime"]
+		expiration, err := strconv.ParseInt(expirationStr, 10, 64)
+		if err != nil {
+			i.logger.Warn("invalid htlc expirationTime",
+				zap.String("htlcID", id), zap.String("expirationTime", expirationStr), zap.Error(err))
+			expiration = 0
+		}
+
+		hashTypeStr := txData.Inputs["hashType"]
+		hashType, err := strconv.Atoi(hashTypeStr)
+		if err != nil {
+			i.logger.Warn("invalid htlc hashType",
+				zap.String("htlcID", id), zap.String("hashType", hashTypeStr), zap.Error(err))
+			hashType = 0
+		}
+
+		keyMaxSizeStr := txData.Inputs["keyMaxSize"]
+		keyMaxSize, err := strconv.Atoi(keyMaxSizeStr)
+		if err != nil {
+			i.logger.Warn("invalid htlc keyMaxSize",
+				zap.String("htlcID", id), zap.String("keyMaxSize", keyMaxSizeStr), zap.Error(err))
+			keyMaxSize = 0
+		}
+
 		amount := safeBigIntToInt64(paired.Amount, i.logger,
 			"htlc amount overflow", zap.String("htlcID", id))
 
