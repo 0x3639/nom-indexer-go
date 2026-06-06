@@ -16,6 +16,7 @@ type Repositories struct {
 	PillarUpdate *PillarUpdateRepository
 	Sentinel     *SentinelRepository
 	Stake        *StakeRepository
+	Htlc         *HtlcRepository
 	Fusion       *FusionRepository
 	Project      *ProjectRepository
 	ProjectPhase *ProjectPhaseRepository
@@ -41,6 +42,7 @@ func NewRepositories(pool *pgxpool.Pool) *Repositories {
 		PillarUpdate: NewPillarUpdateRepository(pool),
 		Sentinel:     NewSentinelRepository(pool),
 		Stake:        NewStakeRepository(pool),
+		Htlc:         NewHtlcRepository(pool),
 		Fusion:       NewFusionRepository(pool),
 		Project:      NewProjectRepository(pool),
 		ProjectPhase: NewProjectPhaseRepository(pool),

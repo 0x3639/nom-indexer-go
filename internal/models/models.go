@@ -470,3 +470,31 @@ type SyncStatus struct {
 	LastProgressAt       int64  `db:"last_progress_at"`
 	CheckedAt            int64  `db:"checked_at"`
 }
+
+// HtlcStatus represents the lifecycle state of an HTLC entry.
+type HtlcStatus int16
+
+const (
+	HtlcStatusActive    HtlcStatus = 0
+	HtlcStatusUnlocked  HtlcStatus = 1
+	HtlcStatusReclaimed HtlcStatus = 2
+)
+
+// Htlc represents a hash-time-locked contract entry.
+type Htlc struct {
+	ID                        string `db:"id"`
+	TimeLockedAddress         string `db:"time_locked_address"`
+	HashLockedAddress         string `db:"hash_locked_address"`
+	TokenStandard             string `db:"token_standard"`
+	Amount                    int64  `db:"amount"`
+	ExpirationTimestamp       int64  `db:"expiration_timestamp"`
+	HashType                  int16  `db:"hash_type"`
+	KeyMaxSize                int16  `db:"key_max_size"`
+	HashLock                  string `db:"hash_lock"`
+	Status                    int16  `db:"status"`
+	Preimage                  string `db:"preimage"`
+	CreationMomentumHeight    int64  `db:"creation_momentum_height"`
+	CreationMomentumTimestamp int64  `db:"creation_momentum_timestamp"`
+	SettleMomentumHeight      int64  `db:"settle_momentum_height"`
+	SettleMomentumTimestamp   int64  `db:"settle_momentum_timestamp"`
+}
