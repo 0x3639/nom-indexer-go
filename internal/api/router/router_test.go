@@ -148,6 +148,34 @@ func (s *stubSyncStatus) Get(_ context.Context) (*models.SyncStatus, error) {
 	return s.row, s.err
 }
 
+// TestSyncStatusAge covers the staleness boundary that tells /readyz the
+// watchdog is inactive (its node/drift/state are frozen). syncStatusStaleAfter
+// is 5m, so checked_at within that window is fresh and older is stale.
+func TestSyncStatusAge(t *testing.T) {
+	now := time.Unix(2_000_000_000, 0)
+	cases := []struct {
+		name      string
+		checkedAt int64
+		wantStale bool
+	}{
+		{"just now is fresh", now.Unix(), false},
+		{"one minute ago is fresh", now.Unix() - 60, false},
+		{"just under 5m is fresh", now.Unix() - int64(syncStatusStaleAfter/time.Second) + 1, false},
+		{"just over 5m is stale", now.Unix() - int64(syncStatusStaleAfter/time.Second) - 1, true},
+		{"ten minutes ago is stale (watchdog disabled)", now.Unix() - 600, true},
+		{"never written (checked_at 0) is stale", 0, true},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			age, stale := syncStatusAge(&models.SyncStatus{CheckedAt: tc.checkedAt}, now)
+			if stale != tc.wantStale {
+				t.Fatalf("syncStatusAge(checked_at=%d) stale=%v (age=%d), want stale=%v",
+					tc.checkedAt, stale, age, tc.wantStale)
+			}
+		})
+	}
+}
+
 // TestReadyzNilPoolReturnsOK exercises the short-circuit branch used by
 // the test router: with no pool, readyz responds 200 without consulting
 // the sync getter (so a nil getter is also safe here).

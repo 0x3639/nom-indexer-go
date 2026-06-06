@@ -6568,6 +6568,14 @@ indexer-side degradation:
 - 200 ok if the indexer is synced.
 - 503 `indexer_drift` if the indexer has drifted past the streak
   threshold.
+- 200 `{"status":"ready","watchdog":"inactive","watchdog_stale_seconds":N}`
+  when the row hasn't been written for > 5 minutes. That row is written
+  only by the watchdog loop, so a stale `checked_at` means the watchdog is
+  **disabled or stopped** — its `node`/`drift`/`state` are frozen and would
+  be misleading, so `/readyz` reports them as inactive rather than serving
+  the stale values. (Expected whenever `indexer.watchdog.enabled: false`,
+  e.g. during an initial cold sync — use the indexer's `/api/v1/status`
+  `latest_height` for live progress in that mode.)
 
 Docker compose has a healthcheck wired to the indexer `/healthz`; this
 keeps the container restart policy informed of process liveness without

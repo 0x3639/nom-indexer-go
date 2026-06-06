@@ -181,11 +181,29 @@ const minSchemaVersion = 13 // bumped from 12 — adds indexer_sync_status table
 // without threading config through the router.
 const unhealthyStreakForReady = 2 // matches indexer watchdog default
 
+// syncStatusStaleAfter is how old indexer_sync_status.checked_at may be
+// before /readyz treats the watchdog's reported node/drift/state as stale.
+// That row is written ONLY by the watchdog loop (default tick 30s), so a
+// checked_at older than this means the watchdog is disabled or stopped and
+// its classification is frozen — readyz must not present it as current.
+// Generous (5 min) so a longer-configured watchdog interval can't trip a
+// false "inactive".
+const syncStatusStaleAfter = 5 * time.Minute
+
 // syncStatusGetter is the subset of *repository.SyncStatusRepository
 // that readyz needs. Defined as an interface so tests can supply a
 // stub and avoid spinning up a Postgres for the drift-check path.
 type syncStatusGetter interface {
 	Get(ctx context.Context) (*models.SyncStatus, error)
+}
+
+// syncStatusAge returns how long ago (seconds) the watchdog last wrote the
+// indexer_sync_status row, and whether that exceeds syncStatusStaleAfter —
+// i.e. the watchdog is inactive and its node/drift/state are frozen. Pure so
+// the staleness boundary can be unit-tested without a Postgres-backed pool.
+func syncStatusAge(ss *models.SyncStatus, now time.Time) (ageSeconds int64, stale bool) {
+	age := now.Unix() - ss.CheckedAt
+	return age, age > int64(syncStatusStaleAfter/time.Second)
 }
 
 // readyz verifies the database is reachable AND that the indexer schema
@@ -263,6 +281,18 @@ func readyz(pool *pgxpool.Pool, sync syncStatusGetter) http.HandlerFunc {
 					return
 				}
 				httpx.WriteProblem(w, http.StatusServiceUnavailable, "sync_status_unreadable", err.Error())
+				return
+			}
+			// If the watchdog hasn't updated the row recently it's disabled or
+			// stopped: node/drift/state are frozen and must not be presented as
+			// current (nor used for the drift 503). Report ready — the DB and
+			// schema are fine — but flag the watchdog as inactive.
+			if age, stale := syncStatusAge(ss, time.Now()); stale {
+				httpx.WriteJSON(w, http.StatusOK, map[string]any{
+					"status":                 "ready",
+					"watchdog":               "inactive",
+					"watchdog_stale_seconds": age,
+				})
 				return
 			}
 			if ss.State != "synced" && ss.ConsecutiveBadChecks >= unhealthyStreakForReady {
