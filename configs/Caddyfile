@@ -1,0 +1,74 @@
+# Env-driven reverse proxy for the nom-indexer API + MCP.
+#
+# Domains and the ACME email come from the environment, injected by
+# docker-compose.caddy.yml from your .env. The SAME file works for both:
+#
+#   production : API_DOMAIN=api.example.com   -> public Let's Encrypt certs
+#   local test : API_DOMAIN=api.localhost     -> Caddy's internal (self-signed) CA
+#
+# Caddy automatically uses its internal CA for *.localhost and other
+# non-public names, so no public DNS, ACME, or email is needed locally.
+# Defaults (api.localhost / mcp.localhost / admin@localhost) live in the
+# compose overlay, so a bare local `up` works without setting anything.
+{
+	# Used only for public ACME certs (expiry notices); ignored by the
+	# internal CA that serves *.localhost.
+	email {$ACME_EMAIL}
+
+	# Testing TLS against a real public domain? Uncomment to use Let's
+	# Encrypt staging and avoid burning prod rate limits while iterating.
+	# acme_ca https://acme-staging-v02.api.letsencrypt.org/directory
+}
+
+# --- REST API -------------------------------------------------------------
+{$API_DOMAIN} {
+	encode zstd gzip
+
+	# Upstream port follows API_PORT (passed in by the compose overlay,
+	# default 8080) so it stays in sync if the base compose port is changed.
+	reverse_proxy api:{$API_PORT} {
+		header_up X-Forwarded-For {remote_host}
+		header_up X-Forwarded-Proto {scheme}
+	}
+
+	header {
+		Strict-Transport-Security "max-age=31536000; includeSubDomains"
+		X-Content-Type-Options "nosniff"
+		Referrer-Policy "no-referrer"
+		-Server
+	}
+
+	log {
+		output file /data/access-api.log {
+			roll_size 50MiB
+			roll_keep 5
+		}
+	}
+}
+
+# --- MCP server (Streamable HTTP / SSE) -----------------------------------
+# No `encode` here: gzip buffers responses, which breaks SSE streaming.
+{$MCP_DOMAIN} {
+	# Upstream port follows MCP_PORT (passed in by the compose overlay,
+	# default 8081) so it stays in sync if the base compose port is changed.
+	reverse_proxy mcp:{$MCP_PORT} {
+		# Flush streamed (text/event-stream) responses immediately rather
+		# than buffering — required for MCP's Streamable HTTP transport.
+		flush_interval -1
+		header_up X-Forwarded-For {remote_host}
+		header_up X-Forwarded-Proto {scheme}
+	}
+
+	header {
+		Strict-Transport-Security "max-age=31536000; includeSubDomains"
+		X-Content-Type-Options "nosniff"
+		-Server
+	}
+
+	log {
+		output file /data/access-mcp.log {
+			roll_size 50MiB
+			roll_keep 5
+		}
+	}
+}

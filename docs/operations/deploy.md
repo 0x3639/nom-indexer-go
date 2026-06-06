@@ -113,6 +113,10 @@ docker compose up -d --build
 - **Set `BACKFILL_ON_STARTUP=false`** (the default) so restarts don't
   block on gap-filling.
 - **Don't commit `.env`.** It contains the DB password.
+- **Expose the API/MCP behind TLS.** Don't publish `8080`/`8081` (or the
+  `9090`/`9091` metrics ports) to the internet directly. Use the bundled
+  Caddy overlay for automatic HTTPS and keep the rest loopback-only — see
+  [`reverse-proxy.md`](reverse-proxy.md).
 - **Monitor sync progress.** See
   [`monitoring.md`](monitoring.md).
 

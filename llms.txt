@@ -84,6 +84,7 @@ Hash-formatted flat index of every documentation page, generated from mkdocs.yml
 ## Operations
 
 - [Deploy](docs/operations/deploy.md): The canonical deployment is Docker Compose. The core stack is the
+- [Reverse proxy + TLS](docs/operations/reverse-proxy.md): The indexer itself has no public surface — only the **API** (`cmd/api`,
 - [Local znnd + bootstrap](docs/operations/znnd-bootstrap.md): The compose stack ships an optional **local-node** profile that bundles a
 - [Monitoring](docs/operations/monitoring.md): What "healthy" looks like and how to spot trouble.
 - [Sync watchdog](docs/operations/watchdog.md): The watchdog detects two failure modes and reacts in-process so the
