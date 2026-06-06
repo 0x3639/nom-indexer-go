@@ -1,19 +1,44 @@
 # Caddy reverse proxy with automatic HTTPS for the public API + MCP.
 #
-# Additive overlay — run it alongside the base compose file:
+# This is the PRODUCTION overlay. It does two things:
+#   1. Adds the `caddy` service (TLS edge on 80/443).
+#   2. Rebinds the app/metrics/Postgres host ports to loopback (127.0.0.1)
+#      via `ports: !override`, so only Caddy faces the internet. Docker's
+#      published ports bypass `ufw`, so this binding — not just a firewall —
+#      is what keeps 5432/8080/9090/8081/9091 off the public interface.
+#
+# Run it alongside the base compose file:
 #
 #   docker compose -f docker-compose.yml -f docker-compose.caddy.yml --profile local-node up -d
 #
 # (Tip: rename this to docker-compose.override.yml and Compose auto-loads it.)
 #
 # Caddy is OPT-IN: omit this file for local dev and hit the host ports
-# directly (http://localhost:8080). Include it on a public server for TLS.
+# directly (http://localhost:8080). Include it on a public server for TLS,
+# or locally to exercise the proxy path (defaults serve *.localhost via
+# Caddy's internal CA).
 #
-# The domains + ACME email are read from your environment and passed to the
-# Caddy container, which substitutes them into configs/Caddyfile. The
-# defaults below make a bare local run work with Caddy's internal CA
-# (api.localhost / mcp.localhost) — no public DNS or email required.
+# Requires Docker Compose v2.24+ for the `!override` tag.
+
 services:
+  # Loopback-only publishes — Caddy reaches these over the docker network by
+  # service name, so they never need a public host binding. `!override`
+  # REPLACES the base `ports` list (the default merge would append, leaving
+  # the 0.0.0.0 binding in place).
+  postgres:
+    ports: !override
+      - "127.0.0.1:5432:5432"
+
+  api:
+    ports: !override
+      - "127.0.0.1:${API_PORT:-8080}:${API_PORT:-8080}"
+      - "127.0.0.1:${API_METRICS_PORT:-9090}:${API_METRICS_PORT:-9090}"
+
+  mcp:
+    ports: !override
+      - "127.0.0.1:${MCP_PORT:-8081}:${MCP_PORT:-8081}"
+      - "127.0.0.1:${MCP_METRICS_PORT:-9091}:${MCP_METRICS_PORT:-9091}"
+
   caddy:
     image: caddy:2-alpine
     container_name: nom-indexer-caddy
@@ -24,6 +49,10 @@ services:
       API_DOMAIN: ${API_DOMAIN:-api.localhost}
       MCP_DOMAIN: ${MCP_DOMAIN:-mcp.localhost}
       ACME_EMAIL: ${ACME_EMAIL:-admin@localhost}
+      # Upstream ports the Caddyfile proxies to. Default to the base
+      # compose's defaults; track API_PORT/MCP_PORT if you change them.
+      API_PORT: ${API_PORT:-8080}
+      MCP_PORT: ${MCP_PORT:-8081}
     ports:
       - "80:80"
       - "443:443"

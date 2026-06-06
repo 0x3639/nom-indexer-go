@@ -24,7 +24,9 @@
 {$API_DOMAIN} {
 	encode zstd gzip
 
-	reverse_proxy api:8080 {
+	# Upstream port follows API_PORT (passed in by the compose overlay,
+	# default 8080) so it stays in sync if the base compose port is changed.
+	reverse_proxy api:{$API_PORT} {
 		header_up X-Forwarded-For {remote_host}
 		header_up X-Forwarded-Proto {scheme}
 	}
@@ -47,7 +49,9 @@
 # --- MCP server (Streamable HTTP / SSE) -----------------------------------
 # No `encode` here: gzip buffers responses, which breaks SSE streaming.
 {$MCP_DOMAIN} {
-	reverse_proxy mcp:8081 {
+	# Upstream port follows MCP_PORT (passed in by the compose overlay,
+	# default 8081) so it stays in sync if the base compose port is changed.
+	reverse_proxy mcp:{$MCP_PORT} {
 		# Flush streamed (text/event-stream) responses immediately rather
 		# than buffering — required for MCP's Streamable HTTP transport.
 		flush_interval -1

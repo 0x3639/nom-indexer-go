@@ -6059,40 +6059,50 @@ specifically want to exercise the proxy path locally (see
 | Service / port | Exposure |
 |---|---|
 | Caddy `80`, `443` (+`443/udp`) | **Public** — the only internet-facing ports. |
-| API `8080`, MCP `8081` | **Private.** Caddy reaches them over the internal `nom-indexer` docker network by service name (`api:8080`, `mcp:8081`). Bind their host publishes to loopback. |
-| API metrics `9090`, MCP metrics `9091` | **Private — never proxy these.** `/metrics` is unauthenticated. They live on separate ports, so fronting `8080`/`8081` never exposes them. |
-| Postgres `5432` | **Private.** Bind to loopback; never expose it. |
+| API `8080`, MCP `8081` | **Private.** Caddy reaches them over the internal `nom-indexer` docker network by service name. The overlay rebinds their host publishes to loopback. |
+| API metrics `9090`, MCP metrics `9091` | **Private — never proxy these.** `/metrics` is unauthenticated. They live on separate ports, so fronting the API/MCP ports never exposes them. |
+| Postgres `5432` | **Private.** The overlay rebinds it to loopback; never expose it. |
 | znnd P2P `35995/tcp+udp` | Public (peer connectivity). RPC/WS stay internal. |
 
-## Why loopback binding matters
+## Why loopback binding matters (the overlay does it for you)
 
 Docker programs its own `iptables` rules that are evaluated **before**
 `ufw`, so `ufw deny 8080` does **not** block a Docker-published port on a
-bare VPS. Two robust fixes, ideally both:
+bare VPS — a firewall alone is not enough. So the overlay
+(`docker-compose.caddy.yml`) rebinds Postgres, the API, MCP, and both
+metrics ports to `127.0.0.1`, leaving only Caddy's `80`/`443` public. It
+does this with Compose's `!override` tag (requires **Compose v2.24+**), which
+replaces the base `ports` list rather than appending to it — equivalent to:
 
-1. **Bind published ports to `127.0.0.1`** in `docker-compose.yml` so Docker
-   only listens on loopback (Caddy still reaches the containers via the
-   docker network). Provider-agnostic.
-2. **Use a cloud security group** — it filters at the network edge, before
-   the host's Docker rules, so it *does* block Docker-published ports.
-
-Apply this to `docker-compose.yml`:
-
-```diff
-  # postgres
--      - "5432:5432"
-+      - "127.0.0.1:5432:5432"
-  # api
--      - "${API_PORT:-8080}:${API_PORT:-8080}"
--      - "${API_METRICS_PORT:-9090}:${API_METRICS_PORT:-9090}"
-+      - "127.0.0.1:${API_PORT:-8080}:${API_PORT:-8080}"
-+      - "127.0.0.1:${API_METRICS_PORT:-9090}:${API_METRICS_PORT:-9090}"
-  # mcp
--      - "${MCP_PORT:-8081}:${MCP_PORT:-8081}"
--      - "${MCP_METRICS_PORT:-9091}:${MCP_METRICS_PORT:-9091}"
-+      - "127.0.0.1:${MCP_PORT:-8081}:${MCP_PORT:-8081}"
-+      - "127.0.0.1:${MCP_METRICS_PORT:-9091}:${MCP_METRICS_PORT:-9091}"
+```yaml
+  api:
+    ports: !override
+      - "127.0.0.1:${API_PORT:-8080}:${API_PORT:-8080}"
+      - "127.0.0.1:${API_METRICS_PORT:-9090}:${API_METRICS_PORT:-9090}"
 ```
+
+You don't apply this by hand — including the overlay is what makes the
+documented production command secure. Verify the rendered result with:
+
+```bash
+docker compose -f docker-compose.yml -f docker-compose.caddy.yml config | grep -E 'published|host_ip'
+# every app/metrics/postgres entry should show host_ip: 127.0.0.1
+```
+
+Add a **cloud security group** too if your provider has one — it filters at
+the network edge (before Docker's rules) and is good defence in depth.
+
+> **Fronting the services some other way** (external load balancer, a Caddy
+> on a separate host)? You're not using this overlay, so apply the loopback
+> binding yourself — copy the `!override` block above into your own override,
+> or rely on a security group.
+
+### Upstream ports track `API_PORT` / `MCP_PORT`
+
+The overlay passes `API_PORT` / `MCP_PORT` into the Caddy container, and the
+Caddyfile proxies to `api:{$API_PORT}` / `mcp:{$MCP_PORT}`. So if you change
+either port in `.env`, the listener, the host publish, and Caddy's upstream
+all stay in sync — no Caddyfile edit needed.
 
 ## Production steps
 
