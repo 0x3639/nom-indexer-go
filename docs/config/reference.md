@@ -103,6 +103,25 @@ for the on-wire contract and client setup guides.
 | `mcp.cors_allowed_origins` | string | `MCP_CORS_ALLOWED_ORIGINS` | `""` (deny) | Comma-separated origin allowlist for browser MCP clients. Empty disables CORS entirely. |
 | `mcp.rate_limit_per_minute` | int | `MCP_RATE_LIMIT_PER_MINUTE` | `60` | Per-JWT-subject sliding-window limit for MCP transport requests. `0` or negative disables rate limiting. |
 
+## Webhooks (`cmd/indexer` only)
+
+The fields below are read only by the indexer binary; the API and MCP
+processes ignore them. Disabled by default. The endpoint list, secrets,
+and per-endpoint event filters are **YAML-only** — only the master
+on/off switch has an env var. See
+[`operations/webhooks.md`](../operations/webhooks.md) for event payloads,
+the signature scheme, and delivery semantics.
+
+| Field | Type | Env var | Default | Description |
+|---|---|---|---|---|
+| `webhooks.enabled` | bool | `WEBHOOKS_ENABLED` | `false` | Master switch. When false the dispatcher is never started and event emission allocates nothing. |
+| `webhooks.timeout_seconds` | int | (no env var) | `5` | Per-request HTTP timeout, in seconds, applied to each delivery attempt. |
+| `webhooks.max_retries` | int | (no env var) | `3` | Resend attempts after the first failure (network error or non-2xx), with linear backoff. Then the event is dropped with a log line. |
+| `webhooks.endpoints` | list | (no env var) | `[]` | Subscribers. Each entry has the fields below. An empty list means nothing is delivered even when `enabled` is true. |
+| `webhooks.endpoints[].url` | string | (no env var) | — | Destination URL. Each event is `POST`ed as a JSON body. |
+| `webhooks.endpoints[].secret` | string | (no env var) | `""` | If set, signs the request with header `X-Webhook-Signature: <hex HMAC-SHA256 of the raw body>`. Empty means unsigned. Stored in plaintext — keep `config.yaml` private. |
+| `webhooks.endpoints[].events` | list | (no env var) | `[]` | Allowlist of event types this endpoint receives (`momentum.inserted`, `account_block.inserted`). **Empty or omitted = all events.** |
+
 ## Migrations
 
 | Variable | Default | Description |

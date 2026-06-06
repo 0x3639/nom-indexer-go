@@ -91,12 +91,14 @@ func newTestDB(t *testing.T) *pgxpool.Pool {
 	ctx := context.Background()
 	_, err := testPool.Exec(ctx, `
 		TRUNCATE momentums, accounts, balances, account_blocks, tokens,
-		pillars, pillar_updates, sentinels, stakes, projects, project_phases,
+		pillars, pillar_updates, sentinels, stakes, htlcs, swap_retrievals, swap_assets,
+		projects, project_phases,
 		votes, fusions, cumulative_rewards, reward_transactions,
 		wrap_token_requests, unwrap_token_requests,
 		token_mints, token_burns,
 		bridge_networks, bridge_network_tokens, bridge_admin, bridge_guardians,
 		bridge_orchestrator_info, bridge_security_info,
+		bridge_time_challenges,
 		delegations,
 		network_stat_histories, token_stat_histories, pillar_stat_histories,
 		bridge_stat_histories,

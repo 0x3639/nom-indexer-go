@@ -16,6 +16,7 @@ import (
 
 	"github.com/0x3639/nom-indexer-go/internal/models"
 	"github.com/0x3639/nom-indexer-go/internal/repository"
+	"github.com/0x3639/nom-indexer-go/internal/webhooks"
 )
 
 // Indexer handles the indexing of blockchain data
@@ -47,6 +48,12 @@ type Indexer struct {
 	syncStateInternal *syncState
 
 	watchdogCfg WatchdogConfigForIndexer
+
+	// webhooks dispatches momentum.inserted / account_block.inserted
+	// events to configured subscribers AFTER each per-momentum transaction
+	// commits. nil when webhooks are disabled (the default), in which case
+	// the emit path is a single nil check with zero further work.
+	webhooks *webhooks.Dispatcher
 
 	// clientFactory builds a fresh SDK client for a given URL. nil means
 	// "use rpc_client.NewRpcClient" (production). Integration tests
@@ -100,6 +107,25 @@ func NewIndexerWithNodes(
 	i.syncStateInternal = newSyncState(nodePool.Len())
 	i.watchdogCfg = watchdog
 	return i
+}
+
+// AttachWebhooks builds and starts a webhook dispatcher for the given
+// endpoints and stores it on the indexer. The dispatcher is stopped in
+// Run's teardown. Pass an empty endpoints slice or never call this to
+// leave webhooks disabled (the default). Callers own the config→Endpoint
+// mapping so internal/indexer stays decoupled from internal/config,
+// mirroring the toIndexerNodes pattern in cmd/indexer.
+func (i *Indexer) AttachWebhooks(endpoints []webhooks.Endpoint, timeout time.Duration, maxRetries int) {
+	// Defensively idempotent: a second call would overwrite i.webhooks,
+	// orphaning the already-started dispatcher (goroutine leak). Mirror the
+	// dispatcher's own hardened idempotent API and no-op instead.
+	if i.webhooks != nil {
+		i.logger.Warn("AttachWebhooks called more than once; ignoring duplicate, keeping existing dispatcher")
+		return
+	}
+	d := webhooks.New(endpoints, timeout, maxRetries, i.logger)
+	d.Start()
+	i.webhooks = d
 }
 
 // client returns the currently-active SDK client. All RPC call sites
@@ -216,6 +242,13 @@ func (i *Indexer) HealthSnapshot() HealthSnapshot {
 // returning so callers can rely on a clean shutdown.
 func (i *Indexer) Run(ctx context.Context) error {
 	i.logger.Info("starting indexer")
+
+	// Stop the webhook dispatcher on shutdown. Stop is idempotent and
+	// safe even if an Emit races with it. Deferred here so it runs once
+	// on every Run return path (ctx cancel, sync error, subscription end).
+	if i.webhooks != nil {
+		defer i.webhooks.Stop()
+	}
 
 	// Register SDK callbacks for connection events on the initial client.
 	// The SDK handles reconnection automatically; we just need to restart
@@ -660,8 +693,46 @@ func (i *Indexer) updateCachedData(ctx context.Context) error {
 
 	i.logger.Info("updateCachedData: projects done", zap.Int("projects", projectCount), zap.Int("phases", phaseCount))
 
+	// Snapshot remaining legacy genesis-swap balances.
+	i.syncSwapAssets(ctx)
+
 	i.logger.Info("updateCachedData: complete")
 	return nil
+}
+
+// syncSwapAssets snapshots the remaining unswapped legacy genesis balances.
+//
+// SwapApi.GetAssets() returns map[types.Hash]*embedded.SwapAssetEntrySimple
+// keyed by keyIdHash, each entry exposing Znn/Qsr (*big.Int). We upsert one
+// swap_assets row per keyIdHash with the current remaining balances. Failures
+// are logged and skipped so a swap RPC error doesn't abort the cached-data
+// refresh.
+func (i *Indexer) syncSwapAssets(ctx context.Context) {
+	assets, err := i.client().SwapApi.GetAssets()
+	if err != nil {
+		i.logger.Warn("swap sync: GetAssets failed", zap.Error(err))
+		return
+	}
+	now := time.Now().Unix()
+	for keyIDHash, entry := range assets {
+		if entry == nil {
+			continue
+		}
+		znn := safeBigIntToInt64(entry.Znn, i.logger, "swap asset znn overflow",
+			zap.String("keyIdHash", keyIDHash.String()))
+		qsr := safeBigIntToInt64(entry.Qsr, i.logger, "swap asset qsr overflow",
+			zap.String("keyIdHash", keyIDHash.String()))
+		if err := i.repos.Swap.UpsertAsset(ctx, &models.SwapAsset{
+			KeyIDHash:            keyIDHash.String(),
+			Znn:                  znn,
+			Qsr:                  qsr,
+			LastUpdatedTimestamp: now,
+		}); err != nil {
+			i.logger.Warn("swap sync: upsert asset failed",
+				zap.String("keyIdHash", keyIDHash.String()), zap.Error(err))
+		}
+	}
+	i.logger.Info("swap sync: assets snapshot complete", zap.Int("count", len(assets)))
 }
 
 // runCachedDataSyncLoop runs cached data sync (pillars, sentinels, projects) on a separate schedule
@@ -757,9 +828,14 @@ func (i *Indexer) updateBridgeConfig(ctx context.Context) error {
 		}
 	}
 
+	// Captured from GetSecurityInfo for the time-challenge loop below so we
+	// don't issue a second RPC. Zero if security info is unavailable.
+	var softDelay, adminDelay uint64
 	if sec, err := i.client().BridgeApi.GetSecurityInfo(); err != nil {
 		i.logger.Warn("bridge config: GetSecurityInfo failed", zap.Error(err))
 	} else if sec != nil {
+		softDelay = sec.SoftDelay
+		adminDelay = sec.AdministratorDelay
 		if err := i.repos.BridgeConfig.UpsertSecurityInfo(ctx, &models.BridgeSecurityInfo{
 			AdministratorDelay:   int64(sec.AdministratorDelay),
 			SoftDelay:            int64(sec.SoftDelay),
@@ -872,6 +948,42 @@ func (i *Indexer) updateBridgeConfig(ctx context.Context) error {
 			break
 		}
 		pageIndex++
+	}
+
+	// Time challenges: pending delay windows for security-sensitive bridge
+	// methods. The set is authoritative — challenges vanish when executed or
+	// expired — so prune rows not in the latest list.
+	if tcl, err := i.client().BridgeApi.GetTimeChallengesInfo(); err != nil {
+		i.logger.Warn("bridge config: GetTimeChallengesInfo failed", zap.Error(err))
+	} else if tcl != nil {
+		keep := make([]string, 0, len(tcl.List))
+		for _, tc := range tcl.List {
+			delay := int64(softDelay)
+			switch tc.MethodName {
+			case "ChangeAdministrator", "NominateGuardians":
+				delay = int64(adminDelay)
+			}
+			// First executable height is start+delay+1: go-zenon rejects while
+			// start+delay >= currentHeight (ErrTimeChallengeNotDue, common.go),
+			// so the action only passes once currentHeight > start+delay. Store
+			// end_height as that first executable height so "ready when
+			// current_height >= end_height" is exact.
+			if err := i.repos.BridgeConfig.UpsertTimeChallenge(ctx, &models.BridgeTimeChallenge{
+				MethodName:           tc.MethodName,
+				ParamsHash:           tc.ParamsHash.String(),
+				ChallengeStartHeight: int64(tc.ChallengeStartHeight),
+				Delay:                delay,
+				EndHeight:            int64(tc.ChallengeStartHeight) + delay + 1,
+				LastUpdatedTimestamp: now,
+			}); err != nil {
+				i.logger.Warn("bridge config: upsert time challenge failed", zap.Error(err))
+				continue
+			}
+			keep = append(keep, tc.MethodName)
+		}
+		if err := i.repos.BridgeConfig.DeleteTimeChallengesNotIn(ctx, keep); err != nil {
+			i.logger.Warn("bridge config: prune time challenges failed", zap.Error(err))
+		}
 	}
 
 	return nil

@@ -470,3 +470,60 @@ type SyncStatus struct {
 	LastProgressAt       int64  `db:"last_progress_at"`
 	CheckedAt            int64  `db:"checked_at"`
 }
+
+// HtlcStatus represents the lifecycle state of an HTLC entry.
+type HtlcStatus int16
+
+const (
+	HtlcStatusActive    HtlcStatus = 0
+	HtlcStatusUnlocked  HtlcStatus = 1
+	HtlcStatusReclaimed HtlcStatus = 2
+)
+
+// Htlc represents a hash-time-locked contract entry.
+type Htlc struct {
+	ID                        string `db:"id"`
+	TimeLockedAddress         string `db:"time_locked_address"`
+	HashLockedAddress         string `db:"hash_locked_address"`
+	TokenStandard             string `db:"token_standard"`
+	Amount                    int64  `db:"amount"`
+	ExpirationTimestamp       int64  `db:"expiration_timestamp"`
+	HashType                  int16  `db:"hash_type"`
+	KeyMaxSize                int16  `db:"key_max_size"`
+	HashLock                  string `db:"hash_lock"`
+	Status                    int16  `db:"status"`
+	Preimage                  string `db:"preimage"`
+	CreationMomentumHeight    int64  `db:"creation_momentum_height"`
+	CreationMomentumTimestamp int64  `db:"creation_momentum_timestamp"`
+	SettleMomentumHeight      int64  `db:"settle_momentum_height"`
+	SettleMomentumTimestamp   int64  `db:"settle_momentum_timestamp"`
+}
+
+// SwapRetrieval is one RetrieveAssets claim against the legacy genesis swap.
+type SwapRetrieval struct {
+	ID                string `db:"id"`
+	Address           string `db:"address"`
+	PublicKey         string `db:"public_key"`
+	ZnnAmount         int64  `db:"znn_amount"`
+	QsrAmount         int64  `db:"qsr_amount"`
+	MomentumHeight    int64  `db:"momentum_height"`
+	MomentumTimestamp int64  `db:"momentum_timestamp"`
+}
+
+// SwapAsset is a remaining unswapped genesis balance keyed by keyIdHash.
+type SwapAsset struct {
+	KeyIDHash            string `db:"key_id_hash"`
+	Znn                  int64  `db:"znn"`
+	Qsr                  int64  `db:"qsr"`
+	LastUpdatedTimestamp int64  `db:"last_updated_timestamp"`
+}
+
+// BridgeTimeChallenge is a pending time-locked bridge security operation.
+type BridgeTimeChallenge struct {
+	MethodName           string `db:"method_name"`
+	ParamsHash           string `db:"params_hash"`
+	ChallengeStartHeight int64  `db:"challenge_start_height"`
+	Delay                int64  `db:"delay"`
+	EndHeight            int64  `db:"end_height"`
+	LastUpdatedTimestamp int64  `db:"last_updated_timestamp"`
+}

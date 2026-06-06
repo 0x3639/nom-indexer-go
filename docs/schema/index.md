@@ -41,6 +41,7 @@ no-foreign-keys design apply uniformly.
 | [`sentinels`](sentinels.md) | Sentinel node registrations. |
 | [`stakes`](stakes.md) | Staking entries (with ABI-derived `cancel_id`). |
 | [`fusions`](fusions.md) | Plasma fusion entries (with ABI-derived `cancel_id`). |
+| [`htlcs`](htlcs.md) | Hash-time-locked contract entries (Create → Unlock/Reclaim). |
 
 ### Accelerator-Z
 
@@ -69,6 +70,14 @@ no-foreign-keys design apply uniformly.
 | [`bridge_guardians`](bridge_guardians.md) | Active guardian set. |
 | [`bridge_orchestrator_info`](bridge_orchestrator_info.md) | Singleton with orchestrator parameters. |
 | [`bridge_security_info`](bridge_security_info.md) | Singleton with security delay parameters. |
+| [`bridge_time_challenges`](bridge_time_challenges.md) | Pending delay windows for security-sensitive bridge methods. |
+
+### Swap (legacy)
+
+| Table | What it holds |
+|---|---|
+| [`swap_retrievals`](swap_retrievals.md) | Per-claim genesis-swap `RetrieveAssets` events. |
+| [`swap_assets`](swap_assets.md) | Remaining unswapped genesis balances per `keyIdHash` (snapshot). |
 
 ### Daily snapshots
 

@@ -104,3 +104,16 @@ indexer:
   health:
     enabled: true
     port: 9092
+
+# Outbound event push (indexer process only). Disabled by default. The
+# endpoint list, secrets, and per-endpoint event filters are YAML-only;
+# only webhooks.enabled has an env var (WEBHOOKS_ENABLED). See
+# docs/operations/webhooks.md for payloads, signing, and delivery semantics.
+# webhooks:
+#   enabled: false
+#   timeout_seconds: 5
+#   max_retries: 3
+#   endpoints:
+#     - url: "https://example.com/hook"
+#       secret: "change-me"          # signs X-Webhook-Signature (HMAC-SHA256); keep config.yaml private
+#       events: ["momentum.inserted", "account_block.inserted"]   # empty/omitted = all events

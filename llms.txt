@@ -37,6 +37,7 @@ Hash-formatted flat index of every documentation page, generated from mkdocs.yml
 - [sentinels](docs/schema/sentinels.md): Active sentinel node registrations. Refreshed from `SentinelApi.GetAllActive`
 - [stakes](docs/schema/stakes.md): One row per `Stake.Stake` event. Tracks the staked amount, duration, expiry,
 - [fusions](docs/schema/fusions.md): Plasma fusion entries — QSR fused (locked) to grant plasma to a beneficiary
+- [htlcs](docs/schema/htlcs.md): One row per HTLC (hash-time-locked contract) entry. An HTLC is a conditional
 ### Accelerator-Z
 
 - [projects](docs/schema/projects.md): Accelerator-Z funding proposals. Refreshed from
@@ -56,6 +57,11 @@ Hash-formatted flat index of every documentation page, generated from mkdocs.yml
 - [bridge_guardians](docs/schema/bridge_guardians.md): Active bridge guardians — the set of addresses that can vote on bridge
 - [bridge_orchestrator_info](docs/schema/bridge_orchestrator_info.md): Singleton table holding the bridge orchestrator's operating parameters
 - [bridge_security_info](docs/schema/bridge_security_info.md): Singleton with the bridge security delay parameters from
+- [bridge_time_challenges](docs/schema/bridge_time_challenges.md): Pending **time challenges** for security-sensitive bridge methods. A time
+### Swap (legacy)
+
+- [swap_retrievals](docs/schema/swap_retrievals.md): One row per legacy genesis-swap **RetrieveAssets** claim. At network genesis,
+- [swap_assets](docs/schema/swap_assets.md): A snapshot of the **remaining unswapped legacy genesis balances** still held by
 ### Daily snapshots
 
 - [network_stat_histories](docs/schema/network_stat_histories.md): Daily network-wide snapshot — one row per UTC date. Aggregates total /
@@ -81,6 +87,7 @@ Hash-formatted flat index of every documentation page, generated from mkdocs.yml
 - [Local znnd + bootstrap](docs/operations/znnd-bootstrap.md): The compose stack ships an optional **local-node** profile that bundles a
 - [Monitoring](docs/operations/monitoring.md): What "healthy" looks like and how to spot trouble.
 - [Sync watchdog](docs/operations/watchdog.md): The watchdog detects two failure modes and reacts in-process so the
+- [Webhooks](docs/operations/webhooks.md): The indexer can push event notifications to external HTTP endpoints as it
 - [Backfill](docs/operations/backfill.md): Three paths exist for filling gaps in the indexer's tables. Pick by use case.
 - [Backup and restore](docs/operations/backup-restore.md): Two shell scripts ship with the repo:
 - [Failure modes](docs/operations/failure-modes.md): Known ways the indexer can stall or misbehave, with detection and

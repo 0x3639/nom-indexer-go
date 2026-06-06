@@ -116,6 +116,7 @@ nav:
       - sentinels: schema/sentinels.md
       - stakes: schema/stakes.md
       - fusions: schema/fusions.md
+      - htlcs: schema/htlcs.md
     - Accelerator-Z:
       - projects: schema/projects.md
       - project_phases: schema/project_phases.md
@@ -132,6 +133,10 @@ nav:
       - bridge_guardians: schema/bridge_guardians.md
       - bridge_orchestrator_info: schema/bridge_orchestrator_info.md
       - bridge_security_info: schema/bridge_security_info.md
+      - bridge_time_challenges: schema/bridge_time_challenges.md
+    - Swap (legacy):
+      - swap_retrievals: schema/swap_retrievals.md
+      - swap_assets: schema/swap_assets.md
     - Daily snapshots:
       - network_stat_histories: schema/network_stat_histories.md
       - token_stat_histories: schema/token_stat_histories.md
@@ -154,6 +159,7 @@ nav:
     - Local znnd + bootstrap: operations/znnd-bootstrap.md
     - Monitoring: operations/monitoring.md
     - Sync watchdog: operations/watchdog.md
+    - Webhooks: operations/webhooks.md
     - Backfill: operations/backfill.md
     - Backup and restore: operations/backup-restore.md
     - Failure modes: operations/failure-modes.md

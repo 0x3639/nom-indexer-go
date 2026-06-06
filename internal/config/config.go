@@ -23,7 +23,26 @@ type Config struct {
 	API               APIConfig      `mapstructure:"api"`
 	MCP               MCPConfig      `mapstructure:"mcp"`
 	Indexer           IndexerConfig  `mapstructure:"indexer"`
+	Webhooks          WebhooksConfig `mapstructure:"webhooks"`
 	BackfillOnStartup bool           `mapstructure:"backfill_on_startup"`
+}
+
+// WebhooksConfig configures outbound event push.
+type WebhooksConfig struct {
+	Enabled   bool              `mapstructure:"enabled"`
+	Endpoints []WebhookEndpoint `mapstructure:"endpoints"`
+	// TimeoutSeconds is the per-request HTTP timeout (default 5).
+	TimeoutSeconds int `mapstructure:"timeout_seconds"`
+	// MaxRetries is the number of resend attempts on failure (default 3).
+	MaxRetries int `mapstructure:"max_retries"`
+}
+
+// WebhookEndpoint is one subscriber.
+type WebhookEndpoint struct {
+	URL    string `mapstructure:"url"`
+	Secret string `mapstructure:"secret"`
+	// Events is the set this endpoint receives; empty means all.
+	Events []string `mapstructure:"events"`
 }
 
 // IndexerConfig groups the indexer-process-only settings: the prioritized
@@ -256,6 +275,9 @@ func load(configPaths []string) (*Config, error) {
 	v.SetDefault("indexer.watchdog.failback_streak", 5)
 	v.SetDefault("indexer.health.enabled", true)
 	v.SetDefault("indexer.health.port", 9092)
+	v.SetDefault("webhooks.enabled", false)
+	v.SetDefault("webhooks.timeout_seconds", 5)
+	v.SetDefault("webhooks.max_retries", 3)
 
 	// Enable environment variable binding
 	v.AutomaticEnv()
@@ -291,6 +313,7 @@ func load(configPaths []string) (*Config, error) {
 	_ = v.BindEnv("indexer.watchdog.failback_streak", "INDEXER_WATCHDOG_FAILBACK_STREAK")
 	_ = v.BindEnv("indexer.health.enabled", "INDEXER_HEALTH_ENABLED")
 	_ = v.BindEnv("indexer.health.port", "INDEXER_HEALTH_PORT")
+	_ = v.BindEnv("webhooks.enabled", "WEBHOOKS_ENABLED")
 
 	// Try to read config file (optional)
 	if err := v.ReadInConfig(); err != nil {

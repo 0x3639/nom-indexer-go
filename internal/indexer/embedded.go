@@ -2,8 +2,11 @@ package indexer
 
 import (
 	"context"
+	"encoding/hex"
+	"math/big"
 	"strconv"
 
+	"github.com/0x3639/znn-sdk-go/embedded"
 	"github.com/jackc/pgx/v5"
 	"github.com/zenon-network/go-zenon/rpc/api"
 	"go.uber.org/zap"
@@ -32,6 +35,10 @@ func (i *Indexer) indexEmbeddedContracts(ctx context.Context, batch *pgx.Batch, 
 		i.indexAcceleratorContract(ctx, batch, block, txData, m)
 	case models.TokenAddress:
 		i.indexTokenContract(ctx, batch, block, txData, m)
+	case models.HtlcAddress:
+		i.indexHtlcContract(ctx, batch, block, txData, m)
+	case models.SwapAddress:
+		i.indexSwapContract(ctx, batch, block, txData, m)
 	}
 }
 
@@ -368,5 +375,157 @@ func (i *Indexer) indexTokenContract(ctx context.Context, batch *pgx.Batch, bloc
 				zap.String("token", tokenStandard),
 				zap.Int64("timestamp", int64(m.TimestampUnix)))
 		}
+	}
+}
+
+// indexSwapContract handles legacy genesis-swap RetrieveAssets claims.
+//
+// A claimant calls RetrieveAssets(publicKey, signature) on the swap contract;
+// the contract disburses the claimant's remaining genesis ZNN and/or QSR as
+// descendant blocks. Those descendants are Token.Mint calls to the token
+// contract whose own block-level Amount is 0 and whose block-level
+// TokenStandard is ZNN for BOTH the ZNN and QSR payout (a go-zenon quirk, see
+// vm/embedded/implementation/swap.go). The real token+amount live in the Mint
+// call data: Mint(tokenStandard, amount, receiveAddress). So we decode each
+// descendant's Data with the Token ABI and read the amount from the Mint
+// params, bucketing by the Mint's tokenStandard. We key the swap_retrievals row
+// by the paired send-block hash. Authoritative remaining balances come from the
+// swap_assets snapshot (syncSwapAssets).
+func (i *Indexer) indexSwapContract(ctx context.Context, batch *pgx.Batch, block *api.AccountBlock, txData *models.TxData, m *api.Momentum) {
+	if txData.Method != "RetrieveAssets" || block.PairedAccountBlock == nil {
+		return
+	}
+	paired := block.PairedAccountBlock
+
+	var znn, qsr int64
+	for _, d := range block.DescendantBlocks {
+		dec := i.tryDecodeFromAbi(d.Data, embedded.Token)
+		if dec == nil || dec.Method != "Mint" {
+			continue
+		}
+		amt, ok := new(big.Int).SetString(dec.Inputs["amount"], 10)
+		if !ok {
+			i.logger.Warn("swap retrieval: unparseable mint amount",
+				zap.String("swapID", paired.Hash.String()),
+				zap.String("amount", dec.Inputs["amount"]))
+			continue
+		}
+		v := safeBigIntToInt64(amt, i.logger,
+			"swap retrieval amount overflow",
+			zap.String("swapID", paired.Hash.String()))
+		switch dec.Inputs["tokenStandard"] {
+		case models.ZnnTokenStandard:
+			znn += v
+		case models.QsrTokenStandard:
+			qsr += v
+		}
+	}
+
+	i.repos.Swap.InsertRetrievalBatch(batch, &models.SwapRetrieval{
+		ID:                paired.Hash.String(),
+		Address:           paired.Address.String(),
+		PublicKey:         txData.Inputs["publicKey"],
+		ZnnAmount:         znn,
+		QsrAmount:         qsr,
+		MomentumHeight:    int64(m.Height),
+		MomentumTimestamp: int64(m.TimestampUnix),
+	})
+	i.logger.Debug("swap retrieval recorded",
+		zap.String("swapID", paired.Hash.String()),
+		zap.String("address", paired.Address.String()),
+		zap.Int64("znn", znn),
+		zap.Int64("qsr", qsr))
+}
+
+// bytesToHex hex-encodes a byte slice; empty/nil yields "".
+func bytesToHex(b []byte) string {
+	if len(b) == 0 {
+		return ""
+	}
+	return hex.EncodeToString(b)
+}
+
+// indexHtlcContract handles HTLC Create / Unlock / Reclaim events.
+//
+// HTLC blocks arrive as ContractReceive on the HTLC address paired with a user
+// send. The entry id is the Create *send*-block hash (paired.Hash): go-zenon
+// sets HtlcInfo.Id = sendBlock.Hash (vm/embedded/implementation/htlc.go), and
+// Unlock/Reclaim reference that send-block hash as their target id (verified
+// against mainnet: 571/571 settlements match the send-block hash, 0 match the
+// receive-block hash). Create carries the lock params + the send's
+// amount/token/sender (all from paired); Unlock and Reclaim carry the target id
+// (and Unlock a preimage) to settle the entry.
+func (i *Indexer) indexHtlcContract(ctx context.Context, batch *pgx.Batch, block *api.AccountBlock, txData *models.TxData, m *api.Momentum) {
+	if block.PairedAccountBlock == nil {
+		return
+	}
+	paired := block.PairedAccountBlock
+
+	switch txData.Method {
+	case "Create":
+		id := paired.Hash.String()
+
+		expirationStr := txData.Inputs["expirationTime"]
+		expiration, err := strconv.ParseInt(expirationStr, 10, 64)
+		if err != nil {
+			i.logger.Warn("invalid htlc expirationTime",
+				zap.String("htlcID", id), zap.String("expirationTime", expirationStr), zap.Error(err))
+			expiration = 0
+		}
+
+		hashTypeStr := txData.Inputs["hashType"]
+		hashType, err := strconv.Atoi(hashTypeStr)
+		if err != nil {
+			i.logger.Warn("invalid htlc hashType",
+				zap.String("htlcID", id), zap.String("hashType", hashTypeStr), zap.Error(err))
+			hashType = 0
+		}
+
+		keyMaxSizeStr := txData.Inputs["keyMaxSize"]
+		keyMaxSize, err := strconv.Atoi(keyMaxSizeStr)
+		if err != nil {
+			i.logger.Warn("invalid htlc keyMaxSize",
+				zap.String("htlcID", id), zap.String("keyMaxSize", keyMaxSizeStr), zap.Error(err))
+			keyMaxSize = 0
+		}
+
+		amount := safeBigIntToInt64(paired.Amount, i.logger,
+			"htlc amount overflow", zap.String("htlcID", id))
+
+		h := &models.Htlc{
+			ID:                  id,
+			TimeLockedAddress:   paired.Address.String(), // sender can Reclaim
+			HashLockedAddress:   txData.Inputs["hashLocked"],
+			TokenStandard:       paired.TokenStandard.String(),
+			Amount:              amount,
+			ExpirationTimestamp: expiration,
+			HashType:            int16(hashType),
+			KeyMaxSize:          int16(keyMaxSize),
+			// hashLock is ABI `bytes`; formatArg hands it back as a raw byte
+			// string, so encode unconditionally — never treat hex-looking raw
+			// bytes (e.g. the bytes "deadbeef") as already-hex.
+			HashLock:                  bytesToHex([]byte(txData.Inputs["hashLock"])),
+			Status:                    int16(models.HtlcStatusActive),
+			CreationMomentumHeight:    int64(m.Height),
+			CreationMomentumTimestamp: int64(m.TimestampUnix),
+		}
+		i.repos.Htlc.InsertBatch(batch, h)
+
+	case "Unlock":
+		id := txData.Inputs["id"]
+		if id == "" {
+			return
+		}
+		// preimage is ABI `bytes`; encode unconditionally (see Create/hashLock).
+		i.repos.Htlc.SettleBatch(batch, id, int16(models.HtlcStatusUnlocked),
+			bytesToHex([]byte(txData.Inputs["preimage"])), int64(m.Height), int64(m.TimestampUnix))
+
+	case "Reclaim":
+		id := txData.Inputs["id"]
+		if id == "" {
+			return
+		}
+		i.repos.Htlc.SettleBatch(batch, id, int16(models.HtlcStatusReclaimed),
+			"", int64(m.Height), int64(m.TimestampUnix))
 	}
 }
