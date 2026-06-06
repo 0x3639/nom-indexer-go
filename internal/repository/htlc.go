@@ -47,7 +47,9 @@ func (r *HtlcRepository) InsertBatch(batch *pgx.Batch, h *models.Htlc) {
 		h.SettleMomentumHeight, h.SettleMomentumTimestamp)
 }
 
-// Settle marks an HTLC unlocked (with preimage) or reclaimed.
+// Settle marks an HTLC unlocked (with preimage) or reclaimed. Settling a
+// non-existent id is a silent no-op (zero rows updated, no error); the same
+// holds for SettleBatch.
 func (r *HtlcRepository) Settle(ctx context.Context, id string, status int16, preimage string, height, ts int64) error {
 	_, err := r.pool.Exec(ctx, `
 		UPDATE htlcs SET status = $2, preimage = $3,
