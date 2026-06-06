@@ -71,6 +71,13 @@ no-foreign-keys design apply uniformly.
 | [`bridge_orchestrator_info`](bridge_orchestrator_info.md) | Singleton with orchestrator parameters. |
 | [`bridge_security_info`](bridge_security_info.md) | Singleton with security delay parameters. |
 
+### Swap (legacy)
+
+| Table | What it holds |
+|---|---|
+| [`swap_retrievals`](swap_retrievals.md) | Per-claim genesis-swap `RetrieveAssets` events. |
+| [`swap_assets`](swap_assets.md) | Remaining unswapped genesis balances per `keyIdHash` (snapshot). |
+
 ### Daily snapshots
 
 | Table | What it holds |

@@ -8558,6 +8558,13 @@ no-foreign-keys design apply uniformly.
 | [`bridge_orchestrator_info`](bridge_orchestrator_info.md) | Singleton with orchestrator parameters. |
 | [`bridge_security_info`](bridge_security_info.md) | Singleton with security delay parameters. |
 
+### Swap (legacy)
+
+| Table | What it holds |
+|---|---|
+| [`swap_retrievals`](swap_retrievals.md) | Per-claim genesis-swap `RetrieveAssets` events. |
+| [`swap_assets`](swap_assets.md) | Remaining unswapped genesis balances per `keyIdHash` (snapshot). |
+
 ### Daily snapshots
 
 | Table | What it holds |
@@ -9326,6 +9333,178 @@ correlate a future `Cancel` call with the stake it cancels.
 - `is_active` is not the same as "still locked". A stake whose
   `expiration_timestamp` has passed but hasn't been collected is still
   `is_active = true` until the on-chain `Cancel`/`Collect` fires.
+
+
+=== docs/schema/swap_assets.md ===
+
+---
+title: swap_assets
+---
+
+# `swap_assets`
+
+## Purpose
+
+A snapshot of the **remaining unswapped legacy genesis balances** still held by
+the embedded **Swap** contract, keyed by `keyIdHash` (the contract's storage
+key for each genesis allocation). Where [`swap_retrievals`](swap_retrievals.md)
+is the per-claim event log, this table is the *current state*: how much ZNN and
+QSR each genesis key still has available to claim.
+
+Rows are refreshed (upserted) on the indexer's cached-data refresh from the
+`SwapApi.GetAssets()` RPC, so the table reflects the authoritative remaining
+balances as of the last successful snapshot.
+
+## Columns
+
+All 4 columns from
+[`migrations/015_swap.up.sql`](https://github.com/0x3639/nom-indexer-go/blob/main/migrations/015_swap.up.sql).
+Amounts are int64 `BIGINT`; timestamps are Unix seconds; hashes follow the
+[schema conventions](conventions.md).
+
+| Column | Type | Null | Default | Notes |
+|---|---|---|---|---|
+| `key_id_hash` | `TEXT` | NO | — | Primary key. 64-char hex storage key (`keyIdHash`) for the genesis allocation. |
+| `znn` | `BIGINT` | NO | `0` | Remaining unclaimed ZNN for this key. int64 cap applies. {% include "schema/fragments/int64-cap-caveat.md" %} |
+| `qsr` | `BIGINT` | NO | `0` | Remaining unclaimed QSR for this key. int64 cap applies. {% include "schema/fragments/int64-cap-caveat.md" %} |
+| `last_updated_timestamp` | `BIGINT` | NO | `0` | Unix seconds of the snapshot that last wrote this row (`time.Now()` at sync). |
+
+## Primary key & indexes
+
+- **Primary key:** `key_id_hash`.
+
+## Relations
+
+- `key_id_hash` is the swap contract's internal storage key, not an
+  account-block hash. It is not directly joinable to
+  [`swap_retrievals`](swap_retrievals.md), which is keyed by claim send-block.
+
+## Write path
+
+- **`UpsertAsset`** from
+  [`syncSwapAssets`](https://github.com/0x3639/nom-indexer-go/blob/main/internal/indexer/indexer.go),
+  called from `updateCachedData` on the cached-data refresh cadence (not in the
+  per-momentum transaction). It calls `SwapApi.GetAssets()`, which returns
+  `map[types.Hash]*embedded.SwapAssetEntrySimple` keyed by `keyIdHash`, and
+  upserts one row per key with the current `Znn`/`Qsr` remaining balances and
+  `last_updated_timestamp = time.Now()`. RPC and per-row upsert failures are
+  logged and skipped so a swap error never aborts the cached-data refresh.
+
+## Read patterns
+
+- **Remaining balance for a key** — direct PK lookup on `key_id_hash`.
+- **Total unswapped supply** — `SELECT sum(znn), sum(qsr) FROM swap_assets`.
+
+## Notes
+
+### Known limitation — this table is currently EMPTY
+
+As of `znn-sdk-go@v0.1.12`, **`swap_assets` will remain empty** even on a
+fully synced indexer. This is **not** an indexer bug — it is an upstream SDK
+defect:
+
+- `SwapApi.GetAssets()` in `znn-sdk-go@v0.1.12` passes a **nil result map by
+  value** to the RPC client. Because the map is passed by value (and is nil),
+  the decoded response is discarded and the method returns an **empty map**
+  with no error.
+- `syncSwapAssets` therefore iterates over zero entries, writes no rows, and
+  logs `swap sync: assets snapshot complete` with `count=0`. No error is
+  raised; the cached-data refresh completes normally.
+
+The table will start populating once one of the following happens:
+
+1. The upstream SDK is fixed to allocate the result map before the RPC call, or
+2. A local wrapper is added in this repo that allocates the map and calls the
+   RPC directly (bypassing the buggy SDK method).
+
+**Operators and consumers should not be alarmed by an empty `swap_assets`
+table** — it reflects the SDK limitation above, not missing or failed
+indexing. The companion [`swap_retrievals`](swap_retrievals.md) table is
+**unaffected**, because it is built from account-block (`RetrieveAssets`) data
+rather than this RPC, and populates normally.
+
+
+=== docs/schema/swap_retrievals.md ===
+
+---
+title: swap_retrievals
+---
+
+# `swap_retrievals`
+
+## Purpose
+
+One row per legacy genesis-swap **RetrieveAssets** claim. At network genesis,
+ZNN and QSR balances from the legacy (pre-Zenon) chain were escrowed in the
+embedded **Swap** contract, keyed by a public key. A holder claims their
+allocation by calling `RetrieveAssets(publicKey, signature)` on the swap
+contract; the contract verifies the signature and disburses the claimant's
+remaining genesis ZNN and/or QSR back to their address.
+
+This is a **near-static historical dataset** — the vast majority of swap
+claims happened shortly after genesis, and no new genesis allocations are ever
+created. Each row records who claimed, with which public key, and how much ZNN
+and QSR they received in that claim.
+
+## Columns
+
+All 7 columns from
+[`migrations/015_swap.up.sql`](https://github.com/0x3639/nom-indexer-go/blob/main/migrations/015_swap.up.sql).
+Amounts are int64 `BIGINT`; timestamps are Unix seconds; hashes/addresses
+follow the [schema conventions](conventions.md).
+
+| Column | Type | Null | Default | Notes |
+|---|---|---|---|---|
+| `id` | `TEXT` | NO | — | Primary key. The claimant's paired send-block hash (the `RetrieveAssets` send). |
+| `address` | `TEXT` | NO | `''` | Recipient/claimant (`z1…`). |
+| `public_key` | `TEXT` | NO | `''` | The legacy public key presented in the `RetrieveAssets` ABI input. |
+| `znn_amount` | `BIGINT` | NO | `0` | ZNN disbursed in this claim. int64 cap applies. {% include "schema/fragments/int64-cap-caveat.md" %} |
+| `qsr_amount` | `BIGINT` | NO | `0` | QSR disbursed in this claim. int64 cap applies. {% include "schema/fragments/int64-cap-caveat.md" %} |
+| `momentum_height` | `BIGINT` | NO | `0` | Momentum height of the `RetrieveAssets` claim. |
+| `momentum_timestamp` | `BIGINT` | NO | `0` | Unix seconds of the claim momentum. |
+
+## Primary key & indexes
+
+- **Primary key:** `id`.
+- `idx_swap_retrievals_address` (`address`).
+
+## Relations
+
+- `address` ↔ [`accounts.address`](accounts.md).
+- `id` is the claimant's send-block hash — see [`account_blocks`](account_blocks.md).
+
+## Write path
+
+All writes come from
+[`indexSwapContract`](https://github.com/0x3639/nom-indexer-go/blob/main/internal/indexer/embedded.go),
+per account block, against the Swap contract address
+`z1qxemdeddedxswapxxxxxxxxxxxxxxxxxxl4yww`:
+
+- **`InsertRetrievalBatch`** on a `RetrieveAssets` method. The handler keys the
+  row by the **paired send-block hash** (`paired.Hash`) and takes `address`
+  from the paired send (`paired.Address`) and `public_key` from the decoded
+  `publicKey` ABI input.
+- The handler skips any block whose method is not `RetrieveAssets` or that has
+  no paired account block.
+
+## Read patterns
+
+- **Claims by address** — `WHERE address = $1`.
+- **Claim by id** — direct PK lookup.
+
+## Notes
+
+`znn_amount` and `qsr_amount` are **summed from the contract's descendant
+disbursement blocks**, not read from an ABI return value. A `RetrieveAssets`
+receive on the swap contract spawns descendant send-blocks (`block.DescendantBlocks`)
+that pay out the claimant's remaining genesis balance; the handler iterates
+those descendants and accumulates each `.Amount` into `znn_amount` or
+`qsr_amount` by matching `.TokenStandard` against the ZNN and QSR token
+standards. A claim that disburses only one asset leaves the other amount at `0`.
+
+The **authoritative remaining (unclaimed) balances** live in the
+[`swap_assets`](swap_assets.md) snapshot, not here — this table is the per-claim
+event log.
 
 
 === docs/schema/token_burns.md ===
