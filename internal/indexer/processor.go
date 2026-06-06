@@ -17,6 +17,7 @@ import (
 	"go.uber.org/zap"
 
 	"github.com/0x3639/nom-indexer-go/internal/models"
+	"github.com/0x3639/nom-indexer-go/internal/webhooks"
 )
 
 // genesisBalanceUpdateThreshold skips per-address balance fetching for
@@ -47,12 +48,19 @@ func (i *Indexer) processMomentum(ctx context.Context, m *api.Momentum) error {
 
 	batch := &pgx.Batch{}
 
+	// blockEvents holds account_block.inserted webhook events collected
+	// while building the batch; they are emitted ONLY after the
+	// transaction below commits. Nil when webhooks are disabled.
+	var blockEvents []webhooks.Event
+
 	// Process account blocks if any
 	if len(m.Content) > 0 {
 		// Process each account block
-		if err := i.processAccountBlocks(ctx, batch, m); err != nil {
+		events, err := i.processAccountBlocks(ctx, batch, m)
+		if err != nil {
 			return fmt.Errorf("failed to process account blocks: %w", err)
 		}
+		blockEvents = events
 
 		// Skip per-address balance fetching for momentums with too many txs:
 		// genesis has tens of thousands and per-address GetAccountInfoByAddress
@@ -126,6 +134,27 @@ func (i *Indexer) processMomentum(ctx context.Context, m *api.Momentum) error {
 		return fmt.Errorf("commit momentum %d: %w", m.Height, err)
 	}
 	committed = true
+
+	// Emit webhook events ONLY now that the transaction has committed.
+	// This is strictly after Commit succeeds and the function never reaches
+	// here on the batch-error / commit-error paths above (each returns
+	// early, leaving committed=false and rolling back). Emit is async and
+	// non-blocking. A crash after commit but before/within Emit just means
+	// the height is re-processed and events re-fire — at-least-once, which
+	// is acceptable for these notifications.
+	if i.webhooks != nil {
+		i.webhooks.Emit(webhooks.Event{
+			Type: "momentum.inserted",
+			Payload: map[string]any{
+				"height":    m.Height,
+				"hash":      m.Hash.String(),
+				"timestamp": m.TimestampUnix,
+			},
+		})
+		for _, ev := range blockEvents {
+			i.webhooks.Emit(ev)
+		}
+	}
 
 	i.logger.Debug("processed momentum",
 		zap.Uint64("height", m.Height),
@@ -275,8 +304,13 @@ func (i *Indexer) updateBalances(ctx context.Context, batch *pgx.Batch, headers 
 	return nil
 }
 
-// processAccountBlocks processes all account blocks in a momentum
-func (i *Indexer) processAccountBlocks(ctx context.Context, batch *pgx.Batch, m *api.Momentum) error {
+// processAccountBlocks processes all account blocks in a momentum. When
+// webhooks are enabled it also returns one account_block.inserted event
+// per processed block; these are NOT emitted here — processMomentum emits
+// them only after the per-momentum transaction commits. blockEvents is nil
+// (no allocation) when webhooks are disabled.
+func (i *Indexer) processAccountBlocks(ctx context.Context, batch *pgx.Batch, m *api.Momentum) ([]webhooks.Event, error) {
+	var blockEvents []webhooks.Event
 	for _, header := range m.Content {
 		block, err := i.client().LedgerApi.GetAccountBlockByHash(header.Hash)
 		if err != nil {
@@ -351,7 +385,23 @@ func (i *Indexer) processAccountBlocks(ctx context.Context, batch *pgx.Batch, m 
 		// block. A payload marshal failure rolls the whole momentum
 		// back via the normal retry path.
 		if err := queueAccountBlockNotify(batch, accountBlock, txData); err != nil {
-			return fmt.Errorf("queue account_block %s notify: %w", accountBlock.Hash, err)
+			return nil, fmt.Errorf("queue account_block %s notify: %w", accountBlock.Hash, err)
+		}
+
+		// Collect an account_block.inserted webhook event (emitted by
+		// processMomentum only after commit). Skipped when webhooks are
+		// disabled so the common path allocates nothing.
+		if i.webhooks != nil {
+			blockEvents = append(blockEvents, webhooks.Event{
+				Type: "account_block.inserted",
+				Payload: map[string]any{
+					"momentumHeight": m.Height,
+					"hash":           block.Hash.String(),
+					"address":        block.Address.String(),
+					"toAddress":      block.ToAddress.String(),
+					"blockType":      int(block.BlockType),
+				},
+			})
 		}
 
 		// Track ZNN/QSR flow + activity on the involved accounts. Sends bump
@@ -447,7 +497,7 @@ func (i *Indexer) processAccountBlocks(ctx context.Context, batch *pgx.Batch, m 
 		}
 	}
 
-	return nil
+	return blockEvents, nil
 }
 
 // getPillarInfoForProducer retrieves pillar info for a producer address at a given height

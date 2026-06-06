@@ -16,6 +16,7 @@ import (
 
 	"github.com/0x3639/nom-indexer-go/internal/models"
 	"github.com/0x3639/nom-indexer-go/internal/repository"
+	"github.com/0x3639/nom-indexer-go/internal/webhooks"
 )
 
 // Indexer handles the indexing of blockchain data
@@ -47,6 +48,12 @@ type Indexer struct {
 	syncStateInternal *syncState
 
 	watchdogCfg WatchdogConfigForIndexer
+
+	// webhooks dispatches momentum.inserted / account_block.inserted
+	// events to configured subscribers AFTER each per-momentum transaction
+	// commits. nil when webhooks are disabled (the default), in which case
+	// the emit path is a single nil check with zero further work.
+	webhooks *webhooks.Dispatcher
 
 	// clientFactory builds a fresh SDK client for a given URL. nil means
 	// "use rpc_client.NewRpcClient" (production). Integration tests
@@ -100,6 +107,18 @@ func NewIndexerWithNodes(
 	i.syncStateInternal = newSyncState(nodePool.Len())
 	i.watchdogCfg = watchdog
 	return i
+}
+
+// AttachWebhooks builds and starts a webhook dispatcher for the given
+// endpoints and stores it on the indexer. The dispatcher is stopped in
+// Run's teardown. Pass an empty endpoints slice or never call this to
+// leave webhooks disabled (the default). Callers own the config→Endpoint
+// mapping so internal/indexer stays decoupled from internal/config,
+// mirroring the toIndexerNodes pattern in cmd/indexer.
+func (i *Indexer) AttachWebhooks(endpoints []webhooks.Endpoint, timeout time.Duration, maxRetries int) {
+	d := webhooks.New(endpoints, timeout, maxRetries, i.logger)
+	d.Start()
+	i.webhooks = d
 }
 
 // client returns the currently-active SDK client. All RPC call sites
@@ -216,6 +235,13 @@ func (i *Indexer) HealthSnapshot() HealthSnapshot {
 // returning so callers can rely on a clean shutdown.
 func (i *Indexer) Run(ctx context.Context) error {
 	i.logger.Info("starting indexer")
+
+	// Stop the webhook dispatcher on shutdown. Stop is idempotent and
+	// safe even if an Emit races with it. Deferred here so it runs once
+	// on every Run return path (ctx cancel, sync error, subscription end).
+	if i.webhooks != nil {
+		defer i.webhooks.Stop()
+	}
 
 	// Register SDK callbacks for connection events on the initial client.
 	// The SDK handles reconnection automatically; we just need to restart

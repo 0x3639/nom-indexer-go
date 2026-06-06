@@ -17,6 +17,7 @@ import (
 	"github.com/0x3639/nom-indexer-go/internal/database"
 	"github.com/0x3639/nom-indexer-go/internal/health"
 	"github.com/0x3639/nom-indexer-go/internal/indexer"
+	"github.com/0x3639/nom-indexer-go/internal/webhooks"
 )
 
 func main() {
@@ -104,6 +105,19 @@ func main() {
 			FailbackStreak:        cfg.Indexer.Watchdog.FailbackStreak,
 		},
 	)
+
+	// Wire the webhook dispatcher when enabled. The config→Endpoint mapping
+	// lives here (not in internal/indexer) so the indexer package stays
+	// decoupled from internal/config, mirroring toIndexerNodes above. The
+	// dispatcher is stopped in idx.Run's teardown.
+	if cfg.Webhooks.Enabled {
+		idx.AttachWebhooks(
+			toWebhookEndpoints(cfg.Webhooks.Endpoints),
+			time.Duration(cfg.Webhooks.TimeoutSeconds)*time.Second,
+			cfg.Webhooks.MaxRetries,
+		)
+		logger.Info("webhooks enabled", zap.Int("endpoints", len(cfg.Webhooks.Endpoints)))
+	}
 
 	// Setup graceful shutdown
 	ctx, cancel := context.WithCancel(ctx)
@@ -194,6 +208,18 @@ func toIndexerNodes(in []config.NodeEntry) []indexer.NodeEntry {
 	out := make([]indexer.NodeEntry, len(in))
 	for i, n := range in {
 		out[i] = indexer.NodeEntry{URL: n.URL, Label: n.Label, ProbeURL: n.ProbeURL}
+	}
+	return out
+}
+
+// toWebhookEndpoints adapts config-level webhook endpoints to the
+// webhooks-package Endpoint type. Kept here (not in internal/indexer) so
+// the indexer package doesn't import internal/config, mirroring
+// toIndexerNodes.
+func toWebhookEndpoints(in []config.WebhookEndpoint) []webhooks.Endpoint {
+	out := make([]webhooks.Endpoint, len(in))
+	for i, e := range in {
+		out[i] = webhooks.Endpoint{URL: e.URL, Secret: e.Secret, Events: e.Events}
 	}
 	return out
 }
