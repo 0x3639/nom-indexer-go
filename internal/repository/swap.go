@@ -85,13 +85,13 @@ func (r *SwapRepository) ListRetrievals(ctx context.Context, opts ListOpts) ([]*
 	)
 	for rows.Next() {
 		var s models.SwapRetrieval
-		if err := rows.Scan(&s.ID, &s.Address, &s.PublicKey, &s.ZnnAmount, &s.QsrAmount,
+		if err = rows.Scan(&s.ID, &s.Address, &s.PublicKey, &s.ZnnAmount, &s.QsrAmount,
 			&s.MomentumHeight, &s.MomentumTimestamp, &total); err != nil {
 			return nil, 0, err
 		}
 		out = append(out, &s)
 	}
-	if err := rows.Err(); err != nil {
+	if err = rows.Err(); err != nil {
 		return nil, 0, err
 	}
 	if len(out) == 0 && opts.Offset > 0 {

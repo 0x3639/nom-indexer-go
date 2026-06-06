@@ -493,14 +493,14 @@ func (i *Indexer) indexHtlcContract(ctx context.Context, batch *pgx.Batch, block
 			"htlc amount overflow", zap.String("htlcID", id))
 
 		h := &models.Htlc{
-			ID:                        id,
-			TimeLockedAddress:         paired.Address.String(), // sender can Reclaim
-			HashLockedAddress:         txData.Inputs["hashLocked"],
-			TokenStandard:             paired.TokenStandard.String(),
-			Amount:                    amount,
-			ExpirationTimestamp:       expiration,
-			HashType:                  int16(hashType),
-			KeyMaxSize:                int16(keyMaxSize),
+			ID:                  id,
+			TimeLockedAddress:   paired.Address.String(), // sender can Reclaim
+			HashLockedAddress:   txData.Inputs["hashLocked"],
+			TokenStandard:       paired.TokenStandard.String(),
+			Amount:              amount,
+			ExpirationTimestamp: expiration,
+			HashType:            int16(hashType),
+			KeyMaxSize:          int16(keyMaxSize),
 			// hashLock is ABI `bytes`; formatArg hands it back as a raw byte
 			// string, so encode unconditionally — never treat hex-looking raw
 			// bytes (e.g. the bytes "deadbeef") as already-hex.

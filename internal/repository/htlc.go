@@ -98,7 +98,7 @@ func (r *HtlcRepository) List(ctx context.Context, opts ListOpts) ([]*models.Htl
 	)
 	for rows.Next() {
 		var h models.Htlc
-		if err := rows.Scan(&h.ID, &h.TimeLockedAddress, &h.HashLockedAddress, &h.TokenStandard, &h.Amount,
+		if err = rows.Scan(&h.ID, &h.TimeLockedAddress, &h.HashLockedAddress, &h.TokenStandard, &h.Amount,
 			&h.ExpirationTimestamp, &h.HashType, &h.KeyMaxSize, &h.HashLock, &h.Status, &h.Preimage,
 			&h.CreationMomentumHeight, &h.CreationMomentumTimestamp,
 			&h.SettleMomentumHeight, &h.SettleMomentumTimestamp, &total); err != nil {
@@ -106,7 +106,7 @@ func (r *HtlcRepository) List(ctx context.Context, opts ListOpts) ([]*models.Htl
 		}
 		out = append(out, &h)
 	}
-	if err := rows.Err(); err != nil {
+	if err = rows.Err(); err != nil {
 		return nil, 0, err
 	}
 	if len(out) == 0 && opts.Offset > 0 {

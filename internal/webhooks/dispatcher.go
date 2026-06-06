@@ -75,7 +75,7 @@ func (d *Dispatcher) Start() {
 // Shutdown is best-effort: an in-flight delivery (including its bounded retry
 // loop) is allowed to finish, but any events still buffered in the queue that
 // have not yet been picked up are dropped — consistent with the drop-on-full
-// contract. The queue itself is never closed; shutdown is signalled via the
+// contract. The queue itself is never closed; shutdown is signaled via the
 // quit channel plus an atomic flag so a racing Emit can never send on a closed
 // channel.
 //
