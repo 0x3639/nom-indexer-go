@@ -660,8 +660,46 @@ func (i *Indexer) updateCachedData(ctx context.Context) error {
 
 	i.logger.Info("updateCachedData: projects done", zap.Int("projects", projectCount), zap.Int("phases", phaseCount))
 
+	// Snapshot remaining legacy genesis-swap balances.
+	i.syncSwapAssets(ctx)
+
 	i.logger.Info("updateCachedData: complete")
 	return nil
+}
+
+// syncSwapAssets snapshots the remaining unswapped legacy genesis balances.
+//
+// SwapApi.GetAssets() returns map[types.Hash]*embedded.SwapAssetEntrySimple
+// keyed by keyIdHash, each entry exposing Znn/Qsr (*big.Int). We upsert one
+// swap_assets row per keyIdHash with the current remaining balances. Failures
+// are logged and skipped so a swap RPC error doesn't abort the cached-data
+// refresh.
+func (i *Indexer) syncSwapAssets(ctx context.Context) {
+	assets, err := i.client().SwapApi.GetAssets()
+	if err != nil {
+		i.logger.Warn("swap sync: GetAssets failed", zap.Error(err))
+		return
+	}
+	now := time.Now().Unix()
+	for keyIDHash, entry := range assets {
+		if entry == nil {
+			continue
+		}
+		znn := safeBigIntToInt64(entry.Znn, i.logger, "swap asset znn overflow",
+			zap.String("keyIdHash", keyIDHash.String()))
+		qsr := safeBigIntToInt64(entry.Qsr, i.logger, "swap asset qsr overflow",
+			zap.String("keyIdHash", keyIDHash.String()))
+		if err := i.repos.Swap.UpsertAsset(ctx, &models.SwapAsset{
+			KeyIDHash:            keyIDHash.String(),
+			Znn:                  znn,
+			Qsr:                  qsr,
+			LastUpdatedTimestamp: now,
+		}); err != nil {
+			i.logger.Warn("swap sync: upsert asset failed",
+				zap.String("keyIdHash", keyIDHash.String()), zap.Error(err))
+		}
+	}
+	i.logger.Info("swap sync: assets snapshot complete", zap.Int("count", len(assets)))
 }
 
 // runCachedDataSyncLoop runs cached data sync (pillars, sentinels, projects) on a separate schedule

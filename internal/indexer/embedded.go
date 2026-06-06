@@ -36,6 +36,8 @@ func (i *Indexer) indexEmbeddedContracts(ctx context.Context, batch *pgx.Batch, 
 		i.indexTokenContract(ctx, batch, block, txData, m)
 	case models.HtlcAddress:
 		i.indexHtlcContract(ctx, batch, block, txData, m)
+	case models.SwapAddress:
+		i.indexSwapContract(ctx, batch, block, txData, m)
 	}
 }
 
@@ -373,6 +375,49 @@ func (i *Indexer) indexTokenContract(ctx context.Context, batch *pgx.Batch, bloc
 				zap.Int64("timestamp", int64(m.TimestampUnix)))
 		}
 	}
+}
+
+// indexSwapContract handles legacy genesis-swap RetrieveAssets claims.
+//
+// A claimant calls RetrieveAssets(publicKey, signature) on the swap contract;
+// the contract disburses the claimant's remaining genesis ZNN and/or QSR as
+// descendant send-blocks. We key the swap_retrievals row by the paired send
+// block hash and sum the disbursed amounts from the descendant blocks (each a
+// nom.AccountBlock with .Amount and .TokenStandard). Authoritative remaining
+// balances come from the swap_assets snapshot (syncSwapAssets).
+func (i *Indexer) indexSwapContract(ctx context.Context, batch *pgx.Batch, block *api.AccountBlock, txData *models.TxData, m *api.Momentum) {
+	if txData.Method != "RetrieveAssets" || block.PairedAccountBlock == nil {
+		return
+	}
+	paired := block.PairedAccountBlock
+
+	var znn, qsr int64
+	for _, d := range block.DescendantBlocks {
+		amt := safeBigIntToInt64(d.Amount, i.logger,
+			"swap retrieval amount overflow",
+			zap.String("swapID", paired.Hash.String()))
+		switch d.TokenStandard.String() {
+		case models.ZnnTokenStandard:
+			znn += amt
+		case models.QsrTokenStandard:
+			qsr += amt
+		}
+	}
+
+	i.repos.Swap.InsertRetrievalBatch(batch, &models.SwapRetrieval{
+		ID:                paired.Hash.String(),
+		Address:           paired.Address.String(),
+		PublicKey:         txData.Inputs["publicKey"],
+		ZnnAmount:         znn,
+		QsrAmount:         qsr,
+		MomentumHeight:    int64(m.Height),
+		MomentumTimestamp: int64(m.TimestampUnix),
+	})
+	i.logger.Debug("swap retrieval recorded",
+		zap.String("swapID", paired.Hash.String()),
+		zap.String("address", paired.Address.String()),
+		zap.Int64("znn", znn),
+		zap.Int64("qsr", qsr))
 }
 
 // bytesToHex hex-encodes a byte slice; empty/nil yields "".
