@@ -70,6 +70,7 @@ no-foreign-keys design apply uniformly.
 | [`bridge_guardians`](bridge_guardians.md) | Active guardian set. |
 | [`bridge_orchestrator_info`](bridge_orchestrator_info.md) | Singleton with orchestrator parameters. |
 | [`bridge_security_info`](bridge_security_info.md) | Singleton with security delay parameters. |
+| [`bridge_time_challenges`](bridge_time_challenges.md) | Pending delay windows for security-sensitive bridge methods. |
 
 ### Swap (legacy)
 

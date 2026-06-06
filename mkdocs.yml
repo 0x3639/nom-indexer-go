@@ -133,6 +133,7 @@ nav:
       - bridge_guardians: schema/bridge_guardians.md
       - bridge_orchestrator_info: schema/bridge_orchestrator_info.md
       - bridge_security_info: schema/bridge_security_info.md
+      - bridge_time_challenges: schema/bridge_time_challenges.md
     - Swap (legacy):
       - swap_retrievals: schema/swap_retrievals.md
       - swap_assets: schema/swap_assets.md
