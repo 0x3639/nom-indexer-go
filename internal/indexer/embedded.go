@@ -5,7 +5,6 @@ import (
 	"encoding/hex"
 	"math/big"
 	"strconv"
-	"strings"
 
 	"github.com/0x3639/znn-sdk-go/embedded"
 	"github.com/jackc/pgx/v5"
@@ -446,19 +445,6 @@ func bytesToHex(b []byte) string {
 	return hex.EncodeToString(b)
 }
 
-// hexMaybe normalizes an ABI-decoded bytes input (the decoder may hand back a
-// raw string of bytes via formatArg) into lowercase hex. If the value already
-// looks like hex it is returned lowercased; otherwise the bytes are encoded.
-func hexMaybe(s string) string {
-	if s == "" {
-		return ""
-	}
-	if _, err := hex.DecodeString(s); err == nil {
-		return strings.ToLower(s)
-	}
-	return bytesToHex([]byte(s))
-}
-
 // indexHtlcContract handles HTLC Create / Unlock / Reclaim events.
 //
 // HTLC blocks arrive as ContractReceive on the HTLC address paired with a user
@@ -515,7 +501,10 @@ func (i *Indexer) indexHtlcContract(ctx context.Context, batch *pgx.Batch, block
 			ExpirationTimestamp:       expiration,
 			HashType:                  int16(hashType),
 			KeyMaxSize:                int16(keyMaxSize),
-			HashLock:                  hexMaybe(txData.Inputs["hashLock"]),
+			// hashLock is ABI `bytes`; formatArg hands it back as a raw byte
+			// string, so encode unconditionally — never treat hex-looking raw
+			// bytes (e.g. the bytes "deadbeef") as already-hex.
+			HashLock:                  bytesToHex([]byte(txData.Inputs["hashLock"])),
 			Status:                    int16(models.HtlcStatusActive),
 			CreationMomentumHeight:    int64(m.Height),
 			CreationMomentumTimestamp: int64(m.TimestampUnix),
@@ -527,8 +516,9 @@ func (i *Indexer) indexHtlcContract(ctx context.Context, batch *pgx.Batch, block
 		if id == "" {
 			return
 		}
+		// preimage is ABI `bytes`; encode unconditionally (see Create/hashLock).
 		i.repos.Htlc.SettleBatch(batch, id, int16(models.HtlcStatusUnlocked),
-			hexMaybe(txData.Inputs["preimage"]), int64(m.Height), int64(m.TimestampUnix))
+			bytesToHex([]byte(txData.Inputs["preimage"])), int64(m.Height), int64(m.TimestampUnix))
 
 	case "Reclaim":
 		id := txData.Inputs["id"]

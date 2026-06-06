@@ -13,24 +13,17 @@ func TestBytesToHex(t *testing.T) {
 	}
 }
 
-// hexMaybe normalizes an ABI-decoded bytes value into lowercase hex: already-hex
-// strings are lowercased, raw byte strings are hex-encoded, "" stays "".
-func TestHexMaybe(t *testing.T) {
-	cases := []struct {
-		name string
-		in   string
-		want string
-	}{
-		{"already hex mixed case", "DEADbeef", "deadbeef"},
-		{"empty", "", ""},
-		{"raw bytes with high byte", "\xff\x01", "ff01"},
-		{"non-hex char", "zz", "7a7a"},
+// HTLC hashLock/preimage are ABI `bytes` that formatArg hands back as raw byte
+// strings, so the handler encodes them unconditionally via bytesToHex([]byte(s)).
+// The load-bearing case: raw bytes that *look* like hex (e.g. the 8 ASCII bytes
+// "deadbeef") must be encoded to their true byte hex, not passed through.
+func TestBytesToHex_RawBytesThatLookLikeHex(t *testing.T) {
+	// []byte("deadbeef") is 8 ASCII bytes 0x64 0x65 0x61 0x64 0x62 0x65 0x65 0x66.
+	if got := bytesToHex([]byte("deadbeef")); got != "6465616462656566" {
+		t.Errorf("bytesToHex([]byte(\"deadbeef\")) = %q, want 6465616462656566", got)
 	}
-	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			if got := hexMaybe(tc.in); got != tc.want {
-				t.Errorf("hexMaybe(%q) = %q, want %q", tc.in, got, tc.want)
-			}
-		})
+	// A true 4-byte value still encodes to 8 hex chars.
+	if got := bytesToHex([]byte{0xde, 0xad, 0xbe, 0xef}); got != "deadbeef" {
+		t.Errorf("bytesToHex(0xdeadbeef) = %q, want deadbeef", got)
 	}
 }
