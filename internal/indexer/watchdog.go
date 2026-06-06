@@ -218,6 +218,27 @@ func selectFailback(s *syncState, candidateIdx int, cfg watchdogReactConfig) int
 	return -1
 }
 
+// canAttemptFailback reports whether this tick should probe the primary for
+// failback. It is true only when the *active node itself* is fine and we're
+// currently on a fallback with no pending failover.
+//
+// Crucially this includes classIndexerLagging, not just classSynced: during a
+// long initial/cold sync the indexer is perpetually millions of momentums
+// behind, so it is essentially never classSynced. Gating failback on
+// classSynced alone strands the indexer on a fallback for the entire catch-up
+// — even after the primary (e.g. a local node) has reached the chain head.
+// classIndexerLagging means "active node is reachable and at head; only the
+// indexer is behind," which is exactly when failing back to a healthy primary
+// helps it catch up faster. The other classes (node_lagging, stalled,
+// probe_failed) indicate an active-node problem and are handled by failover,
+// not failback.
+func canAttemptFailback(class syncClass, activeIdx, failoverIdx int) bool {
+	if activeIdx <= 0 || failoverIdx != -1 {
+		return false
+	}
+	return class == classSynced || class == classIndexerLagging
+}
+
 // runSyncWatchdogLoop ticks at watchdog.Interval, classifying drift and
 // reacting (subscription restart, failover, failback). Returns when ctx
 // is canceled.
@@ -309,11 +330,20 @@ func (i *Indexer) runWatchdogTick(ctx context.Context, cCfg classifyConfig, rCfg
 		}
 	}
 
-	// Failback when class is synced and we're on a fallback.
-	if class == classSynced && activeIdx > 0 && intent.failoverIdx == -1 {
+	// Failback when the active node is healthy (synced, or only the indexer
+	// is behind) and we're on a fallback. See canAttemptFailback — including
+	// classIndexerLagging is what lets us return to a recovered primary
+	// during a long cold sync instead of being stranded on a fallback.
+	if canAttemptFailback(class, activeIdx, intent.failoverIdx) {
 		for candidateIdx := 0; candidateIdx < activeIdx; candidateIdx++ {
 			cProbe, err := i.nodePool.Probe(ctx, candidateIdx)
-			if err != nil || cProbe.GenesisHash != chainID {
+			// Only build a failback streak when the candidate is reachable,
+			// on the same chain, AND at head (not node-lagging). The head
+			// check mirrors selectFailoverTarget and prevents flapping: without
+			// it we'd fail back to a primary that is itself still syncing, then
+			// immediately classify node_lagging and fail over again.
+			if err != nil || cProbe.GenesisHash != chainID ||
+				int64(cProbe.Target)-int64(cProbe.Frontier) > cCfg.NodeDriftThreshold {
 				i.syncStateMu.Lock()
 				st := i.syncStateInternal.streaks[candidateIdx]
 				st.healthy = 0

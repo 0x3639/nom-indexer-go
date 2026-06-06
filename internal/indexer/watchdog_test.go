@@ -229,6 +229,38 @@ func TestReactSyncedFailbackIdxAlwaysMinusOne(t *testing.T) {
 	}
 }
 
+func TestCanAttemptFailback(t *testing.T) {
+	cases := []struct {
+		name        string
+		class       syncClass
+		activeIdx   int
+		failoverIdx int
+		want        bool
+	}{
+		// The fix: a cold-syncing indexer on a fallback is classIndexerLagging,
+		// and must still be allowed to fail back to a recovered primary.
+		{"indexer_lagging on fallback fails back", classIndexerLagging, 1, -1, true},
+		{"synced on fallback fails back", classSynced, 1, -1, true},
+		// Active-node problems are handled by failover, not failback.
+		{"node_lagging does not fail back", classNodeLagging, 1, -1, false},
+		{"stalled does not fail back", classStalled, 1, -1, false},
+		{"probe_failed does not fail back", classProbeFailed, 1, -1, false},
+		// Already on the primary: nothing to fail back to.
+		{"synced on primary no failback", classSynced, 0, -1, false},
+		{"indexer_lagging on primary no failback", classIndexerLagging, 0, -1, false},
+		// A failover decided this tick takes precedence over failback.
+		{"pending failover suppresses failback", classIndexerLagging, 1, 1, false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := canAttemptFailback(tc.class, tc.activeIdx, tc.failoverIdx); got != tc.want {
+				t.Fatalf("canAttemptFailback(%s, idx=%d, failover=%d) = %v, want %v",
+					tc.class, tc.activeIdx, tc.failoverIdx, got, tc.want)
+			}
+		})
+	}
+}
+
 func TestNewSyncStateInitsStreaksForEachNode(t *testing.T) {
 	s := newSyncState(3)
 	if len(s.streaks) != 3 {
