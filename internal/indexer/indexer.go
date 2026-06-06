@@ -795,9 +795,14 @@ func (i *Indexer) updateBridgeConfig(ctx context.Context) error {
 		}
 	}
 
+	// Captured from GetSecurityInfo for the time-challenge loop below so we
+	// don't issue a second RPC. Zero if security info is unavailable.
+	var softDelay, adminDelay uint64
 	if sec, err := i.client().BridgeApi.GetSecurityInfo(); err != nil {
 		i.logger.Warn("bridge config: GetSecurityInfo failed", zap.Error(err))
 	} else if sec != nil {
+		softDelay = sec.SoftDelay
+		adminDelay = sec.AdministratorDelay
 		if err := i.repos.BridgeConfig.UpsertSecurityInfo(ctx, &models.BridgeSecurityInfo{
 			AdministratorDelay:   int64(sec.AdministratorDelay),
 			SoftDelay:            int64(sec.SoftDelay),
@@ -910,6 +915,37 @@ func (i *Indexer) updateBridgeConfig(ctx context.Context) error {
 			break
 		}
 		pageIndex++
+	}
+
+	// Time challenges: pending delay windows for security-sensitive bridge
+	// methods. The set is authoritative — challenges vanish when executed or
+	// expired — so prune rows not in the latest list.
+	if tcl, err := i.client().BridgeApi.GetTimeChallengesInfo(); err != nil {
+		i.logger.Warn("bridge config: GetTimeChallengesInfo failed", zap.Error(err))
+	} else if tcl != nil {
+		keep := make([]string, 0, len(tcl.List))
+		for _, tc := range tcl.List {
+			delay := int64(softDelay)
+			switch tc.MethodName {
+			case "ChangeAdministrator", "NominateGuardians":
+				delay = int64(adminDelay)
+			}
+			if err := i.repos.BridgeConfig.UpsertTimeChallenge(ctx, &models.BridgeTimeChallenge{
+				MethodName:           tc.MethodName,
+				ParamsHash:           tc.ParamsHash.String(),
+				ChallengeStartHeight: int64(tc.ChallengeStartHeight),
+				Delay:                delay,
+				EndHeight:            int64(tc.ChallengeStartHeight) + delay,
+				LastUpdatedTimestamp: now,
+			}); err != nil {
+				i.logger.Warn("bridge config: upsert time challenge failed", zap.Error(err))
+				continue
+			}
+			keep = append(keep, tc.MethodName)
+		}
+		if err := i.repos.BridgeConfig.DeleteTimeChallengesNotIn(ctx, keep); err != nil {
+			i.logger.Warn("bridge config: prune time challenges failed", zap.Error(err))
+		}
 	}
 
 	return nil
