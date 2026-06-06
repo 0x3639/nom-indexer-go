@@ -517,3 +517,13 @@ type SwapAsset struct {
 	Qsr                  int64  `db:"qsr"`
 	LastUpdatedTimestamp int64  `db:"last_updated_timestamp"`
 }
+
+// BridgeTimeChallenge is a pending time-locked bridge security operation.
+type BridgeTimeChallenge struct {
+	MethodName           string `db:"method_name"`
+	ParamsHash           string `db:"params_hash"`
+	ChallengeStartHeight int64  `db:"challenge_start_height"`
+	Delay                int64  `db:"delay"`
+	EndHeight            int64  `db:"end_height"`
+	LastUpdatedTimestamp int64  `db:"last_updated_timestamp"`
+}

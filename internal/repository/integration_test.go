@@ -98,6 +98,7 @@ func newTestDB(t *testing.T) *pgxpool.Pool {
 		token_mints, token_burns,
 		bridge_networks, bridge_network_tokens, bridge_admin, bridge_guardians,
 		bridge_orchestrator_info, bridge_security_info,
+		bridge_time_challenges,
 		delegations,
 		network_stat_histories, token_stat_histories, pillar_stat_histories,
 		bridge_stat_histories,

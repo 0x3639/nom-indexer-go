@@ -128,6 +128,61 @@ func (r *BridgeConfigRepository) UpsertSecurityInfo(ctx context.Context, s *mode
 	return err
 }
 
+// UpsertTimeChallenge inserts or refreshes a pending bridge time challenge,
+// keyed by method name.
+func (r *BridgeConfigRepository) UpsertTimeChallenge(ctx context.Context, c *models.BridgeTimeChallenge) error {
+	_, err := r.pool.Exec(ctx, `
+		INSERT INTO bridge_time_challenges (method_name, params_hash, challenge_start_height,
+			delay, end_height, last_updated_timestamp)
+		VALUES ($1, $2, $3, $4, $5, $6)
+		ON CONFLICT (method_name) DO UPDATE SET
+			params_hash = EXCLUDED.params_hash,
+			challenge_start_height = EXCLUDED.challenge_start_height,
+			delay = EXCLUDED.delay,
+			end_height = EXCLUDED.end_height,
+			last_updated_timestamp = EXCLUDED.last_updated_timestamp`,
+		c.MethodName, c.ParamsHash, c.ChallengeStartHeight,
+		c.Delay, c.EndHeight, c.LastUpdatedTimestamp)
+	return err
+}
+
+// DeleteTimeChallengesNotIn removes every time challenge whose method name is
+// not in keep. An empty keep set clears the table (no challenges are pending).
+func (r *BridgeConfigRepository) DeleteTimeChallengesNotIn(ctx context.Context, keep []string) error {
+	if len(keep) == 0 {
+		_, err := r.pool.Exec(ctx, `DELETE FROM bridge_time_challenges`)
+		return err
+	}
+	_, err := r.pool.Exec(ctx,
+		`DELETE FROM bridge_time_challenges WHERE method_name <> ALL($1)`, keep)
+	return err
+}
+
+// ListTimeChallenges returns all pending bridge time challenges ordered by the
+// height at which they become executable.
+func (r *BridgeConfigRepository) ListTimeChallenges(ctx context.Context) ([]*models.BridgeTimeChallenge, error) {
+	rows, err := r.pool.Query(ctx, `
+		SELECT method_name, params_hash, challenge_start_height, delay,
+			end_height, last_updated_timestamp
+		FROM bridge_time_challenges
+		ORDER BY end_height`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var list []*models.BridgeTimeChallenge
+	for rows.Next() {
+		var c models.BridgeTimeChallenge
+		if err := rows.Scan(&c.MethodName, &c.ParamsHash, &c.ChallengeStartHeight,
+			&c.Delay, &c.EndHeight, &c.LastUpdatedTimestamp); err != nil {
+			return nil, err
+		}
+		list = append(list, &c)
+	}
+	return list, rows.Err()
+}
+
 func (r *BridgeConfigRepository) GetAdmin(ctx context.Context) (*models.BridgeAdmin, error) {
 	var a models.BridgeAdmin
 	err := r.pool.QueryRow(ctx, `
