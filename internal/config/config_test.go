@@ -247,6 +247,26 @@ func TestNodesFallbacksDoNotDeriveWhenPortMissing(t *testing.T) {
 	}
 }
 
+func TestLoad_WebhooksDefaults(t *testing.T) {
+	// Hermetic: load(nil) passes no config paths, so viper never finds an
+	// ambient config.yaml — only env + defaults. The env vars below satisfy
+	// Validate()'s required-field checks (same pattern as the other load(nil)
+	// tests in this file).
+	t.Setenv("DATABASE_PASSWORD", "x")
+	t.Setenv("API_JWT_SECRET", "y")
+	t.Setenv("NODE_URL_WS", "ws://znnd:35998")
+	cfg, err := load(nil)
+	if err != nil {
+		t.Fatalf("load: %v", err)
+	}
+	if cfg.Webhooks.Enabled {
+		t.Error("webhooks should default disabled")
+	}
+	if cfg.Webhooks.TimeoutSeconds != 5 || cfg.Webhooks.MaxRetries != 3 {
+		t.Errorf("unexpected webhook defaults: %+v", cfg.Webhooks)
+	}
+}
+
 func TestWatchdogConfigDefaults(t *testing.T) {
 	t.Setenv("DATABASE_PASSWORD", "x")
 	t.Setenv("API_JWT_SECRET", "y")
