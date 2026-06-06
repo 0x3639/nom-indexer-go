@@ -116,6 +116,7 @@ nav:
       - sentinels: schema/sentinels.md
       - stakes: schema/stakes.md
       - fusions: schema/fusions.md
+      - htlcs: schema/htlcs.md
     - Accelerator-Z:
       - projects: schema/projects.md
       - project_phases: schema/project_phases.md

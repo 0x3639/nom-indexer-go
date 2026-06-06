@@ -41,6 +41,7 @@ no-foreign-keys design apply uniformly.
 | [`sentinels`](sentinels.md) | Sentinel node registrations. |
 | [`stakes`](stakes.md) | Staking entries (with ABI-derived `cancel_id`). |
 | [`fusions`](fusions.md) | Plasma fusion entries (with ABI-derived `cancel_id`). |
+| [`htlcs`](htlcs.md) | Hash-time-locked contract entries (Create → Unlock/Reclaim). |
 
 ### Accelerator-Z
 
