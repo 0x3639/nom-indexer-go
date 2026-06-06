@@ -159,6 +159,7 @@ nav:
     - Local znnd + bootstrap: operations/znnd-bootstrap.md
     - Monitoring: operations/monitoring.md
     - Sync watchdog: operations/watchdog.md
+    - Webhooks: operations/webhooks.md
     - Backfill: operations/backfill.md
     - Backup and restore: operations/backup-restore.md
     - Failure modes: operations/failure-modes.md
