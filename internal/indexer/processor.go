@@ -148,7 +148,7 @@ func (i *Indexer) processMomentum(ctx context.Context, m *api.Momentum) error {
 			Payload: map[string]any{
 				"height":    m.Height,
 				"hash":      m.Hash.String(),
-				"timestamp": m.TimestampUnix,
+				"timestamp": int64(m.TimestampUnix),
 			},
 		})
 		for _, ev := range blockEvents {

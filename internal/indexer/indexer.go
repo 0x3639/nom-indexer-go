@@ -116,6 +116,13 @@ func NewIndexerWithNodes(
 // mapping so internal/indexer stays decoupled from internal/config,
 // mirroring the toIndexerNodes pattern in cmd/indexer.
 func (i *Indexer) AttachWebhooks(endpoints []webhooks.Endpoint, timeout time.Duration, maxRetries int) {
+	// Defensively idempotent: a second call would overwrite i.webhooks,
+	// orphaning the already-started dispatcher (goroutine leak). Mirror the
+	// dispatcher's own hardened idempotent API and no-op instead.
+	if i.webhooks != nil {
+		i.logger.Warn("AttachWebhooks called more than once; ignoring duplicate, keeping existing dispatcher")
+		return
+	}
 	d := webhooks.New(endpoints, timeout, maxRetries, i.logger)
 	d.Start()
 	i.webhooks = d
