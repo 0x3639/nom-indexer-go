@@ -498,3 +498,22 @@ type Htlc struct {
 	SettleMomentumHeight      int64  `db:"settle_momentum_height"`
 	SettleMomentumTimestamp   int64  `db:"settle_momentum_timestamp"`
 }
+
+// SwapRetrieval is one RetrieveAssets claim against the legacy genesis swap.
+type SwapRetrieval struct {
+	ID                string `db:"id"`
+	Address           string `db:"address"`
+	PublicKey         string `db:"public_key"`
+	ZnnAmount         int64  `db:"znn_amount"`
+	QsrAmount         int64  `db:"qsr_amount"`
+	MomentumHeight    int64  `db:"momentum_height"`
+	MomentumTimestamp int64  `db:"momentum_timestamp"`
+}
+
+// SwapAsset is a remaining unswapped genesis balance keyed by keyIdHash.
+type SwapAsset struct {
+	KeyIDHash            string `db:"key_id_hash"`
+	Znn                  int64  `db:"znn"`
+	Qsr                  int64  `db:"qsr"`
+	LastUpdatedTimestamp int64  `db:"last_updated_timestamp"`
+}
