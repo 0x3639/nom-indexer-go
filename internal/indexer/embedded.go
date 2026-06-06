@@ -2,7 +2,9 @@ package indexer
 
 import (
 	"context"
+	"encoding/hex"
 	"strconv"
+	"strings"
 
 	"github.com/jackc/pgx/v5"
 	"github.com/zenon-network/go-zenon/rpc/api"
@@ -32,6 +34,8 @@ func (i *Indexer) indexEmbeddedContracts(ctx context.Context, batch *pgx.Batch, 
 		i.indexAcceleratorContract(ctx, batch, block, txData, m)
 	case models.TokenAddress:
 		i.indexTokenContract(ctx, batch, block, txData, m)
+	case models.HtlcAddress:
+		i.indexHtlcContract(ctx, batch, block, txData, m)
 	}
 }
 
@@ -368,5 +372,81 @@ func (i *Indexer) indexTokenContract(ctx context.Context, batch *pgx.Batch, bloc
 				zap.String("token", tokenStandard),
 				zap.Int64("timestamp", int64(m.TimestampUnix)))
 		}
+	}
+}
+
+// bytesToHex hex-encodes a byte slice; empty/nil yields "".
+func bytesToHex(b []byte) string {
+	if len(b) == 0 {
+		return ""
+	}
+	return hex.EncodeToString(b)
+}
+
+// hexMaybe normalizes an ABI-decoded bytes input (the decoder may hand back a
+// raw string of bytes via formatArg) into lowercase hex. If the value already
+// looks like hex it is returned lowercased; otherwise the bytes are encoded.
+func hexMaybe(s string) string {
+	if s == "" {
+		return ""
+	}
+	if _, err := hex.DecodeString(s); err == nil {
+		return strings.ToLower(s)
+	}
+	return hex.EncodeToString([]byte(s))
+}
+
+// indexHtlcContract handles HTLC Create / Unlock / Reclaim events.
+//
+// HTLC blocks arrive as ContractReceive on the HTLC address paired with a user
+// send. The entry id is the paired send-block hash (same convention as Stake).
+// Create carries the lock params + the send's amount/token/sender; Unlock and
+// Reclaim carry the target id (and Unlock a preimage) to settle the entry.
+func (i *Indexer) indexHtlcContract(ctx context.Context, batch *pgx.Batch, block *api.AccountBlock, txData *models.TxData, m *api.Momentum) {
+	if block.PairedAccountBlock == nil {
+		return
+	}
+	paired := block.PairedAccountBlock
+
+	switch txData.Method {
+	case "Create":
+		id := paired.Hash.String()
+		expiration, _ := strconv.ParseInt(txData.Inputs["expirationTime"], 10, 64)
+		hashType, _ := strconv.Atoi(txData.Inputs["hashType"])
+		keyMaxSize, _ := strconv.Atoi(txData.Inputs["keyMaxSize"])
+		amount := safeBigIntToInt64(paired.Amount, i.logger,
+			"htlc amount overflow", zap.String("htlcID", id))
+
+		h := &models.Htlc{
+			ID:                        id,
+			TimeLockedAddress:         paired.Address.String(), // sender can Reclaim
+			HashLockedAddress:         txData.Inputs["hashLocked"],
+			TokenStandard:             paired.TokenStandard.String(),
+			Amount:                    amount,
+			ExpirationTimestamp:       expiration,
+			HashType:                  int16(hashType),
+			KeyMaxSize:                int16(keyMaxSize),
+			HashLock:                  hexMaybe(txData.Inputs["hashLock"]),
+			Status:                    int16(models.HtlcStatusActive),
+			CreationMomentumHeight:    int64(m.Height),
+			CreationMomentumTimestamp: int64(m.TimestampUnix),
+		}
+		i.repos.Htlc.InsertBatch(batch, h)
+
+	case "Unlock":
+		id := txData.Inputs["id"]
+		if id == "" {
+			return
+		}
+		i.repos.Htlc.SettleBatch(batch, id, int16(models.HtlcStatusUnlocked),
+			hexMaybe(txData.Inputs["preimage"]), int64(m.Height), int64(m.TimestampUnix))
+
+	case "Reclaim":
+		id := txData.Inputs["id"]
+		if id == "" {
+			return
+		}
+		i.repos.Htlc.SettleBatch(batch, id, int16(models.HtlcStatusReclaimed),
+			"", int64(m.Height), int64(m.TimestampUnix))
 	}
 }
