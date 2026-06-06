@@ -963,12 +963,17 @@ func (i *Indexer) updateBridgeConfig(ctx context.Context) error {
 			case "ChangeAdministrator", "NominateGuardians":
 				delay = int64(adminDelay)
 			}
+			// First executable height is start+delay+1: go-zenon rejects while
+			// start+delay >= currentHeight (ErrTimeChallengeNotDue, common.go),
+			// so the action only passes once currentHeight > start+delay. Store
+			// end_height as that first executable height so "ready when
+			// current_height >= end_height" is exact.
 			if err := i.repos.BridgeConfig.UpsertTimeChallenge(ctx, &models.BridgeTimeChallenge{
 				MethodName:           tc.MethodName,
 				ParamsHash:           tc.ParamsHash.String(),
 				ChallengeStartHeight: int64(tc.ChallengeStartHeight),
 				Delay:                delay,
-				EndHeight:            int64(tc.ChallengeStartHeight) + delay,
+				EndHeight:            int64(tc.ChallengeStartHeight) + delay + 1,
 				LastUpdatedTimestamp: now,
 			}); err != nil {
 				i.logger.Warn("bridge config: upsert time challenge failed", zap.Error(err))

@@ -6586,22 +6586,31 @@ requests on endpoints you configured with a secret.
 
 ## Delivery semantics
 
-Delivery is **best-effort and at-least-once**. Design consumers to be
-**idempotent** — deduplicate on `hash` (or `height` for momentums).
+Delivery is **best-effort with no delivery guarantee**: events can be **lost**
+(crash or backpressure) and can be **duplicated** (re-sync/backfill). There is
+no durable outbox. Design consumers to tolerate both — be **idempotent**
+(deduplicate on `hash`, or `height` for momentums) and don't assume every
+on-chain event produces exactly one webhook. If you need guaranteed delivery,
+poll the REST API / database as the source of truth and treat webhooks only as
+a low-latency hint.
 
 - **Fire-and-forget.** Emitting an event never blocks the sync loop. Events
   are placed on a bounded in-memory queue (1024 entries) drained by a single
   worker goroutine.
-- **Drop under backpressure.** If the queue is full (a slow or unreachable
-  endpoint stalling the worker), new events are **dropped** and a warning is
-  logged rather than blocking the indexer. Dropped events are not retried.
+- **Loss on crash (no replay for normal sync).** Events are emitted *after*
+  the momentum's DB transaction commits. If the process crashes between commit
+  and enqueue/delivery, those events are **lost**: live sync resumes from the
+  committed DB height and does **not** re-process it, so it won't re-fire them.
+- **Drop under backpressure (unrecoverable).** If the queue is full (a slow or
+  unreachable endpoint stalling the worker), new events are **dropped** with a
+  warning and never retried.
 - **Bounded retries.** A failed delivery (network error or non-2xx response)
   is retried up to `max_retries` times with a short linear backoff, then
   given up on with a log line.
-- **At-least-once / replay.** Events fire after commit, but a crash between
-  commit and delivery re-processes the height on restart, re-firing its
-  events. The same events also fire during **backfill** (the per-momentum
-  path is shared), so a fresh sync or re-sync replays the full event stream.
+- **Duplicates on replay.** The same per-momentum path runs during
+  **backfill** and any re-sync of already-indexed heights, so those heights
+  re-fire their events. This is the one case where an event is delivered more
+  than once — hence the idempotency requirement above.
 - **No strong ordering.** Across endpoints there is no ordering guarantee.
   Within a single endpoint deliveries are roughly in-order (single worker),
   but retries and drops mean strict ordering is **not** guaranteed. The
@@ -6611,7 +6620,8 @@ Delivery is **best-effort and at-least-once**. Design consumers to be
 Because the queue is in-memory and unpersisted, events queued but not yet
 delivered when the indexer stops are lost. A graceful stop lets the
 in-flight delivery (and its retry loop) finish, but does not flush the
-remaining queue.
+remaining queue. A durable outbox/replay path would be required for
+at-least-once delivery; that is intentionally out of scope for this version.
 
 ## Security
 
@@ -8159,7 +8169,7 @@ Heights and timestamps are int64 `BIGINT`; hashes follow the
 | `params_hash` | `TEXT` | NO | `''` | Hash of the pending call's parameters. The second call must hash to this value to execute. |
 | `challenge_start_height` | `BIGINT` | NO | `0` | Momentum height at which the challenge was registered (the window opened). |
 | `delay` | `BIGINT` | NO | `0` | Length of the delay window in **momentums**, taken from bridge SecurityInfo. See **Notes** for the `delay = 0` transient case. |
-| `end_height` | `BIGINT` | NO | `0` | Earliest momentum height at which the action may execute: `challenge_start_height + delay`. |
+| `end_height` | `BIGINT` | NO | `0` | Earliest momentum height at which the action may execute: `challenge_start_height + delay + 1`. (go-zenon rejects while `start + delay >= current_height`, so the first executable height is `start + delay + 1`.) |
 | `last_updated_timestamp` | `BIGINT` | NO | `0` | Unix seconds of the last bridge sync that observed this challenge. |
 
 ## Challenged methods and their delay
@@ -8177,7 +8187,8 @@ from [`bridge_security_info`](bridge_security_info.md):
 The indexer applies this mapping while writing each row: methods default to
 `SoftDelay`, with `ChangeAdministrator` and `NominateGuardians` switched to
 `AdministratorDelay`. `delay` is then this value and `end_height` is
-`challenge_start_height + delay`.
+`challenge_start_height + delay + 1` (the first height at which the second call
+passes; go-zenon rejects while `start + delay >= current_height`).
 
 ## Primary key & indexes
 
@@ -8202,7 +8213,7 @@ on the bridge sync loop (~1-minute tick). It is RPC-polled, not block-driven:
 2. For each challenge it computes `delay` from the method→delay mapping above
    (using the SecurityInfo fetched earlier in the same tick), then **upserts**
    the row via `UpsertTimeChallenge` with
-   `end_height = challenge_start_height + delay` and
+   `end_height = challenge_start_height + delay + 1` and
    `last_updated_timestamp = now`.
 3. It collects the method names just seen and calls
    `DeleteTimeChallengesNotIn(keep)` to **prune** every row not in the latest
@@ -8214,7 +8225,8 @@ on the bridge sync loop (~1-minute tick). It is RPC-polled, not block-driven:
 - **Is a specific method challenged right now** — direct PK lookup on
   `method_name`.
 - **Challenges ready to execute** — `WHERE end_height <= <current_height>`
-  (the delay has elapsed).
+  (`end_height` is the first executable height, so this is exact — at
+  `current_height = end_height` the second call passes).
 
 ## Notes
 
@@ -8239,7 +8251,7 @@ action is currently in its delay window," not an indexer failure.
 `delay` and `end_height` are derived from SecurityInfo fetched at the start of
 the same sync tick. If that SecurityInfo call fails transiently, the captured
 `softDelay`/`adminDelay` are `0`, so a challenge inserted on that tick gets
-`delay = 0` and `end_height = challenge_start_height`. This self-corrects: the
+`delay = 0` and `end_height = challenge_start_height + 1`. This self-corrects: the
 next tick (with SecurityInfo available) upserts the same row with the correct
 `delay` and `end_height`. Treat a `delay = 0` row as provisional.
 
@@ -8731,7 +8743,7 @@ follow the [schema conventions](conventions.md).
 
 | Column | Type | Null | Default | Notes |
 |---|---|---|---|---|
-| `id` | `TEXT` | NO | — | Primary key. The creating (`Create`) account-block hash. See **Notes** for the id-linkage convention. |
+| `id` | `TEXT` | NO | — | Primary key. The `Create` send-block hash (`paired.Hash`, = go-zenon `sendBlock.Hash`). See **Notes** for the id-linkage convention. |
 | `time_locked_address` | `TEXT` | NO | `''` | Sender (`z1…`); can `Reclaim` after expiry. |
 | `hash_locked_address` | `TEXT` | NO | `''` | Recipient (`z1…`); can `Unlock` with the preimage. |
 | `token_standard` | `TEXT` | NO | `''` | Locked token (`zts1…`). |
@@ -8772,8 +8784,8 @@ The Go constants are `HtlcStatusActive` / `HtlcStatusUnlocked` /
 
 - `time_locked_address`, `hash_locked_address` ↔ [`accounts.address`](accounts.md).
 - `token_standard` ↔ [`tokens.token_standard`](tokens.md).
-- `id` is the `Create` account-block hash — see [`account_blocks`](account_blocks.md)
-  and the **Notes** section below.
+- `id` is the `Create` **send-block** hash (`paired.Hash`) — see
+  [`account_blocks`](account_blocks.md) and the **Notes** section below.
 
 ## Write path
 
@@ -8814,28 +8826,27 @@ Live mainnet data was available and verified against the synced
 | `Unlock` | 509 |
 | `Reclaim` | 62 |
 
-The empirical result, checked across **all** 571 settle blocks:
+The HTLC id is the **send-block hash**. go-zenon assigns
+`HtlcInfo.Id = sendBlock.Hash` when it processes a `Create`
+(`vm/embedded/implementation/htlc.go`), and `Unlock`/`Reclaim` look the entry up
+by that id. In handler terms the `Create` arrives as a contract-receive block
+(`block`) whose `block.PairedAccountBlock` (`paired`) is the user's send block,
+so the id is **`paired.Hash`**.
 
-- For **509/509** `Unlock` and **62/62** `Reclaim` blocks, the decoded
-  `input.id` equals the **`Create` receive-block's own `hash`**
-  (`account_blocks.hash` = `block.Hash`), i.e. the contract-receive block on
-  the HTLC address.
-- It does **not** equal the `Create` block's `paired_account_block` (the
-  user's send-block hash): **0/509** `Unlock` and **0/62** `Reclaim` match
-  that value.
+Empirical confirmation across **all 571** settle blocks on mainnet (the
+`Create` rows are `block_type = 2` user-send blocks, so `account_blocks.hash`
+on a `Create` row is the send-block hash = `paired.Hash`):
 
-So the canonical HTLC id is the **`Create` contract-receive block hash**, not
-the paired send-block hash. This differs from [`stakes`](stakes.md) /
-[`fusions`](fusions.md), where the id is the paired send-block hash and the
-settling call is correlated through a separately ABI-derived `cancel_id`.
+- **509/509** `Unlock` and **62/62** `Reclaim` blocks have `input.id` equal to
+  the `Create` **send-block hash** (`paired.Hash`).
+- **0/571** match the `Create` contract-receive block hash (`block.Hash`, the
+  `paired_account_block` of the receive block).
 
-> **Fix applied:** the handler now stores `id = block.Hash` (the `Create`
-> receive-block hash) on `Create`, which is the value the live data confirms
-> `Unlock`/`Reclaim` reference — verified against **571/571** mainnet
-> settlements (509 `Unlock` + 62 `Reclaim`, 100% match). With this id,
-> `SettleBatch` updates the correct row, so entries transition out of `active`
-> when settled. (Earlier revisions stored `paired.Hash`, the send-block hash,
-> under which settlements matched no rows; that defect is now corrected.)
+This matches [`stakes`](stakes.md) / [`fusions`](fusions.md) in using the
+send-block hash as the id, but unlike them HTLC needs no separately ABI-derived
+`cancel_id` — `Unlock`/`Reclaim` carry the send-block hash directly as
+`input.id`. The handler stores `id = paired.Hash` on `Create`, so `SettleBatch`
+updates the correct row and entries transition out of `active` when settled.
 
 
 === docs/schema/index.md ===
@@ -9850,13 +9861,20 @@ per account block, against the Swap contract address
 
 ## Notes
 
-`znn_amount` and `qsr_amount` are **summed from the contract's descendant
-disbursement blocks**, not read from an ABI return value. A `RetrieveAssets`
-receive on the swap contract spawns descendant send-blocks (`block.DescendantBlocks`)
-that pay out the claimant's remaining genesis balance; the handler iterates
-those descendants and accumulates each `.Amount` into `znn_amount` or
-`qsr_amount` by matching `.TokenStandard` against the ZNN and QSR token
-standards. A claim that disburses only one asset leaves the other amount at `0`.
+`znn_amount` and `qsr_amount` are **decoded from the descendant
+`Token.Mint` calls**, not read from the descendant block amounts. A
+`RetrieveAssets` receive on the swap contract spawns descendant blocks
+(`block.DescendantBlocks`) that disburse the claimant's remaining genesis
+balance — but go-zenon emits each as a `Mint` call to the token contract whose
+block-level `Amount` is `0` and whose block-level `TokenStandard` is **ZNN for
+both** the ZNN and QSR payout (a quirk in
+`vm/embedded/implementation/swap.go`). The real token and amount live in the
+`Mint(tokenStandard, amount, receiveAddress)` call data, so the handler decodes
+each descendant's `Data` with the Token ABI and, for `Mint` calls, accumulates
+the decoded `amount` into `znn_amount` or `qsr_amount` by matching the Mint's
+`tokenStandard`. A claim that disburses only one asset leaves the other amount
+at `0`. (Reading the descendant block `.Amount`/`.TokenStandard` directly would
+record `0` and mis-bucket QSR as ZNN.)
 
 The **authoritative remaining (unclaimed) balances** live in the
 [`swap_assets`](swap_assets.md) snapshot, not here — this table is the per-claim

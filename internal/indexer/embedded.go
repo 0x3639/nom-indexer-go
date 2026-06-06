@@ -3,9 +3,11 @@ package indexer
 import (
 	"context"
 	"encoding/hex"
+	"math/big"
 	"strconv"
 	"strings"
 
+	"github.com/0x3639/znn-sdk-go/embedded"
 	"github.com/jackc/pgx/v5"
 	"github.com/zenon-network/go-zenon/rpc/api"
 	"go.uber.org/zap"
@@ -381,10 +383,15 @@ func (i *Indexer) indexTokenContract(ctx context.Context, batch *pgx.Batch, bloc
 //
 // A claimant calls RetrieveAssets(publicKey, signature) on the swap contract;
 // the contract disburses the claimant's remaining genesis ZNN and/or QSR as
-// descendant send-blocks. We key the swap_retrievals row by the paired send
-// block hash and sum the disbursed amounts from the descendant blocks (each a
-// nom.AccountBlock with .Amount and .TokenStandard). Authoritative remaining
-// balances come from the swap_assets snapshot (syncSwapAssets).
+// descendant blocks. Those descendants are Token.Mint calls to the token
+// contract whose own block-level Amount is 0 and whose block-level
+// TokenStandard is ZNN for BOTH the ZNN and QSR payout (a go-zenon quirk, see
+// vm/embedded/implementation/swap.go). The real token+amount live in the Mint
+// call data: Mint(tokenStandard, amount, receiveAddress). So we decode each
+// descendant's Data with the Token ABI and read the amount from the Mint
+// params, bucketing by the Mint's tokenStandard. We key the swap_retrievals row
+// by the paired send-block hash. Authoritative remaining balances come from the
+// swap_assets snapshot (syncSwapAssets).
 func (i *Indexer) indexSwapContract(ctx context.Context, batch *pgx.Batch, block *api.AccountBlock, txData *models.TxData, m *api.Momentum) {
 	if txData.Method != "RetrieveAssets" || block.PairedAccountBlock == nil {
 		return
@@ -393,14 +400,25 @@ func (i *Indexer) indexSwapContract(ctx context.Context, batch *pgx.Batch, block
 
 	var znn, qsr int64
 	for _, d := range block.DescendantBlocks {
-		amt := safeBigIntToInt64(d.Amount, i.logger,
+		dec := i.tryDecodeFromAbi(d.Data, embedded.Token)
+		if dec == nil || dec.Method != "Mint" {
+			continue
+		}
+		amt, ok := new(big.Int).SetString(dec.Inputs["amount"], 10)
+		if !ok {
+			i.logger.Warn("swap retrieval: unparseable mint amount",
+				zap.String("swapID", paired.Hash.String()),
+				zap.String("amount", dec.Inputs["amount"]))
+			continue
+		}
+		v := safeBigIntToInt64(amt, i.logger,
 			"swap retrieval amount overflow",
 			zap.String("swapID", paired.Hash.String()))
-		switch d.TokenStandard.String() {
+		switch dec.Inputs["tokenStandard"] {
 		case models.ZnnTokenStandard:
-			znn += amt
+			znn += v
 		case models.QsrTokenStandard:
-			qsr += amt
+			qsr += v
 		}
 	}
 
@@ -444,12 +462,13 @@ func hexMaybe(s string) string {
 // indexHtlcContract handles HTLC Create / Unlock / Reclaim events.
 //
 // HTLC blocks arrive as ContractReceive on the HTLC address paired with a user
-// send. The entry id is the Create receive-block hash (block.Hash). Unlike
-// Stake (which settles via a separately ABI-derived cancel_id), HTLC settles by
-// the receive-block hash directly: Unlock/Reclaim reference block.Hash as their
-// target id (verified against mainnet, 571/571 settlements match). Create
-// carries the lock params + the send's amount/token/sender (from paired); Unlock
-// and Reclaim carry the target id (and Unlock a preimage) to settle the entry.
+// send. The entry id is the Create *send*-block hash (paired.Hash): go-zenon
+// sets HtlcInfo.Id = sendBlock.Hash (vm/embedded/implementation/htlc.go), and
+// Unlock/Reclaim reference that send-block hash as their target id (verified
+// against mainnet: 571/571 settlements match the send-block hash, 0 match the
+// receive-block hash). Create carries the lock params + the send's
+// amount/token/sender (all from paired); Unlock and Reclaim carry the target id
+// (and Unlock a preimage) to settle the entry.
 func (i *Indexer) indexHtlcContract(ctx context.Context, batch *pgx.Batch, block *api.AccountBlock, txData *models.TxData, m *api.Momentum) {
 	if block.PairedAccountBlock == nil {
 		return
@@ -458,7 +477,7 @@ func (i *Indexer) indexHtlcContract(ctx context.Context, batch *pgx.Batch, block
 
 	switch txData.Method {
 	case "Create":
-		id := block.Hash.String()
+		id := paired.Hash.String()
 
 		expirationStr := txData.Inputs["expirationTime"]
 		expiration, err := strconv.ParseInt(expirationStr, 10, 64)

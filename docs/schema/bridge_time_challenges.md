@@ -44,7 +44,7 @@ Heights and timestamps are int64 `BIGINT`; hashes follow the
 | `params_hash` | `TEXT` | NO | `''` | Hash of the pending call's parameters. The second call must hash to this value to execute. |
 | `challenge_start_height` | `BIGINT` | NO | `0` | Momentum height at which the challenge was registered (the window opened). |
 | `delay` | `BIGINT` | NO | `0` | Length of the delay window in **momentums**, taken from bridge SecurityInfo. See **Notes** for the `delay = 0` transient case. |
-| `end_height` | `BIGINT` | NO | `0` | Earliest momentum height at which the action may execute: `challenge_start_height + delay`. |
+| `end_height` | `BIGINT` | NO | `0` | Earliest momentum height at which the action may execute: `challenge_start_height + delay + 1`. (go-zenon rejects while `start + delay >= current_height`, so the first executable height is `start + delay + 1`.) |
 | `last_updated_timestamp` | `BIGINT` | NO | `0` | Unix seconds of the last bridge sync that observed this challenge. |
 
 ## Challenged methods and their delay
@@ -62,7 +62,8 @@ from [`bridge_security_info`](bridge_security_info.md):
 The indexer applies this mapping while writing each row: methods default to
 `SoftDelay`, with `ChangeAdministrator` and `NominateGuardians` switched to
 `AdministratorDelay`. `delay` is then this value and `end_height` is
-`challenge_start_height + delay`.
+`challenge_start_height + delay + 1` (the first height at which the second call
+passes; go-zenon rejects while `start + delay >= current_height`).
 
 ## Primary key & indexes
 
@@ -87,7 +88,7 @@ on the bridge sync loop (~1-minute tick). It is RPC-polled, not block-driven:
 2. For each challenge it computes `delay` from the method→delay mapping above
    (using the SecurityInfo fetched earlier in the same tick), then **upserts**
    the row via `UpsertTimeChallenge` with
-   `end_height = challenge_start_height + delay` and
+   `end_height = challenge_start_height + delay + 1` and
    `last_updated_timestamp = now`.
 3. It collects the method names just seen and calls
    `DeleteTimeChallengesNotIn(keep)` to **prune** every row not in the latest
@@ -99,7 +100,8 @@ on the bridge sync loop (~1-minute tick). It is RPC-polled, not block-driven:
 - **Is a specific method challenged right now** — direct PK lookup on
   `method_name`.
 - **Challenges ready to execute** — `WHERE end_height <= <current_height>`
-  (the delay has elapsed).
+  (`end_height` is the first executable height, so this is exact — at
+  `current_height = end_height` the second call passes).
 
 ## Notes
 
@@ -124,6 +126,6 @@ action is currently in its delay window," not an indexer failure.
 `delay` and `end_height` are derived from SecurityInfo fetched at the start of
 the same sync tick. If that SecurityInfo call fails transiently, the captured
 `softDelay`/`adminDelay` are `0`, so a challenge inserted on that tick gets
-`delay = 0` and `end_height = challenge_start_height`. This self-corrects: the
+`delay = 0` and `end_height = challenge_start_height + 1`. This self-corrects: the
 next tick (with SecurityInfo available) upserts the same row with the correct
 `delay` and `end_height`. Treat a `delay = 0` row as provisional.

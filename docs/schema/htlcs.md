@@ -24,7 +24,7 @@ follow the [schema conventions](conventions.md).
 
 | Column | Type | Null | Default | Notes |
 |---|---|---|---|---|
-| `id` | `TEXT` | NO | — | Primary key. The creating (`Create`) account-block hash. See **Notes** for the id-linkage convention. |
+| `id` | `TEXT` | NO | — | Primary key. The `Create` send-block hash (`paired.Hash`, = go-zenon `sendBlock.Hash`). See **Notes** for the id-linkage convention. |
 | `time_locked_address` | `TEXT` | NO | `''` | Sender (`z1…`); can `Reclaim` after expiry. |
 | `hash_locked_address` | `TEXT` | NO | `''` | Recipient (`z1…`); can `Unlock` with the preimage. |
 | `token_standard` | `TEXT` | NO | `''` | Locked token (`zts1…`). |
@@ -65,8 +65,8 @@ The Go constants are `HtlcStatusActive` / `HtlcStatusUnlocked` /
 
 - `time_locked_address`, `hash_locked_address` ↔ [`accounts.address`](accounts.md).
 - `token_standard` ↔ [`tokens.token_standard`](tokens.md).
-- `id` is the `Create` account-block hash — see [`account_blocks`](account_blocks.md)
-  and the **Notes** section below.
+- `id` is the `Create` **send-block** hash (`paired.Hash`) — see
+  [`account_blocks`](account_blocks.md) and the **Notes** section below.
 
 ## Write path
 
@@ -107,25 +107,24 @@ Live mainnet data was available and verified against the synced
 | `Unlock` | 509 |
 | `Reclaim` | 62 |
 
-The empirical result, checked across **all** 571 settle blocks:
+The HTLC id is the **send-block hash**. go-zenon assigns
+`HtlcInfo.Id = sendBlock.Hash` when it processes a `Create`
+(`vm/embedded/implementation/htlc.go`), and `Unlock`/`Reclaim` look the entry up
+by that id. In handler terms the `Create` arrives as a contract-receive block
+(`block`) whose `block.PairedAccountBlock` (`paired`) is the user's send block,
+so the id is **`paired.Hash`**.
 
-- For **509/509** `Unlock` and **62/62** `Reclaim` blocks, the decoded
-  `input.id` equals the **`Create` receive-block's own `hash`**
-  (`account_blocks.hash` = `block.Hash`), i.e. the contract-receive block on
-  the HTLC address.
-- It does **not** equal the `Create` block's `paired_account_block` (the
-  user's send-block hash): **0/509** `Unlock` and **0/62** `Reclaim` match
-  that value.
+Empirical confirmation across **all 571** settle blocks on mainnet (the
+`Create` rows are `block_type = 2` user-send blocks, so `account_blocks.hash`
+on a `Create` row is the send-block hash = `paired.Hash`):
 
-So the canonical HTLC id is the **`Create` contract-receive block hash**, not
-the paired send-block hash. This differs from [`stakes`](stakes.md) /
-[`fusions`](fusions.md), where the id is the paired send-block hash and the
-settling call is correlated through a separately ABI-derived `cancel_id`.
+- **509/509** `Unlock` and **62/62** `Reclaim` blocks have `input.id` equal to
+  the `Create` **send-block hash** (`paired.Hash`).
+- **0/571** match the `Create` contract-receive block hash (`block.Hash`, the
+  `paired_account_block` of the receive block).
 
-> **Fix applied:** the handler now stores `id = block.Hash` (the `Create`
-> receive-block hash) on `Create`, which is the value the live data confirms
-> `Unlock`/`Reclaim` reference — verified against **571/571** mainnet
-> settlements (509 `Unlock` + 62 `Reclaim`, 100% match). With this id,
-> `SettleBatch` updates the correct row, so entries transition out of `active`
-> when settled. (Earlier revisions stored `paired.Hash`, the send-block hash,
-> under which settlements matched no rows; that defect is now corrected.)
+This matches [`stakes`](stakes.md) / [`fusions`](fusions.md) in using the
+send-block hash as the id, but unlike them HTLC needs no separately ABI-derived
+`cancel_id` — `Unlock`/`Reclaim` carry the send-block hash directly as
+`input.id`. The handler stores `id = paired.Hash` on `Create`, so `SettleBatch`
+updates the correct row and entries transition out of `active` when settled.

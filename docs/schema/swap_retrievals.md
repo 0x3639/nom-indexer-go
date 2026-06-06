@@ -66,13 +66,20 @@ per account block, against the Swap contract address
 
 ## Notes
 
-`znn_amount` and `qsr_amount` are **summed from the contract's descendant
-disbursement blocks**, not read from an ABI return value. A `RetrieveAssets`
-receive on the swap contract spawns descendant send-blocks (`block.DescendantBlocks`)
-that pay out the claimant's remaining genesis balance; the handler iterates
-those descendants and accumulates each `.Amount` into `znn_amount` or
-`qsr_amount` by matching `.TokenStandard` against the ZNN and QSR token
-standards. A claim that disburses only one asset leaves the other amount at `0`.
+`znn_amount` and `qsr_amount` are **decoded from the descendant
+`Token.Mint` calls**, not read from the descendant block amounts. A
+`RetrieveAssets` receive on the swap contract spawns descendant blocks
+(`block.DescendantBlocks`) that disburse the claimant's remaining genesis
+balance — but go-zenon emits each as a `Mint` call to the token contract whose
+block-level `Amount` is `0` and whose block-level `TokenStandard` is **ZNN for
+both** the ZNN and QSR payout (a quirk in
+`vm/embedded/implementation/swap.go`). The real token and amount live in the
+`Mint(tokenStandard, amount, receiveAddress)` call data, so the handler decodes
+each descendant's `Data` with the Token ABI and, for `Mint` calls, accumulates
+the decoded `amount` into `znn_amount` or `qsr_amount` by matching the Mint's
+`tokenStandard`. A claim that disburses only one asset leaves the other amount
+at `0`. (Reading the descendant block `.Amount`/`.TokenStandard` directly would
+record `0` and mis-bucket QSR as ZNN.)
 
 The **authoritative remaining (unclaimed) balances** live in the
 [`swap_assets`](swap_assets.md) snapshot, not here — this table is the per-claim

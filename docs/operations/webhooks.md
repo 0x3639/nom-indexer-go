@@ -155,22 +155,31 @@ requests on endpoints you configured with a secret.
 
 ## Delivery semantics
 
-Delivery is **best-effort and at-least-once**. Design consumers to be
-**idempotent** — deduplicate on `hash` (or `height` for momentums).
+Delivery is **best-effort with no delivery guarantee**: events can be **lost**
+(crash or backpressure) and can be **duplicated** (re-sync/backfill). There is
+no durable outbox. Design consumers to tolerate both — be **idempotent**
+(deduplicate on `hash`, or `height` for momentums) and don't assume every
+on-chain event produces exactly one webhook. If you need guaranteed delivery,
+poll the REST API / database as the source of truth and treat webhooks only as
+a low-latency hint.
 
 - **Fire-and-forget.** Emitting an event never blocks the sync loop. Events
   are placed on a bounded in-memory queue (1024 entries) drained by a single
   worker goroutine.
-- **Drop under backpressure.** If the queue is full (a slow or unreachable
-  endpoint stalling the worker), new events are **dropped** and a warning is
-  logged rather than blocking the indexer. Dropped events are not retried.
+- **Loss on crash (no replay for normal sync).** Events are emitted *after*
+  the momentum's DB transaction commits. If the process crashes between commit
+  and enqueue/delivery, those events are **lost**: live sync resumes from the
+  committed DB height and does **not** re-process it, so it won't re-fire them.
+- **Drop under backpressure (unrecoverable).** If the queue is full (a slow or
+  unreachable endpoint stalling the worker), new events are **dropped** with a
+  warning and never retried.
 - **Bounded retries.** A failed delivery (network error or non-2xx response)
   is retried up to `max_retries` times with a short linear backoff, then
   given up on with a log line.
-- **At-least-once / replay.** Events fire after commit, but a crash between
-  commit and delivery re-processes the height on restart, re-firing its
-  events. The same events also fire during **backfill** (the per-momentum
-  path is shared), so a fresh sync or re-sync replays the full event stream.
+- **Duplicates on replay.** The same per-momentum path runs during
+  **backfill** and any re-sync of already-indexed heights, so those heights
+  re-fire their events. This is the one case where an event is delivered more
+  than once — hence the idempotency requirement above.
 - **No strong ordering.** Across endpoints there is no ordering guarantee.
   Within a single endpoint deliveries are roughly in-order (single worker),
   but retries and drops mean strict ordering is **not** guaranteed. The
@@ -180,7 +189,8 @@ Delivery is **best-effort and at-least-once**. Design consumers to be
 Because the queue is in-memory and unpersisted, events queued but not yet
 delivered when the indexer stops are lost. A graceful stop lets the
 in-flight delivery (and its retry loop) finish, but does not flush the
-remaining queue.
+remaining queue. A durable outbox/replay path would be required for
+at-least-once delivery; that is intentionally out of scope for this version.
 
 ## Security
 
