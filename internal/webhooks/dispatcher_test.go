@@ -2,6 +2,7 @@ package webhooks
 
 import (
 	"encoding/json"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"sync"
@@ -16,8 +17,7 @@ func TestDispatcher_DeliversAndSigns(t *testing.T) {
 		sigs   []string
 	)
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		buf := make([]byte, r.ContentLength)
-		_, _ = r.Body.Read(buf)
+		buf, _ := io.ReadAll(r.Body)
 		mu.Lock()
 		bodies = append(bodies, buf)
 		sigs = append(sigs, r.Header.Get("X-Webhook-Signature"))
@@ -68,4 +68,40 @@ func TestDispatcher_EventFilter(t *testing.T) {
 	if !d.wants(d.endpoints[0], "account_block.inserted") {
 		t.Error("should want subscribed event")
 	}
+}
+
+func TestDispatcher_EmitAfterStopIsSafe(t *testing.T) {
+	d := New([]Endpoint{{URL: "http://127.0.0.1:0"}}, time.Second, 0, nil)
+	d.Start()
+	d.Stop()
+	// Must not panic.
+	d.Emit(Event{Type: "momentum.inserted", Payload: map[string]any{"h": "1"}})
+	// Double stop must not panic.
+	d.Stop()
+}
+
+func TestDispatcher_ConcurrentEmitAndStop(t *testing.T) {
+	d := New([]Endpoint{{URL: "http://127.0.0.1:0"}}, time.Second, 0, nil)
+	d.Start()
+
+	const emitters = 8
+	var wg sync.WaitGroup
+	wg.Add(emitters)
+	for i := 0; i < emitters; i++ {
+		go func() {
+			defer wg.Done()
+			for j := 0; j < 200; j++ {
+				// Some of these land before Stop, some after; all must be
+				// panic-free (the queue is never closed).
+				d.Emit(Event{Type: "momentum.inserted", Payload: map[string]any{"j": j}})
+			}
+		}()
+	}
+
+	// Race Stop against the emitters.
+	go d.Stop()
+
+	wg.Wait()
+	// Ensure shutdown completed; second Stop is a no-op wait.
+	d.Stop()
 }

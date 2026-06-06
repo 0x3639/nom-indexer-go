@@ -12,6 +12,8 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"net/http"
+	"sync"
+	"sync/atomic"
 	"time"
 
 	"go.uber.org/zap"
@@ -39,6 +41,10 @@ type Dispatcher struct {
 	queue      chan Event
 	client     *http.Client
 	done       chan struct{}
+	quit       chan struct{}
+	closed     atomic.Bool
+	startOnce  sync.Once
+	stopOnce   sync.Once
 }
 
 // New builds a Dispatcher. logger may be nil (a no-op logger is used).
@@ -54,23 +60,42 @@ func New(endpoints []Endpoint, timeout time.Duration, maxRetries int, logger *za
 		queue:      make(chan Event, 1024),
 		client:     &http.Client{Timeout: timeout},
 		done:       make(chan struct{}),
+		quit:       make(chan struct{}),
 	}
 }
 
-// Start launches the delivery worker.
+// Start launches the delivery worker. Idempotent: calling it more than once
+// spawns at most one worker.
 func (d *Dispatcher) Start() {
-	go d.run()
+	d.startOnce.Do(func() { go d.run() })
 }
 
-// Stop drains and stops the worker.
+// Stop signals the worker to shut down and blocks until it has returned.
+//
+// Shutdown is best-effort: an in-flight delivery (including its bounded retry
+// loop) is allowed to finish, but any events still buffered in the queue that
+// have not yet been picked up are dropped — consistent with the drop-on-full
+// contract. The queue itself is never closed; shutdown is signalled via the
+// quit channel plus an atomic flag so a racing Emit can never send on a closed
+// channel.
+//
+// Stop is idempotent and safe to call concurrently: subsequent calls are
+// no-ops that simply wait for the (already-closed) done channel.
 func (d *Dispatcher) Stop() {
-	close(d.queue)
+	d.stopOnce.Do(func() {
+		d.closed.Store(true)
+		close(d.quit)
+	})
 	<-d.done
 }
 
 // Emit enqueues an event. Non-blocking: if the queue is full the event is
-// dropped with a warning (back-pressure must never stall the indexer).
+// dropped with a warning (back-pressure must never stall the indexer). After
+// Stop has been called Emit is a harmless no-op.
 func (d *Dispatcher) Emit(e Event) {
+	if d.closed.Load() {
+		return
+	}
 	select {
 	case d.queue <- e:
 	default:
@@ -80,18 +105,27 @@ func (d *Dispatcher) Emit(e Event) {
 
 func (d *Dispatcher) run() {
 	defer close(d.done)
-	for e := range d.queue {
-		body, err := json.Marshal(e)
-		if err != nil {
-			d.logger.Warn("webhook marshal failed", zap.Error(err))
+	for {
+		select {
+		case <-d.quit:
+			return
+		case e := <-d.queue:
+			d.dispatch(e)
+		}
+	}
+}
+
+func (d *Dispatcher) dispatch(e Event) {
+	body, err := json.Marshal(e)
+	if err != nil {
+		d.logger.Warn("webhook marshal failed", zap.Error(err))
+		return
+	}
+	for _, ep := range d.endpoints {
+		if !d.wants(ep, e.Type) {
 			continue
 		}
-		for _, ep := range d.endpoints {
-			if !d.wants(ep, e.Type) {
-				continue
-			}
-			d.deliver(ep, e.Type, body)
-		}
+		d.deliver(ep, e.Type, body)
 	}
 }
 
