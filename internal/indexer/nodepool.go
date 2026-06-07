@@ -117,6 +117,30 @@ func (p *NodePool) Probe(ctx context.Context, idx int) (ProbeResult, error) {
 	}, nil
 }
 
+// ProbeWithRetry probes node idx, retrying transient failures with bounded
+// exponential backoff before giving up. It exists for the startup probe: a
+// node that is merely warming up — e.g. znnd whose RPC is not yet answering
+// stats.syncInfo in the seconds after the indexer container starts — would
+// otherwise be abandoned on the first timeout, needlessly demoting the
+// configured primary to a fallback for the whole session. attempts <= 1
+// collapses to a single Probe (no retry).
+func (p *NodePool) ProbeWithRetry(ctx context.Context, idx, attempts int, baseDelay time.Duration) (ProbeResult, error) {
+	var res ProbeResult
+	err := withRetryConfig(ctx, p.logger, fmt.Sprintf("startup probe node %d", idx), retryConfig{
+		MaxAttempts: attempts,
+		BaseDelay:   baseDelay,
+		MaxBackoff:  10 * time.Second,
+	}, func() error {
+		r, err := p.Probe(ctx, idx)
+		if err != nil {
+			return err
+		}
+		res = r
+		return nil
+	})
+	return res, err
+}
+
 // genesisFor returns the cached chain identifier (genesis momentum hash)
 // for the given node, fetching it once.
 func (p *NodePool) genesisFor(ctx context.Context, idx int, url string) (string, error) {

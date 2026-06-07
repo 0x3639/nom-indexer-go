@@ -135,9 +135,14 @@ func main() {
 	// Synchronous startup probe. If the watchdog is enabled and the primary
 	// fails, walk down the configured fallbacks until one is reachable.
 	if cfg.Indexer.Watchdog.Enabled {
-		probe, err := nodePool.Probe(ctx, 0)
+		// Retry the primary before demoting it. znnd's RPC is frequently not
+		// yet answering stats.syncInfo in the first few seconds after the
+		// container starts; a single-shot probe would fall back to a remote
+		// node for the whole session. ~5 attempts over ~15s covers the
+		// warm-up without meaningfully delaying a genuinely-down primary.
+		probe, err := nodePool.ProbeWithRetry(ctx, 0, 5, 1*time.Second)
 		if err != nil {
-			logger.Warn("startup probe of primary failed, trying fallbacks", zap.Error(err))
+			logger.Warn("startup probe of primary failed after retries, trying fallbacks", zap.Error(err))
 			swapped := false
 			for i := 1; i < nodePool.Len(); i++ {
 				if _, err := nodePool.Probe(ctx, i); err == nil {
