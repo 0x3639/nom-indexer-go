@@ -303,15 +303,23 @@ func (i *Indexer) Run(ctx context.Context) error {
 
 // sync performs the catch-up sync from last indexed height.
 //
-// Cached data (pillars, sentinels, accelerator projects) is intentionally
-// NOT refreshed here. It is owned by runCachedDataSyncLoop, which refreshes
-// it immediately on startup and every few minutes thereafter. Refreshing it
-// inline used to block the catch-up loop for as long as the slow
-// "projects from accelerator" fetch took (observed multi-minute), during
-// which no momentum was committed — long enough for the watchdog to read a
-// false stall and fail over off a healthy node. processMomentum has no
-// dependency on the cached data, so the catch-up must not wait on it.
+// The pillar cache is primed synchronously first: account-block handlers
+// (delegation, pillar updates, VoteByName, ABI enrichment) resolve owners via
+// pillarNameToOwner, so catch-up must not process momentums against an empty
+// map. It is a single fast call.
+//
+// The rest of the cached data (sentinels, accelerator projects, swap) is
+// intentionally NOT refreshed here — it is owned by runCachedDataSyncLoop,
+// which refreshes it immediately on startup and every few minutes thereafter.
+// Refreshing all of it inline used to block the catch-up loop for as long as
+// the slow "projects from accelerator" fetch took (observed multi-minute),
+// during which no momentum was committed — long enough for the watchdog to
+// read a false stall and fail over off a healthy node.
 func (i *Indexer) sync(ctx context.Context) error {
+	if err := i.updatePillarCache(ctx); err != nil {
+		i.logger.Warn("failed to prime pillar cache before catch-up", zap.Error(err))
+	}
+
 	for {
 		select {
 		case <-ctx.Done():
@@ -496,11 +504,18 @@ func (i *Indexer) runSubscriptionSession(ctx context.Context) error {
 	}
 }
 
-// updateCachedData updates pillar and other cached data from the node
-func (i *Indexer) updateCachedData(ctx context.Context) error {
-	i.logger.Info("updateCachedData: starting")
-
-	// Update pillars
+// updatePillarCache fetches the pillar set and publishes the in-memory pillar
+// snapshot and name->owner map.
+//
+// It is separated from updateCachedData so it can be primed synchronously
+// before catch-up. Several account-block handlers — delegation, pillar
+// updates, VoteByName, and ABI enrichment — resolve owners through
+// pillarNameToOwner via getPillarOwnerAddress; processing momentums against an
+// empty map silently drops delegation rows, writes fallback voter addresses,
+// and skips pillarOwner enrichment. Unlike the sentinel/accelerator/swap work
+// in updateCachedData, this is a single fast call, so gating catch-up on it
+// does not reintroduce the startup-stall it was split out to avoid.
+func (i *Indexer) updatePillarCache(ctx context.Context) error {
 	i.logger.Info("updateCachedData: fetching pillars")
 	pillarList, err := i.client().PillarApi.GetAll(0, 200)
 	if err != nil {
@@ -545,6 +560,19 @@ func (i *Indexer) updateCachedData(ctx context.Context) error {
 	i.pillarMu.Unlock()
 
 	i.logger.Info("updateCachedData: pillars done", zap.Int("count", len(pillarList.List)))
+	return nil
+}
+
+// updateCachedData refreshes pillars, sentinels, accelerator projects and swap
+// data. It is driven by runCachedDataSyncLoop (immediately on startup, then on
+// a timer). Momentum catch-up does not wait on it beyond the pillar cache,
+// which sync() primes directly via updatePillarCache.
+func (i *Indexer) updateCachedData(ctx context.Context) error {
+	i.logger.Info("updateCachedData: starting")
+
+	if err := i.updatePillarCache(ctx); err != nil {
+		return err
+	}
 
 	// Update sentinels with pagination
 	i.logger.Info("updateCachedData: fetching sentinels")
