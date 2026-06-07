@@ -5,7 +5,9 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"sync/atomic"
 	"testing"
+	"time"
 
 	"go.uber.org/zap"
 )
@@ -129,5 +131,60 @@ func TestNodePoolProbeOutOfRange(t *testing.T) {
 	}
 	if _, err := pool.Probe(context.Background(), -1); err == nil {
 		t.Fatal("expected error for negative idx")
+	}
+}
+
+// TestProbeWithRetryRecoversFromWarmup simulates a node (e.g. znnd) whose RPC
+// fails the first couple of requests after startup, then comes up. The startup
+// probe must retry and succeed rather than demote the primary on first failure.
+func TestProbeWithRetryRecoversFromWarmup(t *testing.T) {
+	var reqs atomic.Int32
+	responses := map[string]any{
+		"stats.syncInfo":             map[string]any{"state": 2, "currentHeight": 100, "targetHeight": 100},
+		"ledger.getFrontierMomentum": map[string]any{"height": 100},
+		"ledger.getMomentumsByHeight": map[string]any{
+			"count": 1,
+			"list":  []any{map[string]any{"height": 1, "hash": "genesis-hash"}},
+		},
+	}
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// Fail the first two requests to mimic a node still warming up.
+		if reqs.Add(1) <= 2 {
+			http.Error(w, "warming up", http.StatusServiceUnavailable)
+			return
+		}
+		var req struct {
+			Method string `json:"method"`
+		}
+		_ = json.NewDecoder(r.Body).Decode(&req)
+		resp := map[string]any{"jsonrpc": "2.0", "id": 1}
+		if result, ok := responses[req.Method]; ok {
+			resp["result"] = result
+		} else {
+			resp["error"] = map[string]any{"code": -32601, "message": "method not found"}
+		}
+		_ = json.NewEncoder(w).Encode(resp)
+	}))
+	t.Cleanup(srv.Close)
+
+	pool := NewNodePool([]NodeEntry{{URL: srv.URL, Label: "test"}}, zap.NewNop())
+	result, err := pool.ProbeWithRetry(context.Background(), 0, 5, time.Millisecond)
+	if err != nil {
+		t.Fatalf("ProbeWithRetry: %v", err)
+	}
+	if result.Frontier != 100 {
+		t.Fatalf("frontier: %d, want 100", result.Frontier)
+	}
+	if reqs.Load() < 3 {
+		t.Fatalf("expected at least 3 requests (2 failures + recovery), got %d", reqs.Load())
+	}
+}
+
+// TestProbeWithRetryGivesUp confirms a genuinely-unreachable node still returns
+// an error after exhausting attempts (so main.go falls back to other nodes).
+func TestProbeWithRetryGivesUp(t *testing.T) {
+	pool := NewNodePool([]NodeEntry{{URL: "http://127.0.0.1:1", Label: "dead"}}, zap.NewNop())
+	if _, err := pool.ProbeWithRetry(context.Background(), 0, 3, time.Millisecond); err == nil {
+		t.Fatal("expected error after exhausting attempts")
 	}
 }
