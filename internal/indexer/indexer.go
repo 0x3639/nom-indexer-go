@@ -301,13 +301,17 @@ func (i *Indexer) Run(ctx context.Context) error {
 	return i.runSubscriptionLoop(ctx)
 }
 
-// sync performs the catch-up sync from last indexed height
+// sync performs the catch-up sync from last indexed height.
+//
+// Cached data (pillars, sentinels, accelerator projects) is intentionally
+// NOT refreshed here. It is owned by runCachedDataSyncLoop, which refreshes
+// it immediately on startup and every few minutes thereafter. Refreshing it
+// inline used to block the catch-up loop for as long as the slow
+// "projects from accelerator" fetch took (observed multi-minute), during
+// which no momentum was committed — long enough for the watchdog to read a
+// false stall and fail over off a healthy node. processMomentum has no
+// dependency on the cached data, so the catch-up must not wait on it.
 func (i *Indexer) sync(ctx context.Context) error {
-	// Update cached data from node
-	if err := i.updateCachedData(ctx); err != nil {
-		i.logger.Warn("failed to update cached data", zap.Error(err))
-	}
-
 	for {
 		select {
 		case <-ctx.Done():

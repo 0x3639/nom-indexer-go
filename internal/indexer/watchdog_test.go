@@ -43,6 +43,34 @@ func TestClassify(t *testing.T) {
 			want:           classStalled,
 		},
 		{
+			// Regression for the startup-stall failover bug: the indexer
+			// made no progress for > StallThreshold, but the node is at head
+			// (Target == Frontier) and has momentums the indexer hasn't
+			// processed yet (Frontier 100 > dbHeight 50). The node is
+			// demonstrably alive and ahead, so this is an indexer-side stall
+			// (e.g. a slow startup cached-data fetch) — failover cannot help.
+			// Must classify as indexer_lagging (restart, no failover), not
+			// stalled (failover).
+			name:           "stalled but node at head with indexer behind is indexer_lagging",
+			probe:          ProbeResult{Frontier: 100, Target: 100},
+			probeErr:       nil,
+			dbHeight:       50,
+			lastProgressAt: now.Add(-2 * time.Minute),
+			want:           classIndexerLagging,
+		},
+		{
+			// Counter-case: stalled and the indexer is caught up to the
+			// frontier (dbHeight == Frontier). We cannot prove the node is
+			// alive (its frontier may be frozen), so failover must remain on
+			// the table — keep classStalled.
+			name:           "stalled with indexer caught up stays stalled",
+			probe:          ProbeResult{Frontier: 100, Target: 100},
+			probeErr:       nil,
+			dbHeight:       100,
+			lastProgressAt: now.Add(-2 * time.Minute),
+			want:           classStalled,
+		},
+		{
 			name:           "node_lagging wins over indexer_lagging",
 			probe:          ProbeResult{Frontier: 100, Target: 200},
 			probeErr:       nil,

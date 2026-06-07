@@ -70,13 +70,31 @@ func classify(
 	if probeErr != nil {
 		return classProbeFailed
 	}
+
+	nodeBehind := int64(probe.Target)-int64(probe.Frontier) > cfg.NodeDriftThreshold
+	indexerBehind := int64(probe.Frontier)-dbHeight > cfg.IndexerDriftThreshold
+
 	if now.Sub(lastProgressAt) > cfg.StallThreshold {
+		// No momentum committed within the stall window. Distinguish an
+		// indexer-side stall from a node-side one before deciding whether a
+		// failover could possibly help:
+		//   - Node at head (not behind the network) AND it holds momentums
+		//     the indexer hasn't processed yet (indexerBehind): the node is
+		//     demonstrably alive and ahead, so the indexer is the laggard
+		//     (e.g. blocked on a slow startup cached-data fetch). Failover
+		//     cannot help — treat as indexer_lagging (restart, no failover).
+		//   - Otherwise (node behind the network, or indexer caught up to a
+		//     possibly-frozen frontier): the active node may be the culprit,
+		//     so keep classStalled to leave failover on the table.
+		if indexerBehind && !nodeBehind {
+			return classIndexerLagging
+		}
 		return classStalled
 	}
-	if int64(probe.Target)-int64(probe.Frontier) > cfg.NodeDriftThreshold {
+	if nodeBehind {
 		return classNodeLagging
 	}
-	if int64(probe.Frontier)-dbHeight > cfg.IndexerDriftThreshold {
+	if indexerBehind {
 		return classIndexerLagging
 	}
 	return classSynced
