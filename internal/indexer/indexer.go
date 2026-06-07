@@ -303,10 +303,14 @@ func (i *Indexer) Run(ctx context.Context) error {
 
 // sync performs the catch-up sync from last indexed height.
 //
-// The pillar cache is primed synchronously first: account-block handlers
+// The pillar cache is primed synchronously first, and fails CLOSED: catch-up
+// does not begin until pillarNameToOwner is populated. Account-block handlers
 // (delegation, pillar updates, VoteByName, ABI enrichment) resolve owners via
-// pillarNameToOwner, so catch-up must not process momentums against an empty
-// map. It is a single fast call.
+// that map, and on a fresh process it starts empty — there is no safe stale
+// fallback, so indexing against an empty map would silently drop delegation
+// rows and write fallback voter addresses. A transient pillar RPC failure is
+// retried; if it still cannot populate, sync returns an error rather than
+// catch up blind (startup aborts and restarts; a reconnect catch-up retries).
 //
 // The rest of the cached data (sentinels, accelerator projects, swap) is
 // intentionally NOT refreshed here — it is owned by runCachedDataSyncLoop,
@@ -316,8 +320,10 @@ func (i *Indexer) Run(ctx context.Context) error {
 // during which no momentum was committed — long enough for the watchdog to
 // read a false stall and fail over off a healthy node.
 func (i *Indexer) sync(ctx context.Context) error {
-	if err := i.updatePillarCache(ctx); err != nil {
-		i.logger.Warn("failed to prime pillar cache before catch-up", zap.Error(err))
+	if err := withRetry(ctx, i.logger, "prime pillar cache", func() error {
+		return i.updatePillarCache(ctx)
+	}); err != nil {
+		return fmt.Errorf("prime pillar cache before catch-up: %w", err)
 	}
 
 	for {
