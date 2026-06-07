@@ -267,38 +267,49 @@ func (i *Indexer) Run(ctx context.Context) error {
 
 	i.lastProgressAt.Store(time.Now().Unix())
 
+	// Run-scoped context so EVERY return path — ctx cancel, initial-sync
+	// error (e.g. the fail-closed pillar prime), or subscription end — tears
+	// down the background loops. They loop on runCtx, not the caller's ctx;
+	// without this, returning an initial-sync error would block forever in
+	// wg.Wait() (the loops would still hold a live context) and Run would
+	// never surface the error to cmd/indexer for a fatal/restart.
+	runCtx, cancel := context.WithCancel(ctx)
+
 	var wg sync.WaitGroup
 	wg.Add(3)
 	go func() {
 		defer wg.Done()
-		i.runBridgeSyncLoop(ctx, 1*time.Minute)
+		i.runBridgeSyncLoop(runCtx, 1*time.Minute)
 	}()
 	go func() {
 		defer wg.Done()
-		i.runCachedDataSyncLoop(ctx, 5*time.Minute)
+		i.runCachedDataSyncLoop(runCtx, 5*time.Minute)
 	}()
 	go func() {
 		defer wg.Done()
-		i.runCronLoop(ctx, votingInterval, tokenHoldersInterval)
+		i.runCronLoop(runCtx, votingInterval, tokenHoldersInterval)
 	}()
 	if i.nodePool != nil && i.watchdogCfg.Enabled {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			i.runSyncWatchdogLoop(ctx)
+			i.runSyncWatchdogLoop(runCtx)
 		}()
 	}
+	// defer is LIFO: register wg.Wait() first (runs last) and cancel second
+	// (runs first) so the loops are canceled before we wait for them to exit.
 	defer wg.Wait()
+	defer cancel()
 
 	// Initial sync to catch up to current height
-	if err := i.sync(ctx); err != nil {
+	if err := i.sync(runCtx); err != nil {
 		return fmt.Errorf("initial sync failed: %w", err)
 	}
 
 	// Subscribe to new momentums for real-time updates
 	i.logger.Info("initial sync complete, starting real-time subscription")
 
-	return i.runSubscriptionLoop(ctx)
+	return i.runSubscriptionLoop(runCtx)
 }
 
 // sync performs the catch-up sync from last indexed height.
